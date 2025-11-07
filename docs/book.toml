@@ -1,0 +1,5 @@
+[book]
+authors = ["karim"]
+language = "en"
+src = "src"
+title = "Mosaik"
