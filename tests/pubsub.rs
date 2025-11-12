@@ -25,16 +25,51 @@ async fn api_design() -> anyhow::Result<()> {
 	let c1 = n1.consume::<Data1>();
 	let p1 = n1.produce::<Data3>();
 
-	let n3 = Network::new(network_id.clone()).await?;
-	let mut c3a = n3.consume::<Data1>();
-	let c3b = n3.consume::<Data2>();
-	let c3c = n3.consume::<Data3>();
+	let n2 = Network::new(network_id.clone()).await?;
+	let mut c2a = n2.consume::<Data1>();
+	let c2b = n2.consume::<Data2>();
+	let c2c = n2.consume::<Data3>();
+
+	n1.discovery().dial(n0.local().addr()).await?;
+	n2.discovery().dial(n0.local().addr()).await?;
 
 	p0.send(Data1("One".into())).await?;
 
-	let recv_c3a = c3a.next().await;
+	let recv_c2a = c2a.next().await;
 
-	assert_eq!(recv_c3a, Some(Data1("One".into())));
+	assert_eq!(recv_c2a, Some(Data1("One".into())));
+	Ok(())
+}
 
+#[tokio::test]
+async fn api_design_manual_disc() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id.clone()).await?;
+	let mut p0 = n0.produce::<Data1>();
+
+	let n1 = Network::new(network_id.clone()).await?;
+	let mut c1 = n1.consume::<Data1>();
+
+	let n2 = Network::new(network_id.clone()).await?;
+	let mut c2 = n2.consume::<Data1>();
+
+	n1.discovery().catalog().insert(n0.local().info());
+	n1.discovery().catalog().insert(n2.local().info());
+
+	n2.discovery().catalog().insert(n0.local().info());
+	n2.discovery().catalog().insert(n1.local().info());
+
+	p0.online().await;
+	c1.online().await;
+	c2.online().await;
+
+	p0.send(Data1("One".into())).await?;
+
+	let recv_c2a = c2.next().await;
+	let recv_c1 = c1.next().await;
+
+	assert_eq!(recv_c2a, Some(Data1("One".into())));
+	assert_eq!(recv_c1, Some(Data1("One".into())));
 	Ok(())
 }

@@ -1,16 +1,23 @@
-mod error;
+mod discovery;
 mod id;
 mod local;
 mod network;
-mod peer;
 mod streams;
 
 pub mod prelude {
 	pub use super::{
-		error::Error,
+		discovery::{
+			Catalog,
+			Error as DiscoveryError,
+			Event as DiscoveryEvent,
+			Events as DiscoveryEvents,
+			PeerId,
+			PeerInfo,
+			SignedPeerInfo,
+		},
 		id::NetworkId,
-		network::*,
-		streams::{Consumer, Datum, Producer},
+		network::{Error as NetworkError, Network},
+		streams::{Criteria, Datum, Error as StreamsError, Producer},
 	};
 }
 

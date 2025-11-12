@@ -1,20 +1,31 @@
 use {
 	crate::{
-		error::Error,
+		discovery::Discovery,
 		id::NetworkId,
 		local::Local,
-		streams::{self, Consumer, Datum, Fanout, Producer, StreamId},
+		prelude::DiscoveryError,
+		streams::{Consumer, Criteria, Datum, Producer, Streams},
 	},
-	dashmap::{DashMap, Entry},
-	iroh::{Endpoint, EndpointAddr, protocol::Router},
-	std::sync::Arc,
+	core::{
+		pin::Pin,
+		task::{Context, Poll},
+	},
+	iroh::{Endpoint, protocol::Router},
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+	#[error("Bind error: {0}")]
+	Bind(#[from] iroh::endpoint::BindError),
+
+	#[error("Discovery error: {0}")]
+	Discovery(#[from] DiscoveryError),
+}
 
 /// Represents a connection to the Mosaik network.
 pub struct Network {
 	me: Local,
-	network_id: NetworkId,
-	producers: Arc<DashMap<StreamId, Fanout>>,
+	discovery: Discovery,
 	_protocols: Router,
 }
 
@@ -32,35 +43,24 @@ impl Network {
 		network_id: NetworkId,
 		endpoint: Endpoint,
 	) -> Result<Self, Error> {
-		let me = Local::new(endpoint);
+		let me = Local::new(endpoint, network_id);
 
 		// wait for the local peer to be online
 		me.online().await;
 
-		let producers = Arc::new(DashMap::new());
+		let mut streams = Streams::new(me.clone());
+		let mut discovery = Discovery::new(me.clone());
 
-		let protocols = Router::builder(me.endpoint().clone())
-			.accept(
-				streams::Protocol::ALPN,
-				streams::Protocol::new(me.endpoint().clone(), producers.clone()),
-			)
-			.spawn();
+		let builder = Router::builder(me.endpoint().clone());
+		let builder = streams.attach(builder);
+		let builder = discovery.attach(builder);
+		let protocols = builder.spawn();
 
 		Ok(Self {
 			me,
-			network_id,
-			producers,
+			discovery,
 			_protocols: protocols,
 		})
-	}
-
-	/// Dials into a peer at a given address.
-	///
-	/// This will attempt to connect to the given peer and perform initial network
-	/// view sync with that peer. This will also automatically join the
-	/// announcements gossip topic.
-	pub async fn dial(&self, _peer: EndpointAddr) -> Result<(), Error> {
-		todo!()
 	}
 
 	/// Returns the endpoint of the local node.
@@ -68,28 +68,44 @@ impl Network {
 		&self.me
 	}
 
+	/// Returns the discovery module of this network.
+	pub const fn discovery(&self) -> &Discovery {
+		&self.discovery
+	}
+
 	/// Returns the NetworkId of this network.
-	pub const fn network_id(&self) -> &NetworkId {
-		&self.network_id
+	pub fn network_id(&self) -> &NetworkId {
+		self.me.network_id()
 	}
 }
 
 /// Public pubsub API
 impl Network {
 	pub fn produce<D: Datum>(&self) -> Producer<D> {
-		let stream_id = StreamId::of::<D>();
-		match self.producers.entry(stream_id) {
-			Entry::Occupied(occupied) => occupied.get().producer::<D>(),
-			Entry::Vacant(vacant) => {
-				let fanout = Fanout::new::<D>();
-				let producer = fanout.producer();
-				vacant.insert(fanout);
-				producer
-			}
-		}
+		self
+			.me
+			.create_sink::<D>()
+			.producer::<D>()
+			.expect("stream id matches; qed")
 	}
 
 	pub fn consume<D: Datum>(&self) -> Consumer<D> {
-		todo!()
+		self.consume_with(Criteria::default())
+	}
+
+	pub fn consume_with<D: Datum>(&self, criteria: Criteria) -> Consumer<D> {
+		Consumer::<D>::new(
+			self.me.endpoint().clone(),
+			self.discovery().catalog().clone(),
+			criteria,
+		)
+	}
+}
+
+impl Future for Network {
+	type Output = ();
+
+	fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+		Poll::Pending
 	}
 }

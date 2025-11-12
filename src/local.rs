@@ -1,59 +1,74 @@
 use {
-	crate::peer::PeerInfo,
-	core::pin::pin,
+	crate::{
+		prelude::{Datum, NetworkId, PeerInfo, SignedPeerInfo},
+		streams::{FanoutSink, StreamId},
+	},
+	dashmap::{DashMap, Entry},
 	futures::StreamExt,
 	iroh::{Endpoint, EndpointAddr, Watcher},
+	std::{collections::BTreeSet, sync::Arc},
 	tokio::sync::watch,
-	tokio_util::sync::{
-		CancellationToken,
-		DropGuard,
-		WaitForCancellationFutureOwned,
-	},
-	tracing::{error, info},
+	tokio_util::sync::{CancellationToken, DropGuard},
+	tracing::{debug, warn},
 };
 
-/// This type maintains information about the local peer.
+/// This type maintains an up to date state about the local peer.
 ///
-/// It is responsible for:
-pub struct Local {
-	endpoint: Endpoint,
-	latest: watch::Receiver<PeerInfo>,
-	_cancel_on_drop: DropGuard,
+/// Notes:
+///
+/// - This type is cheap to clone; all clones refer to the same underlying local
+///   peer state.
+///
+/// - This type spawns an async event loop task that is responsible for
+///   monitoring changes to the local peer's state (e.g. addresses, produced
+///   streams).
+pub struct Local(Arc<Inner>);
+
+impl Clone for Local {
+	fn clone(&self) -> Self {
+		Self(Arc::clone(&self.0))
+	}
 }
 
 impl Local {
-	pub fn new(endpoint: Endpoint) -> Self {
+	pub fn new(endpoint: Endpoint, network_id: NetworkId) -> Self {
 		let initial = PeerInfo {
 			address: endpoint.addr(),
-			version: Default::default(),
+			streams: BTreeSet::new(),
+		}
+		.sign(endpoint.secret_key());
+
+		let sinks = DashMap::new();
+		let cancellation = CancellationToken::new();
+		let (info_tx, latest) = watch::channel(initial.clone());
+
+		let event_loop = EventLoop {
+			info: initial,
+			info_tx: info_tx.clone(),
+			endpoint: endpoint.clone(),
+			cancel: cancellation.clone(),
 		};
 
-		let cancellation = CancellationToken::new();
-		let cancel_signal = cancellation.clone().cancelled_owned();
-		let (info_tx, info_rx) = watch::channel(initial.clone());
+		tokio::spawn(event_loop.run());
 
-		tokio::spawn(Self::runloop(
-			endpoint.clone(),
-			initial,
-			info_tx,
-			cancel_signal,
-		));
-
-		Self {
+		Self(Arc::new(Inner {
 			endpoint,
-			latest: info_rx,
-			_cancel_on_drop: cancellation.drop_guard(),
-		}
+			network_id,
+			sinks,
+			latest,
+			info_tx,
+			_abort: cancellation.drop_guard(),
+		}))
 	}
 
 	/// Returns the transport layer endpoint of the local peer.
-	pub const fn endpoint(&self) -> &Endpoint {
-		&self.endpoint
+	pub fn endpoint(&self) -> &Endpoint {
+		&self.0.endpoint
 	}
 
 	/// Returns all known addresses and relay nodes of the local peer.
 	pub fn addr(&self) -> EndpointAddr {
-		self.endpoint.addr()
+		self.0.endpoint.addr()
 	}
 
 	/// Returns the public key of the local peer.
@@ -61,7 +76,12 @@ impl Local {
 	/// This is a unique global identifier for this peer that should be enough to
 	/// identify, discover and connect to it.
 	pub fn id(&self) -> iroh::EndpointId {
-		self.endpoint.id()
+		self.0.endpoint.id()
+	}
+
+	/// Returns the NetworkId of this local peer.
+	pub fn network_id(&self) -> &NetworkId {
+		&self.0.network_id
 	}
 
 	/// Awaits until the local peer is online.
@@ -69,47 +89,105 @@ impl Local {
 	/// When it is online it means that it is registered with discovery and can
 	/// accept incoming connections.
 	pub async fn online(&self) {
-		self.endpoint.online().await
+		self.0.endpoint.online().await
 	}
 
 	/// Returns a watch receiver that yields updates to the local peer's info.
-	pub fn changes(&self) -> watch::Receiver<PeerInfo> {
-		self.latest.clone()
+	pub fn changes(&self) -> watch::Receiver<SignedPeerInfo> {
+		self.0.latest.clone()
 	}
 
 	/// Returns the latest known PeerInfo for the local peer.
-	pub fn info(&self) -> PeerInfo {
-		self.latest.borrow().clone()
+	pub fn info(&self) -> SignedPeerInfo {
+		self.0.latest.borrow().clone()
 	}
 
-	async fn runloop(
-		endpoint: Endpoint,
-		initial: PeerInfo,
-		sender: watch::Sender<PeerInfo>,
-		cancel: WaitForCancellationFutureOwned,
-	) {
-		let mut current = initial;
-		let mut cancelled = pin!(cancel);
-		let mut addrs_stream = endpoint.watch_addr().stream_updates_only();
+	/// Creates a new sink for a given stream ID.
+	///
+	/// If there is an existing sink for the stream ID on the local node already
+	/// created, a handle to it is returned. The handle can be used to produce
+	/// data for that stream.
+	pub fn create_sink<D: Datum>(&self) -> FanoutSink {
+		let stream_id = StreamId::of::<D>();
+		match self.0.sinks.entry(stream_id) {
+			Entry::Occupied(occupied) => occupied.get().clone(),
+			Entry::Vacant(vacant) => {
+				// Create a new sink for this stream ID
+				let sink = FanoutSink::new::<D>();
+				vacant.insert(sink.clone());
+
+				// Update the local peer info to include this stream ID
+				let latest = self.0.latest.borrow().clone();
+				let updated = latest
+					.info
+					.add_stream(sink.stream_id().clone())
+					.sign(self.0.endpoint.secret_key());
+				let _ = self.0.info_tx.send(updated);
+
+				// Return the newly created sink
+				sink
+			}
+		}
+	}
+
+	/// Returns an existing sink for a given stream ID, if one exists, otherwise
+	/// returns None.
+	pub fn open_sink(&self, stream_id: &StreamId) -> Option<FanoutSink> {
+		self
+			.0
+			.sinks
+			.get(stream_id)
+			.map(|entry| entry.value().clone())
+	}
+}
+
+struct Inner {
+	endpoint: Endpoint,
+	network_id: NetworkId,
+	sinks: DashMap<StreamId, FanoutSink>,
+	latest: watch::Receiver<SignedPeerInfo>,
+	info_tx: watch::Sender<SignedPeerInfo>,
+	_abort: DropGuard,
+}
+
+struct EventLoop {
+	info: SignedPeerInfo,
+	info_tx: watch::Sender<SignedPeerInfo>,
+	endpoint: Endpoint,
+	cancel: CancellationToken,
+}
+
+impl EventLoop {
+	async fn run(mut self) {
+		let mut addrs_stream = self.endpoint.watch_addr().stream_updates_only();
 
 		loop {
 			tokio::select! {
-				_ = &mut cancelled => {
-					info!("Local peer runloop terminated");
+				_ = self.cancel.cancelled() => {
+					self.on_terminated().await;
 					break;
 				}
 
-				Some(addr) = addrs_stream.next() => {
-					info!("Discovered new own address: {:?}", addr);
-					if current.address != addr {
-						current.address = addr;
-						if let Err(e) = sender.send(current.clone()) {
-							error!("Failed to send updated PeerInfo: {:?}", e);
-							break;
-						}
-					}
-				}
+				// Handle discovered own addresses
+				Some(addr) = addrs_stream.next() => self.on_local_addr_changed(addr).await,
 			}
+		}
+	}
+
+	async fn on_terminated(&mut self) {
+		debug!("Local peer info event loop is terminating");
+	}
+
+	async fn on_local_addr_changed(&mut self, addr: EndpointAddr) {
+		debug!("Discovered new local address: {addr:?}");
+		if self.info.address != addr {
+			let latest = self.info.info.clone().update_address(addr);
+			self.info = latest.sign(self.endpoint.secret_key());
+
+			self.info_tx.send(self.info.clone()).unwrap_or_else(|_| {
+				warn!("Network terminated; nobody is watching local PeerInfo updates");
+				self.cancel.cancel();
+			});
 		}
 	}
 }

@@ -1,36 +1,33 @@
 use {
-	super::{Fanout, StreamId},
-	crate::streams::{Criteria, fanout::Subscription},
+	super::StreamId,
+	crate::{
+		local::Local,
+		streams::{
+			Criteria,
+			Error,
+			error::{ProtocolError, SubscriptionError},
+		},
+	},
 	core::fmt,
-	dashmap::DashMap,
 	futures::{SinkExt, StreamExt},
 	iroh::{
-		Endpoint,
-		endpoint::Connection,
+		endpoint::{Connection, RecvStream, SendStream},
 		protocol::{AcceptError, ProtocolHandler},
 	},
 	serde::{Deserialize, Serialize},
-	std::{io, sync::Arc},
+	tokio::io::Join,
 	tokio_util::codec::{Framed, LengthDelimitedCodec},
-	tracing::info,
 };
 
 pub struct Protocol {
-	endpoint: Endpoint,
-	producers: Arc<DashMap<StreamId, Fanout>>,
+	local: Local,
 }
 
 impl Protocol {
 	pub const ALPN: &'static [u8] = b"/mosaik/streams/1";
 
-	pub fn new(
-		endpoint: Endpoint,
-		producers: Arc<DashMap<StreamId, Fanout>>,
-	) -> Self {
-		Self {
-			endpoint,
-			producers,
-		}
+	pub fn new(local: Local) -> Self {
+		Self { local }
 	}
 }
 
@@ -38,50 +35,41 @@ impl ProtocolHandler for Protocol {
 	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
 		let (tx, rx) = connection.accept_bi().await?;
 
-		let wire_stream = tokio::io::join(rx, tx);
-		let mut wire = Framed::new(wire_stream, LengthDelimitedCodec::new());
+		let mut wire =
+			WireStream::new(tokio::io::join(rx, tx), LengthDelimitedCodec::new());
 
 		let Some(handshake) = wire.next().await.transpose()? else {
-			return Err(
-				std::io::Error::new(
-					std::io::ErrorKind::UnexpectedEof,
-					"Connection closed before handshake",
-				)
-				.into(),
-			);
+			return Err(AcceptError::from_err(Error::Protocol(
+				ProtocolError::ClosedBeforeHandshake,
+			)));
 		};
 
 		let request: SubscriptionRequest = rmp_serde::from_slice(&handshake)
-			.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+			.map_err(|e| {
+				AcceptError::from_err(Error::Protocol(
+					ProtocolError::InvalidHandshakeRequest(e),
+				))
+			})?;
 
-		let Some(fanout) = self.producers.get(&request.stream_id) else {
-			let error = SubscriptionError::StreamNotFound;
-			let response = SubscriptionResponse::Rejected(error.clone());
-			let response_bytes = rmp_serde::to_vec(&response).expect("infallible");
+		let Some(sink) = self.local.open_sink(&request.stream_id) else {
+			let response = rmp_serde::to_vec(&SubscriptionResponse::Rejected(
+				SubscriptionError::StreamNotFound(request.stream_id.clone()),
+			))
+			.expect("infallible; qed");
 
-			wire.send(response_bytes.into()).await?;
+			wire.send(response.into()).await?;
 			wire.close().await?;
 
-			return Err(io::Error::new(io::ErrorKind::NotFound, error).into());
+			return Err(AcceptError::from_err(Error::Subscription(
+				SubscriptionError::StreamNotFound(request.stream_id),
+			)));
 		};
 
-		info!(
-			"New subscription for stream {} from {}",
-			request.stream_id,
-			connection.remote_id()?
-		);
+		let link = Link { wire, connection };
+		let criteria = request.criteria;
 
-		let response = SubscriptionResponse::Accepted;
-		let response_bytes = rmp_serde::to_vec(&response).expect("infallible");
-
-		wire.send(response_bytes.into()).await?;
-
-		fanout
-			.subscribe(Subscription {
-				connection,
-				criteria: request.criteria,
-				wire,
-			})
+		sink
+			.accept(link, criteria)
 			.await
 			.map_err(AcceptError::from_err)?;
 
@@ -95,13 +83,11 @@ impl fmt::Debug for Protocol {
 	}
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
-pub enum SubscriptionError {
-	#[error("Stream not found")]
-	StreamNotFound,
+type WireStream = Framed<Join<RecvStream, SendStream>, LengthDelimitedCodec>;
 
-	#[error("Max subscriber capacity reached")]
-	AtCapacity,
+pub struct Link {
+	pub connection: Connection,
+	pub wire: WireStream,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,4 +100,13 @@ pub struct SubscriptionRequest {
 pub enum SubscriptionResponse {
 	Accepted,
 	Rejected(SubscriptionError),
+}
+
+impl core::fmt::Debug for Link {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		let Ok(remote_id) = self.connection.remote_id() else {
+			return write!(f, "Link(to=Unknown, INVALID CONNECTION)");
+		};
+		write!(f, "Link(to={remote_id})")
+	}
 }

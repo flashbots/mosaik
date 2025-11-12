@@ -1,127 +1,105 @@
 use {
-	super::{
-		Datum,
-		error::PublishError,
-		fanout::{FanoutCommand, FanoutHandle},
-	},
+	super::Datum,
 	core::{
 		pin::Pin,
+		sync::atomic::{AtomicU32, Ordering},
 		task::{Context, Poll},
 	},
-	futures::Sink,
-	tokio::sync::mpsc::{Permit, error::SendError},
-	tokio_util::sync::ReusableBoxFuture,
+	futures::{Sink, SinkExt},
+	std::sync::Arc,
+	tokio::sync::{Notify, mpsc},
+	tokio_util::sync::PollSender,
 };
 
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum PublishError<D: Datum> {
+	#[error("stream has no consumers")]
+	NoConsumers(D),
+
+	#[error("stream terminated")]
+	Terminated,
+}
+
 pub struct Producer<D: Datum> {
-	handle: FanoutHandle<D>,
-	permit: Option<Permit<'static, FanoutCommand<D>>>,
-	reserve_fut: ReusableBoxFuture<
-		'static,
-		Result<Permit<'static, FanoutCommand<D>>, SendError<()>>,
-	>,
-	fut_initialized: bool,
+	subs_count: Arc<AtomicU32>,
+	ready: Arc<Notify>,
+	data_tx: PollSender<D>,
 }
 
 impl<D: Datum> Producer<D> {
-	pub(crate) fn new(handle: FanoutHandle<D>) -> Self {
-		// Initialize with a dummy future
-		let reserve_fut = ReusableBoxFuture::new(async { Err(SendError(())) });
-
+	pub(crate) fn new(
+		data_tx: mpsc::Sender<D>,
+		subs_count: Arc<AtomicU32>,
+		ready: Arc<Notify>,
+	) -> Self {
+		let data_tx = PollSender::new(data_tx);
 		Self {
-			handle,
-			permit: None,
-			reserve_fut,
-			fut_initialized: false,
+			data_tx,
+			subs_count,
+			ready,
 		}
 	}
 
-	/// Publishes an item to all downstream consumers.
-	///
-	/// Notes:
-	pub async fn publish(&mut self, item: D) -> Result<(), PublishError<D>> {
-		self.handle.publish(item).await
+	pub fn subscribers_count(&self) -> u32 {
+		self.subs_count.load(Ordering::Relaxed)
+	}
+
+	/// Awaits until the producer is ready to produce data and has at least one
+	/// subscriber.
+	pub async fn online(&self) {
+		if self.subscribers_count() == 0 {
+			self.ready.notified().await;
+		}
 	}
 }
 
 impl<D: Datum> Sink<D> for Producer<D> {
 	type Error = PublishError<D>;
 
-	/// Checks if the sink is ready to accept more data.
-	///
-	/// This method handles backpressure by reserving a permit from the underlying
-	/// mpsc channel. If the channel is full, this will return `Poll::Pending` and
-	/// register the task to be woken when capacity becomes available.
-	///
-	/// The reserved permit is stored and used in `start_send` to ensure that
-	/// sending never blocks or fails due to a full channel.
 	fn poll_ready(
 		self: Pin<&mut Self>,
 		cx: &mut Context<'_>,
 	) -> Poll<Result<(), Self::Error>> {
-		if self.permit.is_some() {
-			return Poll::Ready(Ok(()));
-		}
-
-		let this = self.get_mut();
-
-		// Only set the future if it hasn't been initialized
-		if !this.fut_initialized {
-			// SAFETY: We need to extend the lifetime of the sender to 'static
-			// This is safe because the sender is owned by handle which is owned by
-			// this Producer
-			let sender = unsafe {
-				core::mem::transmute::<
-					&tokio::sync::mpsc::Sender<FanoutCommand<D>>,
-					&'static tokio::sync::mpsc::Sender<FanoutCommand<D>>,
-				>(this.handle.cmd_sender())
-			};
-
-			// Set up the reserve future
-			this.reserve_fut.set(async move { sender.reserve().await });
-			this.fut_initialized = true;
-		}
-
-		match this.reserve_fut.poll(cx) {
-			Poll::Ready(Ok(permit)) => {
-				this.permit = Some(permit);
-				this.fut_initialized = false; // Reset for next time
-				Poll::Ready(Ok(()))
-			}
-			Poll::Ready(Err(_)) => {
-				this.fut_initialized = false; // Reset on error
-				Poll::Ready(Err(PublishError::Terminated))
-			}
-			Poll::Pending => Poll::Pending,
-		}
+		self
+			.get_mut()
+			.data_tx
+			.poll_ready_unpin(cx)
+			.map_err(|_| PublishError::Terminated)
 	}
 
-	fn start_send(mut self: Pin<&mut Self>, item: D) -> Result<(), Self::Error> {
-		// this permit will be released anyway at the end of this method.
-		let permit = self
-			.permit
-			.take()
-			.expect("start_send called without poll_ready");
-
-		if self.handle.subscribers_count() == 0 {
+	fn start_send(self: Pin<&mut Self>, item: D) -> Result<(), Self::Error> {
+		if self.subscribers_count() == 0 {
+			self.get_mut().data_tx.abort_send();
 			return Err(PublishError::NoConsumers(item));
 		}
 
-		permit.send(FanoutCommand::Publish(item));
-		Ok(())
+		self.get_mut().data_tx.start_send_unpin(item).map_err(|e| {
+			match e.into_inner() {
+				Some(e) => PublishError::NoConsumers(e),
+				_ => PublishError::Terminated,
+			}
+		})
 	}
 
 	fn poll_flush(
 		self: Pin<&mut Self>,
-		_: &mut Context<'_>,
+		cx: &mut Context<'_>,
 	) -> Poll<Result<(), Self::Error>> {
-		Poll::Ready(Ok(()))
+		self
+			.get_mut()
+			.data_tx
+			.poll_flush_unpin(cx)
+			.map_err(|_| PublishError::Terminated)
 	}
 
 	fn poll_close(
 		self: Pin<&mut Self>,
-		_: &mut Context<'_>,
+		cx: &mut Context<'_>,
 	) -> Poll<Result<(), Self::Error>> {
-		Poll::Ready(Ok(()))
+		self
+			.get_mut()
+			.data_tx
+			.poll_close_unpin(cx)
+			.map_err(|_| PublishError::Terminated)
 	}
 }

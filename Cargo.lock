@@ -6035,6 +6035,7 @@ dependencies = [
  "iroh",
  "iroh-gossip",
  "mosaik",
+ "parking_lot",
  "rand 0.9.2",
  "rmp-serde",
  "semver 1.0.27",

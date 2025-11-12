@@ -23,5 +23,10 @@ fn init_test_logging() {
 						.any(|prefix| metadata.target().starts_with(prefix))
 			}))
 			.init();
+
+		std::panic::set_hook(Box::new(|panic_info| {
+			tracing::error!("Fatal panic: {panic_info:?}");
+			std::process::exit(-1);
+		}));
 	}
 }
