@@ -13,26 +13,24 @@ use {
 	},
 	bytes::BytesMut,
 	core::{
+		mem,
 		pin::Pin,
 		sync::atomic::Ordering,
 		task::{Context, Poll},
 		time::Duration,
 	},
+	dashmap::{DashMap, Entry},
 	futures::{
 		Stream,
 		StreamExt,
+		future::join_all,
 		stream::{FuturesUnordered, StreamFuture},
 	},
-	iroh::Endpoint,
-	std::{
-		collections::{HashMap, hash_map::Entry},
-		io,
-		sync::Arc,
-		time::Instant,
-	},
+	iroh::{Endpoint, EndpointAddr},
+	std::{io, sync::Arc, time::Instant},
 	tokio::sync::mpsc::{self, error::TryRecvError},
 	tokio_util::sync::{CancellationToken, DropGuard},
-	tracing::warn,
+	tracing::{debug, info, warn},
 };
 
 /// A local stream consumer handle that allows receiving data from remote
@@ -121,14 +119,34 @@ impl<D: Datum> Stream for Consumer<D> {
 ///
 /// - When the `Consumer` handle is dropped, this event loop is also terminated.
 struct EventLoop<D: Datum> {
+	/// The stream ID that this consumer is receiving data for.
 	stream_id: StreamId,
+
+	/// The local endpoint that provides transport-level connectivity,
+	/// used to connect to remote producers.
 	endpoint: Endpoint,
+
+	/// The discovery catalog used to query and observe changes to available
+	/// remote producers.
 	catalog: Catalog,
+
+	/// The criteria used to filter which data is received from producers.
 	criteria: Criteria,
+
+	/// The status object used to track statistics about this consumer and signal
+	/// important status changes.
 	status: Arc<Status>,
+
+	/// Channel used to send received datums to the consumer handle.
 	data_tx: mpsc::Sender<D>,
+
+	/// Active receiving streams from connected producers.
 	recvs: FuturesUnordered<StreamFuture<Link>>,
-	peers: HashMap<PeerId, PeerStatus>,
+
+	/// Map of peers that we are actively connected to or trying to connect to.
+	active: DashMap<PeerId, ConnectionState>,
+
+	/// Cancellation token used to terminate this event loop.
 	cancel: CancellationToken,
 }
 
@@ -148,7 +166,7 @@ impl<D: Datum> EventLoop<D> {
 			stream_id: StreamId::of::<D>(),
 			endpoint: network.local().endpoint().clone(),
 			catalog: network.discovery().catalog().clone(),
-			peers: HashMap::new(),
+			active: DashMap::new(),
 			recvs: FuturesUnordered::new(),
 			status,
 			criteria,
@@ -192,13 +210,9 @@ impl<D: Datum> EventLoop<D> {
 	/// Handles termination of the consumer by closing all active links
 	/// to all connected producers.
 	async fn on_terminated(&mut self) {
-		let subs = core::mem::take(&mut self.recvs)
-			.into_iter()
-			.collect::<Vec<_>>();
-
-		for sub in subs {
+		for sub in mem::take(&mut self.recvs).into_iter() {
 			if let Some(link) = sub.into_inner() {
-				self.disconnect(link).await;
+				self.disconnect(link, None).await;
 			}
 		}
 	}
@@ -210,167 +224,223 @@ impl<D: Datum> EventLoop<D> {
 		link: Link,
 	) {
 		let Some(result) = data else {
-			// Link closed, drop the producer
-			self.disconnect(link).await;
+			warn!(
+				stream_id = %self.stream_id,
+				peer_id = %link.peer_id(),
+				"Stream closed by producer");
+
+			self.disconnect(link, Some(CloseReason::StreamError)).await;
 			return;
 		};
 
-		match result {
-			Ok(bytes) => {
-				match rmp_serde::from_slice(&bytes[..]) {
-					Ok(datum) => {
-						// Send datum to consumer
-						if let Err(e) = self.data_tx.send(datum).await {
-							// consumer receiver dropped. Terminate the consumer loop.
-							warn!("Failed to send datum to consumer: {e}");
-							self.cancel.cancel();
-							return;
-						}
-
-						// Re-insert the link to continue receiving data
-						self.recvs.push(link.into_future());
-					}
-					Err(e) => {
-						warn!(
-              stream_id = %self.stream_id,
-              peer_id = %link.peer_id(),
-              "Failed to deserialize datum: {e}");
-
-						// Drop the link
-						self.disconnect(link).await;
-					}
-				}
-			}
+		let bytes = match result {
+			Ok(bytes) => bytes,
 			Err(e) => {
+				// io error receiving data
 				warn!(
-          stream_id = %self.stream_id,
-          peer_id = %link.peer_id(),
-          "Error receiving data from link: {e}");
+					stream_id = %self.stream_id,
+					peer_id = %link.peer_id(),
+					error = %e,
+					"Error receiving data");
 
 				// Drop the link
-				self.disconnect(link).await;
+				self.disconnect(link, Some(CloseReason::StreamError)).await;
+				return;
 			}
+		};
+
+		// Deserialize byte data into datum
+		let datum: D = match rmp_serde::from_slice(&bytes[..]) {
+			Ok(datum) => datum,
+			Err(e) => {
+				// drop any producer that sends invalid data
+				warn!(
+					error = %e,
+					stream_id = %self.stream_id,
+					peer_id = %link.peer_id(),
+					"Received invalid data");
+
+				self
+					.disconnect(link, Some(CloseReason::ProtocolError))
+					.await;
+
+				return;
+			}
+		};
+
+		// Send datum to consumer handle
+		if self.data_tx.send(datum).await.is_err() {
+			// consumer receiver dropped. Terminate the consumer loop, which
+			// will close all active links with all remote producers.
+			warn!(
+					stream_id = %self.stream_id,
+					peer_id = %link.peer_id(),
+					"Consumer dropped; terminating consumer event loop");
+
+			self.cancel.cancel();
+			return;
 		}
+
+		// update stats
+		self.status.items_received.fetch_add(1, Ordering::Relaxed);
+		self
+			.status
+			.bytes_received
+			.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+
+		// Re-insert the link to continue receiving data on it
+		self.recvs.push(link.into_future());
 	}
 
-	async fn disconnect(&mut self, link: Link) {
-		let peer_id = *link.peer_id();
-		if let Some(PeerStatus::Connected) = self.peers.remove(&peer_id) {
-			if let Err(e) = link.close_with_reason(CloseReason::Unspecified).await {
-				warn!(
-        stream_id = %self.stream_id,
-        peer_id = %peer_id,
-        "Error closing link: {e}");
-			}
+	/// Attempts to subscribe to a remote producer for this stream.
+	async fn subscribe(&self, addr: EndpointAddr) {
+		let peer_id = addr.id;
 
-			self.status.producers_count.fetch_sub(1, Ordering::Relaxed);
-			self.status.notify.notify_waiters();
+		// ensure that we are not already connected to or in backoff state
+		// or blocked. Immediately mark peers we can try to connect to as
+		// "Connecting" to avoid duplicate connection attempts.
+		let attempt_number = match self.active.entry(peer_id) {
+			Entry::Occupied(mut entry) => match entry.get() {
+				ConnectionState::Backoff { until, attempts }
+					if Instant::now() >= *until =>
+				{
+					let attempts = attempts.saturating_add(1);
+					entry.insert(ConnectionState::Connecting);
+					attempts
+				}
+				_ => return,
+			},
+			Entry::Vacant(entry) => {
+				entry.insert(ConnectionState::Connecting);
+				0
+			}
+		}
+		.saturating_add(1);
+
+		// attempt to establish a connection
+		let mut link = match Link::connect(self.endpoint.clone(), addr).await {
+			Ok(link) => link,
+			Err(e) => {
+				warn!(
+					stream_id = %self.stream_id,
+					peer_id = %peer_id,
+					error = %e,
+					"Failed to connect to producer"
+				);
+
+				let backoff = ConnectionState::backoff(attempt_number);
+				assert!(matches!(
+					self.active.insert(peer_id, backoff),
+					Some(ConnectionState::Connecting)
+				));
+				return;
+			}
+		};
+
+		// we have a connection, send subscription request
+		if let Err(e) = link
+			.send_as(SubscriptionRequest {
+				stream_id: self.stream_id.clone(),
+				criteria: self.criteria.clone(),
+			})
+			.await
+		{
+			warn!(
+				stream_id = %self.stream_id,
+				peer_id = %peer_id,
+				error = %e,
+				"Failed to send subscription request"
+			);
+
+			let backoff = ConnectionState::backoff(attempt_number);
+			assert!(matches!(
+				self.active.insert(peer_id, backoff),
+				Some(ConnectionState::Connecting)
+			));
+			return;
+		}
+
+		// Successfully connected and sent subscription request
+		// Update the connection state for this peer.
+		assert!(matches!(
+			self.active.insert(peer_id, ConnectionState::Connected),
+			Some(ConnectionState::Connecting)
+		));
+
+		// Start receiving data from this link
+		self.recvs.push(link.into_future());
+
+		// update & notify status
+		self.status.producers_count.fetch_add(1, Ordering::Relaxed);
+		self.status.notify.notify_waiters();
+
+		info!(
+			peer_id = %peer_id,
+			stream_id = %self.stream_id,
+			criteria = ?self.criteria,
+			"Subscribed to remote producer"
+		);
+	}
+
+	// todo: consider adding backoff when there is a reason
+	async fn disconnect(&self, link: Link, reason: Option<CloseReason>) {
+		let peer_id = *link.peer_id();
+		match self.active.remove(&peer_id) {
+			Some((_, ConnectionState::Connected)) => {
+				debug!(
+					peer_id = %peer_id,
+					stream_id = %self.stream_id,
+					reason = ?reason,
+					"Disconnecting from producer"
+				);
+
+				let close_result = match reason {
+					Some(reason) => link.close_with_reason(reason).await,
+					_ => link.close().await,
+				};
+
+				if let Err(e) = close_result {
+					warn!(
+						peer_id = %peer_id,
+						stream_id = %self.stream_id,
+						error = %e,
+						"Error closing link");
+				}
+
+				self.status.producers_count.fetch_sub(1, Ordering::Relaxed);
+				self.status.notify.notify_waiters();
+			}
+			_ => unreachable!("bug; disconnect called for non-connected peer"),
 		}
 	}
 
 	/// Attempts to subscribe to all available producers for the stream that are
 	/// currently known in the discovery catalog.
 	async fn subscribe_to_all(&mut self) {
-		let mut tasks = FuturesUnordered::new();
-
-		for peer in self.catalog.peers() {
-			if !peer.streams.contains(&self.stream_id) {
-				continue;
-			}
-
-			match self.peers.entry(peer.address.id) {
-				Entry::Occupied(mut occupied) => {
-					match occupied.get() {
-						PeerStatus::Connecting => continue,
-						PeerStatus::Connected => continue,
-						PeerStatus::BackoffUntil(instant) => {
-							if Instant::now() < *instant {
-								continue;
-							}
-							occupied.insert(PeerStatus::Connecting);
-							todo!()
-						}
-						PeerStatus::Blocked => continue,
-					};
-				}
-				Entry::Vacant(vacant) => {
-					vacant.insert(PeerStatus::Connecting);
-					let endpoint = self.endpoint.clone();
-					let addr = peer.address.clone();
-
-					// begin connecting to the producer
-					tasks.push(
-						async move { (addr.id, Link::connect(endpoint, addr).await) },
-					);
-				}
-			};
-		}
-
-		while let Some((peer_id, result)) = tasks.next().await {
-			match result {
-				Ok(mut link) => {
-					// send handshake / subscription request
-					if let Err(e) = link
-						.send_as(SubscriptionRequest {
-							stream_id: self.stream_id.clone(),
-							criteria: self.criteria.clone(),
-						})
-						.await
-					{
-						warn!(
-							stream_id = %self.stream_id,
-							peer_id = %peer_id,
-							"Failed to send subscription request: {e}"
-						);
-
-						let backoff = Instant::now() + Duration::from_secs(5);
-						self
-							.peers
-							.insert(peer_id, PeerStatus::BackoffUntil(backoff));
-						continue;
-					}
-
-					self.recvs.push(link.into_future());
-					let prev_state = self.peers.insert(peer_id, PeerStatus::Connected);
-					assert!(matches!(prev_state, Some(PeerStatus::Connecting)));
-					self.status.producers_count.fetch_add(1, Ordering::Relaxed);
-					self.status.notify.notify_waiters();
-				}
-				Err(e) => {
-					warn!(
-						stream_id = %self.stream_id,
-						peer_id = %peer_id,
-						"Failed to connect to producer: {e}"
-					);
-
-					let backoff = Instant::now() + Duration::from_secs(5);
-					self
-						.peers
-						.insert(peer_id, PeerStatus::BackoffUntil(backoff));
-				}
-			};
-		}
+		// Try to subscribe to all known producers for this stream
+		join_all(self.catalog.peers().filter_map(|peer| {
+			peer
+				.streams
+				.contains(&self.stream_id)
+				.then(|| self.subscribe(peer.address.clone()))
+		}))
+		.await;
 	}
 
 	async fn on_discovery_event(&mut self, event: DiscoveryEvent) {
 		match event {
 			DiscoveryEvent::New(peer_info) => {
-				if peer_info.streams.contains(&self.stream_id)
-					&& !self.peers.contains_key(&peer_info.address.id)
-				{
-					// New producer for us
-					self.subscribe_to_all().await;
+				if peer_info.streams.contains(&self.stream_id) {
+					self.subscribe(peer_info.address).await;
 				}
 			}
 			DiscoveryEvent::Removed(_) => {
-				// Handle removed peer
+				// noop for now, if we're still connected to the producer,
+				// wait for it to close the link.
 			}
 			DiscoveryEvent::Updated(peer_info) => {
-				if peer_info.streams.contains(&self.stream_id)
-					&& !self.peers.contains_key(&peer_info.address.id)
-				{
-					// New producer for us
-					self.subscribe_to_all().await;
+				if peer_info.streams.contains(&self.stream_id) {
+					self.subscribe(peer_info.address).await;
 				}
 			}
 			DiscoveryEvent::SignificantlyChanged => {
@@ -381,11 +451,17 @@ impl<D: Datum> EventLoop<D> {
 	}
 }
 
-enum PeerStatus {
+enum ConnectionState {
 	Connecting,
 	Connected,
-	BackoffUntil(Instant),
-	Blocked,
+	Backoff { until: Instant, attempts: u32 },
+}
+
+impl ConnectionState {
+	pub fn backoff(attempts: u32) -> Self {
+		let until = Instant::now() + (attempts * Duration::from_secs(5));
+		Self::Backoff { until, attempts }
+	}
 }
 
 slotmap::new_key_type! {

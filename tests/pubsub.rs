@@ -55,11 +55,7 @@ async fn api_design_manual_disc() -> anyhow::Result<()> {
 	let n2 = Network::new(network_id.clone()).await?;
 	let mut c2_1 = n2.consume::<Data1>();
 
-	n1.discovery().catalog().insert(n0.local().info());
-	n1.discovery().catalog().insert(n2.local().info());
-
-	n2.discovery().catalog().insert(n0.local().info());
-	n2.discovery().catalog().insert(n1.local().info());
+	full_manual_disco(&[&n0, &n1, &n2]);
 
 	p0_1.status().subscribed_at_least(2).await;
 	p1_1.status().subscribed().await;
@@ -82,8 +78,7 @@ async fn api_design_manual_disc() -> anyhow::Result<()> {
 	let n3 = Network::new(network_id.clone()).await?;
 	let mut c3_1 = n3.produce::<Data1>();
 
-	n1.discovery().catalog().insert(n3.local().info());
-	n2.discovery().catalog().insert(n3.local().info());
+	full_manual_disco(&[&n1, &n2, &n3]);
 
 	c3_1.status().subscribed_at_least(2).await;
 
@@ -96,4 +91,14 @@ async fn api_design_manual_disc() -> anyhow::Result<()> {
 	assert_eq!(recv_c2, Some(Data1("Five".into())));
 
 	Ok(())
+}
+
+fn full_manual_disco(peers: &[&Network]) {
+	for a in peers {
+		for b in peers {
+			if a.local().id() != b.local().id() {
+				a.discovery().catalog().insert(b.local().info());
+			}
+		}
+	}
 }

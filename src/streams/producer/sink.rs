@@ -212,6 +212,7 @@ impl<D: Datum> EventLoop<D> {
 			stream_id = %self.stream_id,
 			peer_id = %link.peer_id(),
 			criteria = ?criteria,
+			existing_subs = %self.subs.len(),
 			"Accepted new subscriber",
 		);
 

@@ -174,6 +174,12 @@ pub enum CloseReason {
 
 	#[error("Data send error")]
 	DataSendError = 3,
+
+	#[error("Stream error")]
+	StreamError = 4,
+
+	#[error("Protocol error")]
+	ProtocolError = 5,
 }
 
 /// Deref implementations to access the underlying WireStream
