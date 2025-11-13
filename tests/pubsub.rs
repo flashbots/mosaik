@@ -46,13 +46,14 @@ async fn api_design_manual_disc() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 
 	let n0 = Network::new(network_id.clone()).await?;
-	let mut p0 = n0.produce::<Data1>();
+	let mut p0_1 = n0.produce::<Data1>();
 
 	let n1 = Network::new(network_id.clone()).await?;
-	let mut c1 = n1.consume::<Data1>();
+	let mut c1_1 = n1.consume::<Data1>();
+	let mut p1_1 = n1.produce::<Data1>();
 
 	let n2 = Network::new(network_id.clone()).await?;
-	let mut c2 = n2.consume::<Data1>();
+	let mut c2_1 = n2.consume::<Data1>();
 
 	n1.discovery().catalog().insert(n0.local().info());
 	n1.discovery().catalog().insert(n2.local().info());
@@ -60,16 +61,39 @@ async fn api_design_manual_disc() -> anyhow::Result<()> {
 	n2.discovery().catalog().insert(n0.local().info());
 	n2.discovery().catalog().insert(n1.local().info());
 
-	p0.online().await;
-	c1.online().await;
-	c2.online().await;
+	p0_1.status().subscribed_at_least(2).await;
+	p1_1.status().subscribed().await;
+	c1_1.status().subscribed().await;
+	c2_1.status().subscribed().await;
 
-	p0.send(Data1("One".into())).await?;
+	p0_1.send(Data1("One".into())).await?;
 
-	let recv_c2a = c2.next().await;
-	let recv_c1 = c1.next().await;
+	let recv_c2a = c2_1.next().await;
+	let recv_c1 = c1_1.next().await;
 
 	assert_eq!(recv_c2a, Some(Data1("One".into())));
 	assert_eq!(recv_c1, Some(Data1("One".into())));
+
+	p1_1.send(Data1("Three".into())).await?;
+	let recv_c2 = c2_1.next().await;
+
+	assert_eq!(recv_c2, Some(Data1("Three".into())));
+
+	let n3 = Network::new(network_id.clone()).await?;
+	let mut c3_1 = n3.produce::<Data1>();
+
+	n1.discovery().catalog().insert(n3.local().info());
+	n2.discovery().catalog().insert(n3.local().info());
+
+	c3_1.status().subscribed_at_least(2).await;
+
+	c3_1.send(Data1("Five".into())).await?;
+
+	let recv_c1 = c1_1.next().await;
+	assert_eq!(recv_c1, Some(Data1("Five".into())));
+
+	let recv_c2 = c2_1.next().await;
+	assert_eq!(recv_c2, Some(Data1("Five".into())));
+
 	Ok(())
 }

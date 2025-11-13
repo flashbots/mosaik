@@ -1,55 +1,37 @@
 use {
-	super::Datum,
+	super::{super::Datum, *},
 	core::{
 		pin::Pin,
-		sync::atomic::{AtomicU32, Ordering},
 		task::{Context, Poll},
 	},
 	futures::{Sink, SinkExt},
 	std::sync::Arc,
-	tokio::sync::{Notify, mpsc},
+	tokio::sync::mpsc,
 	tokio_util::sync::PollSender,
 };
 
-#[derive(Debug, PartialEq, thiserror::Error)]
-pub enum PublishError<D: Datum> {
-	#[error("stream has no consumers")]
-	NoConsumers(D),
-
-	#[error("stream terminated")]
-	Terminated,
-}
-
 pub struct Producer<D: Datum> {
-	subs_count: Arc<AtomicU32>,
-	ready: Arc<Notify>,
+	status: Arc<Status>,
 	data_tx: PollSender<D>,
 }
 
+/// Public API
 impl<D: Datum> Producer<D> {
-	pub(crate) fn new(
-		data_tx: mpsc::Sender<D>,
-		subs_count: Arc<AtomicU32>,
-		ready: Arc<Notify>,
-	) -> Self {
+	/// Access to the status of this producer.
+	///
+	/// The returned value can be used to query snapshots of statistics about
+	/// the producer, as well as to await important status changes.
+	pub fn status(&self) -> &Status {
+		&self.status
+	}
+}
+
+/// Internal API
+impl<D: Datum> Producer<D> {
+	pub(crate) fn new(data_tx: mpsc::Sender<D>, status: Arc<Status>) -> Self {
 		let data_tx = PollSender::new(data_tx);
-		Self {
-			data_tx,
-			subs_count,
-			ready,
-		}
-	}
 
-	pub fn subscribers_count(&self) -> u32 {
-		self.subs_count.load(Ordering::Relaxed)
-	}
-
-	/// Awaits until the producer is ready to produce data and has at least one
-	/// subscriber.
-	pub async fn online(&self) {
-		if self.subscribers_count() == 0 {
-			self.ready.notified().await;
-		}
+		Self { data_tx, status }
 	}
 }
 
@@ -68,7 +50,7 @@ impl<D: Datum> Sink<D> for Producer<D> {
 	}
 
 	fn start_send(self: Pin<&mut Self>, item: D) -> Result<(), Self::Error> {
-		if self.subscribers_count() == 0 {
+		if self.status().subscribers_count() == 0 {
 			self.get_mut().data_tx.abort_send();
 			return Err(PublishError::NoConsumers(item));
 		}

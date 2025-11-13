@@ -19,8 +19,8 @@ pub struct PeerInfo {
 }
 
 impl PeerInfo {
-	pub const fn id(&self) -> PeerId {
-		self.address.id
+	pub const fn id(&self) -> &PeerId {
+		&self.address.id
 	}
 
 	pub fn digest(&self) -> Digest {

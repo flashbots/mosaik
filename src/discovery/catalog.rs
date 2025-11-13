@@ -87,11 +87,11 @@ impl Catalog {
 		let mut unsigned_writer = self.inner.unsigned.write();
 		let mut is_update = false;
 
-		if signed_writer.remove(&id).is_some() {
+		if signed_writer.remove(id).is_some() {
 			is_update = true;
 		}
 
-		if unsigned_writer.insert(id, peer.clone()).is_some() {
+		if unsigned_writer.insert(*id, peer.clone()).is_some() {
 			is_update = true;
 		}
 
@@ -115,7 +115,7 @@ impl Catalog {
 			drop(writer); // release lock asap
 
 			// notify observers about change to the catalog
-			let _ = self.inner.sender.send(Event::Removed(removed.id()));
+			let _ = self.inner.sender.send(Event::Removed(*removed.id()));
 		}
 	}
 }
@@ -128,7 +128,7 @@ impl Catalog {
 	/// - This iterator yields both signed and unsigned peer infos.
 	/// - This iterator works on a snapshot of the catalog at the time of calling
 	///   this method, and is not affected by subsequent updates to the catalog.
-	pub fn peers(&self) -> impl Iterator<Item = PeerInfo> {
+	pub fn peers(&self) -> impl Iterator<Item = PeerInfo> + 'static {
 		let signed_snapshot = {
 			let reader = self.inner.signed.read();
 			reader.clone()
@@ -267,15 +267,14 @@ impl Stream for Events {
 							return Poll::Ready(Some(Event::SignificantlyChanged));
 						}
 						Event::New(info) => {
-							let peer_id = info.id();
-							match this.buffer.get(&peer_id) {
+							match this.buffer.get(info.id()) {
 								None => {
 									// Rule: (none) + New = New
-									this.buffer.insert(peer_id, Event::New(info));
+									this.buffer.insert(*info.id(), Event::New(info));
 								}
 								Some(Event::Removed(_)) => {
 									// Rule: Removed + New = Updated
-									this.buffer.insert(peer_id, Event::Updated(info));
+									this.buffer.insert(*info.id(), Event::Updated(info));
 								}
 								Some(Event::New(_)) | Some(Event::Updated(_)) => {
 									// Invalid state: shouldn't get New after New/Updated
@@ -288,19 +287,18 @@ impl Stream for Events {
 							}
 						}
 						Event::Updated(info) => {
-							let peer_id = info.id();
-							match this.buffer.get(&peer_id) {
+							match this.buffer.get(info.id()) {
 								None => {
 									// Rule: (none) + Updated = Updated
-									this.buffer.insert(peer_id, Event::Updated(info));
+									this.buffer.insert(*info.id(), Event::Updated(info));
 								}
 								Some(Event::New(_)) => {
 									// Rule: New + Updated = New (with latest info)
-									this.buffer.insert(peer_id, Event::New(info));
+									this.buffer.insert(*info.id(), Event::New(info));
 								}
 								Some(Event::Updated(_)) => {
 									// Rule: Updated + Updated = Updated (with latest info)
-									this.buffer.insert(peer_id, Event::Updated(info));
+									this.buffer.insert(*info.id(), Event::Updated(info));
 								}
 								Some(Event::Removed(_)) => {
 									// Invalid state: shouldn't get Updated after Removed
@@ -404,14 +402,14 @@ mod tests {
 		let iter = catalog.peers();
 		assert_eq!(iter.count(), 2);
 
-		catalog.remove(&peer_info1.id());
+		catalog.remove(peer_info1.id());
 		assert!(!catalog.is_empty());
 		assert_eq!(catalog.len(), 1);
 
 		let iter = catalog.peers();
 		assert_eq!(iter.count(), 1);
 
-		catalog.remove(&peer_info2.id());
+		catalog.remove(peer_info2.id());
 		assert!(catalog.is_empty());
 		assert_eq!(catalog.len(), 0);
 
@@ -439,11 +437,11 @@ mod tests {
 		catalog.insert(peer_info2.clone());
 		assert_eq!(events.next().await, Some(Event::New(peer_info2.clone())));
 
-		catalog.remove(&peer_info1.id());
-		assert_eq!(events.next().await, Some(Event::Removed(peer_info1.id())));
+		catalog.remove(peer_info1.id());
+		assert_eq!(events.next().await, Some(Event::Removed(*peer_info1.id())));
 
-		catalog.remove(&peer_info2.id());
-		assert_eq!(events.next().await, Some(Event::Removed(peer_info2.id())));
+		catalog.remove(peer_info2.id());
+		assert_eq!(events.next().await, Some(Event::Removed(*peer_info2.id())));
 	}
 
 	#[tokio::test]
@@ -491,7 +489,7 @@ mod tests {
 
 		let peer_info = PeerInfo::random();
 		catalog.insert(peer_info.clone());
-		catalog.remove(&peer_info.id());
+		catalog.remove(peer_info.id());
 
 		// Rule: New + Removed = (cancelled)
 		// Should get nothing or timeout - use try_next with timeout
@@ -550,10 +548,10 @@ mod tests {
 		assert_eq!(events.next().await, Some(Event::New(peer_info.clone())));
 
 		catalog.insert(peer_info.clone()); // Update
-		catalog.remove(&peer_info.id());
+		catalog.remove(peer_info.id());
 
 		// Rule: Updated + Removed = Removed
-		assert_eq!(events.next().await, Some(Event::Removed(peer_info.id())));
+		assert_eq!(events.next().await, Some(Event::Removed(*peer_info.id())));
 	}
 
 	#[tokio::test]
@@ -565,7 +563,7 @@ mod tests {
 		catalog.insert(peer_info.clone());
 		assert_eq!(events.next().await, Some(Event::New(peer_info.clone())));
 
-		catalog.remove(&peer_info.id());
+		catalog.remove(peer_info.id());
 		catalog.insert(peer_info.clone()); // Re-add
 
 		// Rule: Removed + New = Updated
@@ -581,11 +579,11 @@ mod tests {
 		catalog.insert(peer_info.clone());
 		assert_eq!(events.next().await, Some(Event::New(peer_info.clone())));
 
-		catalog.remove(&peer_info.id());
-		catalog.remove(&peer_info.id()); // Remove again (no-op)
+		catalog.remove(peer_info.id());
+		catalog.remove(peer_info.id()); // Remove again (no-op)
 
 		// Rule: Removed + Removed = Removed
-		assert_eq!(events.next().await, Some(Event::Removed(peer_info.id())));
+		assert_eq!(events.next().await, Some(Event::Removed(*peer_info.id())));
 	}
 
 	#[tokio::test]
@@ -653,7 +651,7 @@ mod tests {
 			},
 		};
 		catalog.insert(peer_info3.clone());
-		catalog.remove(&peer_info.id());
+		catalog.remove(peer_info.id());
 
 		// Should be cancelled (no event)
 		tokio::time::timeout(std::time::Duration::from_millis(50), events.next())

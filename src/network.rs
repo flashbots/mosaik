@@ -82,11 +82,7 @@ impl Network {
 /// Public pubsub API
 impl Network {
 	pub fn produce<D: Datum>(&self) -> Producer<D> {
-		self
-			.me
-			.create_sink::<D>()
-			.producer::<D>()
-			.expect("stream id matches; qed")
+		self.me.create_sink::<D>().producer::<D>()
 	}
 
 	pub fn consume<D: Datum>(&self) -> Consumer<D> {
@@ -94,11 +90,7 @@ impl Network {
 	}
 
 	pub fn consume_with<D: Datum>(&self, criteria: Criteria) -> Consumer<D> {
-		Consumer::<D>::new(
-			self.me.endpoint().clone(),
-			self.discovery().catalog().clone(),
-			criteria,
-		)
+		Consumer::<D>::new(self, criteria)
 	}
 }
 

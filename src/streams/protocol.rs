@@ -1,24 +1,20 @@
 use {
-	super::StreamId,
+	super::{StreamId, link::Link},
 	crate::{
 		local::Local,
-		streams::{
-			Criteria,
-			Error,
-			error::{ProtocolError, SubscriptionError},
-		},
+		streams::{Criteria, link::CloseReason},
 	},
 	core::fmt,
-	futures::{SinkExt, StreamExt},
 	iroh::{
-		endpoint::{Connection, RecvStream, SendStream},
+		endpoint::Connection,
 		protocol::{AcceptError, ProtocolHandler},
 	},
 	serde::{Deserialize, Serialize},
-	tokio::io::Join,
-	tokio_util::codec::{Framed, LengthDelimitedCodec},
 };
 
+/// This type represents the `/mosaik/streams/1` protocol handler used by
+/// Mosaik nodes to accept incoming stream subscription requests from remote
+/// peers.
 pub struct Protocol {
 	local: Local,
 }
@@ -32,46 +28,23 @@ impl Protocol {
 }
 
 impl ProtocolHandler for Protocol {
+	/// This code is called on the stream producer node when a remote peer
+	/// connects and wants to subscribe to a stream.
 	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
-		let (tx, rx) = connection.accept_bi().await?;
+		let mut link = Link::accept(connection).await?;
 
-		let mut wire =
-			WireStream::new(tokio::io::join(rx, tx), LengthDelimitedCodec::new());
+		// The accepting node expects a subscription request message as the first
+		// message from the dialing node.
+		let request = link.recv_as::<SubscriptionRequest>().await?;
 
-		let Some(handshake) = wire.next().await.transpose()? else {
-			return Err(AcceptError::from_err(Error::Protocol(
-				ProtocolError::ClosedBeforeHandshake,
-			)));
-		};
-
-		let request: SubscriptionRequest = rmp_serde::from_slice(&handshake)
-			.map_err(|e| {
-				AcceptError::from_err(Error::Protocol(
-					ProtocolError::InvalidHandshakeRequest(e),
-				))
-			})?;
-
+		// Look up the requested stream ID in the local registry.
 		let Some(sink) = self.local.open_sink(&request.stream_id) else {
-			let response = rmp_serde::to_vec(&SubscriptionResponse::Rejected(
-				SubscriptionError::StreamNotFound(request.stream_id.clone()),
-			))
-			.expect("infallible; qed");
-
-			wire.send(response.into()).await?;
-			wire.close().await?;
-
-			return Err(AcceptError::from_err(Error::Subscription(
-				SubscriptionError::StreamNotFound(request.stream_id),
-			)));
+			link.close_with_reason(CloseReason::StreamNotFound).await?;
+			return Err(AcceptError::from_err(CloseReason::StreamNotFound));
 		};
 
-		let link = Link { wire, connection };
-		let criteria = request.criteria;
-
-		sink
-			.accept(link, criteria)
-			.await
-			.map_err(AcceptError::from_err)?;
+		// delegate the link to the stream specific sink
+		sink.accept(link, request.criteria);
 
 		Ok(())
 	}
@@ -83,30 +56,8 @@ impl fmt::Debug for Protocol {
 	}
 }
 
-type WireStream = Framed<Join<RecvStream, SendStream>, LengthDelimitedCodec>;
-
-pub struct Link {
-	pub connection: Connection,
-	pub wire: WireStream,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriptionRequest {
 	pub stream_id: StreamId,
 	pub criteria: Criteria,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SubscriptionResponse {
-	Accepted,
-	Rejected(SubscriptionError),
-}
-
-impl core::fmt::Debug for Link {
-	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-		let Ok(remote_id) = self.connection.remote_id() else {
-			return write!(f, "Link(to=Unknown, INVALID CONNECTION)");
-		};
-		write!(f, "Link(to={remote_id})")
-	}
 }
