@@ -188,6 +188,7 @@ mod tests {
 
 	#[tokio::test(flavor = "multi_thread")]
 	async fn online_waits_until_flag_is_set() {
+		// Ensure `online()` stalls until we flip the internal flag and notify.
 		let status = Status::new();
 		let fut = status.online();
 		tokio::pin!(fut);
@@ -202,6 +203,7 @@ mod tests {
 
 	#[tokio::test(flavor = "multi_thread")]
 	async fn subscribed_at_least_waits_for_threshold() {
+		// Wait until the subscriber count reaches the requested threshold.
 		let status = Status::new();
 		let fut = status.subscribed_at_least(2);
 		tokio::pin!(fut);
@@ -217,6 +219,7 @@ mod tests {
 
 	#[tokio::test(flavor = "multi_thread")]
 	async fn unsubscribed_waits_until_no_subscribers() {
+		// Ensure `unsubscribed()` only resolves after the count drops to zero.
 		let status = Status::new();
 		status.subscribers_count.store(1, Ordering::Relaxed);
 		let fut = status.unsubscribed();
@@ -231,6 +234,7 @@ mod tests {
 
 	#[tokio::test(flavor = "multi_thread")]
 	async fn subscribers_changed_fires_on_next_change() {
+		// Detect the next change in subscriber count regardless of direction.
 		let status = Status::new();
 		let fut = status.subscribers_changed();
 		tokio::pin!(fut);
@@ -244,6 +248,7 @@ mod tests {
 
 	#[tokio::test(flavor = "multi_thread")]
 	async fn terminated_resolves_after_cancel() {
+		// Verify `terminated()` stays pending until the cancellation token fires.
 		let status = Status::new();
 		let fut = status.terminated();
 		tokio::pin!(fut);
@@ -256,6 +261,7 @@ mod tests {
 
 	#[tokio::test(flavor = "multi_thread")]
 	async fn subscribed_resolves_immediately_when_already_subscribed() {
+		// If a subscriber already exists, `subscribed()` should short-circuit.
 		let status = Status::new();
 		status.subscribers_count.store(1, Ordering::Relaxed);
 
