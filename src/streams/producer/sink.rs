@@ -94,7 +94,7 @@ impl FanoutSink {
 			.expect("stream-id mismatch; this is a bug; qed")
 			.clone();
 
-		Producer::new(data_tx, Arc::clone(&handle.status))
+		Producer::init(data_tx, Arc::clone(&handle.status))
 	}
 
 	/// Accepts a new connected remote subscriber link to this fanout sink.

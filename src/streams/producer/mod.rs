@@ -12,9 +12,3 @@ pub enum PublishError<D: super::Datum> {
 	#[error("stream has been terminated")]
 	Terminated,
 }
-
-#[derive(Debug, PartialEq, thiserror::Error)]
-pub enum ProducerError {
-	#[error("stream has been terminated")]
-	Terminated,
-}

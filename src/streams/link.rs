@@ -180,6 +180,12 @@ pub enum CloseReason {
 
 	#[error("Protocol error")]
 	ProtocolError = 5,
+
+	#[error("Network mismatch")]
+	NetworkMismatch = 6,
+
+	#[error("Remote closed the connection unexpectedly")]
+	RemoteLinkClosed = 7,
 }
 
 /// Deref implementations to access the underlying WireStream

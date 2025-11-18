@@ -1,4 +1,5 @@
 mod discovery;
+mod groups;
 mod id;
 mod local;
 mod network;

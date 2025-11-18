@@ -5,7 +5,7 @@ use {
 		Status,
 	},
 	crate::{
-		prelude::{Catalog, Criteria, DiscoveryEvent, Network, PeerId},
+		prelude::{Catalog, Criteria, DiscoveryEvent, Network, NetworkId, PeerId},
 		streams::{
 			link::{CloseReason, Link},
 			protocol::SubscriptionRequest,
@@ -28,7 +28,13 @@ use {
 	},
 	iroh::{Endpoint, EndpointAddr},
 	std::{io, sync::Arc, time::Instant},
-	tokio::sync::mpsc::{self, error::TryRecvError},
+	tokio::{
+		sync::{
+			mpsc::{self, error::TryRecvError},
+			oneshot,
+		},
+		task::JoinHandle,
+	},
 	tokio_util::sync::{CancellationToken, DropGuard},
 	tracing::{debug, info, warn},
 };
@@ -89,7 +95,7 @@ impl<D: Datum> Consumer<D> {
 
 /// Internal API
 impl<D: Datum> Consumer<D> {
-	pub(crate) fn new(network: &Network, criteria: Criteria) -> Self {
+	pub fn new(network: &Network, criteria: Criteria) -> Self {
 		let (event_loop, handle) = EventLoop::new(network, criteria);
 
 		// Spawn the event loop task
@@ -119,6 +125,9 @@ impl<D: Datum> Stream for Consumer<D> {
 ///
 /// - When the `Consumer` handle is dropped, this event loop is also terminated.
 struct EventLoop<D: Datum> {
+	/// The network ID that this consumer is operating on.
+	network_id: NetworkId,
+
 	/// The stream ID that this consumer is receiving data for.
 	stream_id: StreamId,
 
@@ -140,8 +149,10 @@ struct EventLoop<D: Datum> {
 	/// Channel used to send received datums to the consumer handle.
 	data_tx: mpsc::Sender<D>,
 
-	/// Active receiving streams from connected producers.
-	recvs: FuturesUnordered<StreamFuture<Link>>,
+	/// Active receiving streams from connected producers. This is a set of join
+	/// handles for sub-loops that each manage receiving data from a single
+	/// producer link.
+	subs: FuturesUnordered<JoinHandle<Result<(), CloseReason>>>,
 
 	/// Map of peers that we are actively connected to or trying to connect to.
 	active: DashMap<PeerId, ConnectionState>,
@@ -163,11 +174,12 @@ impl<D: Datum> EventLoop<D> {
 		};
 
 		let event_loop = Self {
+			network_id: network.network_id().clone(),
 			stream_id: StreamId::of::<D>(),
 			endpoint: network.local().endpoint().clone(),
 			catalog: network.discovery().catalog().clone(),
 			active: DashMap::new(),
-			recvs: FuturesUnordered::new(),
+			subs: FuturesUnordered::new(),
 			status,
 			criteria,
 			data_tx,
@@ -199,10 +211,15 @@ impl<D: Datum> EventLoop<D> {
 					self.on_discovery_event(event).await;
 				}
 
-				// Handle incoming data from producers
-				Some((data, link)) = self.recvs.next() => {
-					self.on_data_received(data, link).await;
+				// Handle terminated receiver sub-loops
+				Some(result) = self.subs.next() => {
+
 				}
+
+				// Handle incoming data from producers
+				// Some((data, link)) = self.recvs.next() => {
+				// 	self.on_data_received(data, link).await;
+				// }
 			}
 		}
 	}
@@ -210,7 +227,7 @@ impl<D: Datum> EventLoop<D> {
 	/// Handles termination of the consumer by closing all active links
 	/// to all connected producers.
 	async fn on_terminated(&mut self) {
-		for sub in mem::take(&mut self.recvs).into_iter() {
+		for sub in mem::take(&mut self.subs).into_iter() {
 			if let Some(link) = sub.into_inner() {
 				self.disconnect(link, None).await;
 			}
@@ -289,7 +306,7 @@ impl<D: Datum> EventLoop<D> {
 			.fetch_add(bytes.len() as u64, Ordering::Relaxed);
 
 		// Re-insert the link to continue receiving data on it
-		self.recvs.push(link.into_future());
+		self.subs.push(link.into_future());
 	}
 
 	/// Attempts to subscribe to a remote producer for this stream.
@@ -340,6 +357,7 @@ impl<D: Datum> EventLoop<D> {
 		// we have a connection, send subscription request
 		if let Err(e) = link
 			.send_as(SubscriptionRequest {
+				network_id: self.network_id.clone(),
 				stream_id: self.stream_id.clone(),
 				criteria: self.criteria.clone(),
 			})
@@ -368,7 +386,7 @@ impl<D: Datum> EventLoop<D> {
 		));
 
 		// Start receiving data from this link
-		self.recvs.push(link.into_future());
+		self.subs.push(link.into_future());
 
 		// update & notify status
 		self.status.producers_count.fetch_add(1, Ordering::Relaxed);
@@ -461,6 +479,107 @@ impl ConnectionState {
 	pub fn backoff(attempts: u32) -> Self {
 		let until = Instant::now() + (attempts * Duration::from_secs(5));
 		Self::Backoff { until, attempts }
+	}
+}
+
+/// A sub-loop that manages a single subscription to a remote producer.
+struct SubLoop<D: Datum> {
+	link: Link,
+	stream_id: StreamId,
+	status: Arc<Status>,
+	data_tx: mpsc::Sender<D>,
+	cancel: CancellationToken,
+	close_reason: CloseReason,
+}
+
+impl<D: Datum> SubLoop<D> {
+	pub async fn run(mut self) -> Result<(), CloseReason> {
+		loop {
+			tokio::select! {
+				_ = self.cancel.cancelled() => {
+					debug!(
+						stream_id = %self.stream_id,
+						peer_id = %self.link.peer_id(),
+						"Terminating subscription sub-loop");
+					break;
+				}
+
+				packet = self.link.next() => {
+					self.on_packet_received(packet).await;
+				}
+			}
+		}
+
+		self.status.producers_count.fetch_sub(1, Ordering::SeqCst);
+		self.status.notify.notify_waiters();
+
+		Err(CloseReason::Unspecified)
+	}
+
+	async fn on_packet_received(
+		&mut self,
+		packet: Option<Result<BytesMut, io::Error>>,
+	) {
+		let Some(result) = packet else {
+			warn!(
+				stream_id = %self.stream_id,
+				peer_id = %self.link.peer_id(),
+				"Stream closed by producer");
+
+			self.cancel.cancel();
+			return;
+		};
+
+		let bytes = match result {
+			Ok(bytes) => bytes,
+			Err(e) => {
+				// io error receiving data
+				warn!(
+					stream_id = %self.stream_id,
+					peer_id = %self.link.peer_id(),
+					error = %e,
+					"Error receiving data");
+
+				self.cancel.cancel();
+				return;
+			}
+		};
+
+		// Deserialize byte data into datum
+		let datum: D = match rmp_serde::from_slice(&bytes[..]) {
+			Ok(datum) => datum,
+			Err(e) => {
+				// drop any producer that sends invalid data
+				warn!(
+					error = %e,
+					stream_id = %self.stream_id,
+					peer_id = %self.link.peer_id(),
+					"Received invalid data");
+
+				self.cancel.cancel();
+				return;
+			}
+		};
+
+		// Send datum to consumer handle
+		if self.data_tx.send(datum).await.is_err() {
+			// consumer receiver dropped. Terminate the consumer loop, which
+			// will close all active links with all remote producers.
+			warn!(
+					stream_id = %self.stream_id,
+					peer_id = %self.link.peer_id(),
+					"Consumer dropped; terminating subscription sub-loop");
+
+			self.cancel.cancel();
+			return;
+		}
+
+		// update stats
+		self.status.items_received.fetch_add(1, Ordering::Relaxed);
+		self
+			.status
+			.bytes_received
+			.fetch_add(bytes.len() as u64, Ordering::Relaxed);
 	}
 }
 

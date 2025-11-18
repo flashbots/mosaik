@@ -163,6 +163,25 @@ impl Catalog {
 			receiver: BroadcastStream::new(self.inner.sender.subscribe()),
 		}
 	}
+
+	/// Gets latest full `PeerInfo` entry by `PeerId`
+	///
+	/// This will lookup signed entries first and fall back to unsigned if not
+	/// found.
+	pub fn get(&self, id: &PeerId) -> Option<PeerInfo> {
+		self
+			.inner
+			.signed
+			.read()
+			.get(id)
+			.map(|p| p.info.clone())
+			.or_else(|| self.inner.unsigned.read().get(id).map(|p| p.clone()))
+	}
+
+	/// Gets latest full `SignedPeerInfo` entry by `PeerId`.
+	pub fn get_signed(&self, id: &PeerId) -> Option<SignedPeerInfo> {
+		self.inner.signed.read().get(id).cloned()
+	}
 }
 
 /// Iterator over peer infos in a snapshot of the catalog.

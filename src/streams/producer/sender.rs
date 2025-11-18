@@ -1,5 +1,6 @@
 use {
 	super::{super::Datum, *},
+	crate::prelude::Network,
 	core::{
 		pin::Pin,
 		task::{Context, Poll},
@@ -24,11 +25,19 @@ impl<D: Datum> Producer<D> {
 	pub fn status(&self) -> &Status {
 		&self.status
 	}
+
+	/// Creates a new producer for the given datum type on the provided network.
+	///
+	/// If this network already has a producer for this datum type, the created
+	/// instance will reuse the existing producer and share its state.
+	pub fn new(network: &Network) -> Self {
+		network.local().create_sink::<D>().producer::<D>()
+	}
 }
 
 /// Internal API
 impl<D: Datum> Producer<D> {
-	pub(crate) fn new(data_tx: mpsc::Sender<D>, status: Arc<Status>) -> Self {
+	pub(crate) fn init(data_tx: mpsc::Sender<D>, status: Arc<Status>) -> Self {
 		let data_tx = PollSender::new(data_tx);
 
 		Self { data_tx, status }

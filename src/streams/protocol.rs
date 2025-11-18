@@ -2,6 +2,7 @@ use {
 	super::{StreamId, link::Link},
 	crate::{
 		local::Local,
+		prelude::NetworkId,
 		streams::{Criteria, link::CloseReason},
 	},
 	core::fmt,
@@ -37,6 +38,12 @@ impl ProtocolHandler for Protocol {
 		// message from the dialing node.
 		let request = link.recv_as::<SubscriptionRequest>().await?;
 
+		// Verify that the network ID matches.
+		if request.network_id != *self.local.network_id() {
+			link.close_with_reason(CloseReason::NetworkMismatch).await?;
+			return Err(AcceptError::from_err(CloseReason::NetworkMismatch));
+		}
+
 		// Look up the requested stream ID in the local registry.
 		let Some(sink) = self.local.open_sink(&request.stream_id) else {
 			link.close_with_reason(CloseReason::StreamNotFound).await?;
@@ -58,6 +65,7 @@ impl fmt::Debug for Protocol {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriptionRequest {
+	pub network_id: NetworkId,
 	pub stream_id: StreamId,
 	pub criteria: Criteria,
 }
