@@ -177,3 +177,90 @@ impl Status {
 		self.cancel.cancelled().await;
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use {
+		super::Status,
+		core::{sync::atomic::Ordering, time::Duration},
+		tokio::time::timeout,
+	};
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn online_waits_until_flag_is_set() {
+		let status = Status::new();
+		let fut = status.online();
+		tokio::pin!(fut);
+
+		assert!(timeout(Duration::from_millis(20), fut.as_mut()).await.is_err());
+
+		status.online.store(true, Ordering::Relaxed);
+		status.notify.notify_waiters();
+
+		timeout(Duration::from_millis(50), fut).await.unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn subscribed_at_least_waits_for_threshold() {
+		let status = Status::new();
+		let fut = status.subscribed_at_least(2);
+		tokio::pin!(fut);
+
+		status.subscribers_count.store(1, Ordering::Relaxed);
+		status.notify.notify_waiters();
+		assert!(timeout(Duration::from_millis(20), fut.as_mut()).await.is_err());
+
+		status.subscribers_count.store(2, Ordering::Relaxed);
+		status.notify.notify_waiters();
+		timeout(Duration::from_millis(50), fut).await.unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn unsubscribed_waits_until_no_subscribers() {
+		let status = Status::new();
+		status.subscribers_count.store(1, Ordering::Relaxed);
+		let fut = status.unsubscribed();
+		tokio::pin!(fut);
+
+		assert!(timeout(Duration::from_millis(20), fut.as_mut()).await.is_err());
+
+		status.subscribers_count.store(0, Ordering::Relaxed);
+		status.notify.notify_waiters();
+		timeout(Duration::from_millis(50), fut).await.unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn subscribers_changed_fires_on_next_change() {
+		let status = Status::new();
+		let fut = status.subscribers_changed();
+		tokio::pin!(fut);
+
+		assert!(timeout(Duration::from_millis(20), fut.as_mut()).await.is_err());
+
+		status.subscribers_count.store(1, Ordering::Relaxed);
+		status.notify.notify_waiters();
+		timeout(Duration::from_millis(50), fut).await.unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn terminated_resolves_after_cancel() {
+		let status = Status::new();
+		let fut = status.terminated();
+		tokio::pin!(fut);
+
+		assert!(timeout(Duration::from_millis(20), fut.as_mut()).await.is_err());
+
+		status.cancel.cancel();
+		timeout(Duration::from_millis(50), fut).await.unwrap();
+	}
+
+	#[tokio::test(flavor = "multi_thread")]
+	async fn subscribed_resolves_immediately_when_already_subscribed() {
+		let status = Status::new();
+		status.subscribers_count.store(1, Ordering::Relaxed);
+
+		timeout(Duration::from_millis(50), status.subscribed())
+			.await
+			.unwrap();
+	}
+}
