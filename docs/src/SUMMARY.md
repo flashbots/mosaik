@@ -2,6 +2,8 @@
 
 # Summary
 
+- [Architecture Overview](architecture.md)
+
 # Network
 
 This chapter describes the design and implementation of the network layer.
