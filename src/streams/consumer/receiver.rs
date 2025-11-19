@@ -28,13 +28,7 @@ use {
 	},
 	iroh::{Endpoint, EndpointAddr},
 	std::{io, sync::Arc, time::Instant},
-	tokio::{
-		sync::{
-			mpsc::{self, error::TryRecvError},
-			oneshot,
-		},
-		task::JoinHandle,
-	},
+	tokio::sync::mpsc::{self, error::TryRecvError},
 	tokio_util::sync::{CancellationToken, DropGuard},
 	tracing::{debug, info, warn},
 };
@@ -152,7 +146,7 @@ struct EventLoop<D: Datum> {
 	/// Active receiving streams from connected producers. This is a set of join
 	/// handles for sub-loops that each manage receiving data from a single
 	/// producer link.
-	subs: FuturesUnordered<JoinHandle<Result<(), CloseReason>>>,
+	subs: FuturesUnordered<StreamFuture<Link>>,
 
 	/// Map of peers that we are actively connected to or trying to connect to.
 	active: DashMap<PeerId, ConnectionState>,
@@ -212,8 +206,8 @@ impl<D: Datum> EventLoop<D> {
 				}
 
 				// Handle terminated receiver sub-loops
-				Some(result) = self.subs.next() => {
-
+				Some((data, link)) = self.subs.next() => {
+					self.on_data_received(data, link).await;
 				}
 
 				// Handle incoming data from producers
@@ -482,107 +476,6 @@ impl ConnectionState {
 	}
 }
 
-/// A sub-loop that manages a single subscription to a remote producer.
-struct SubLoop<D: Datum> {
-	link: Link,
-	stream_id: StreamId,
-	status: Arc<Status>,
-	data_tx: mpsc::Sender<D>,
-	cancel: CancellationToken,
-	close_reason: CloseReason,
-}
-
-impl<D: Datum> SubLoop<D> {
-	pub async fn run(mut self) -> Result<(), CloseReason> {
-		loop {
-			tokio::select! {
-				_ = self.cancel.cancelled() => {
-					debug!(
-						stream_id = %self.stream_id,
-						peer_id = %self.link.peer_id(),
-						"Terminating subscription sub-loop");
-					break;
-				}
-
-				packet = self.link.next() => {
-					self.on_packet_received(packet).await;
-				}
-			}
-		}
-
-		self.status.producers_count.fetch_sub(1, Ordering::SeqCst);
-		self.status.notify.notify_waiters();
-
-		Err(CloseReason::Unspecified)
-	}
-
-	async fn on_packet_received(
-		&mut self,
-		packet: Option<Result<BytesMut, io::Error>>,
-	) {
-		let Some(result) = packet else {
-			warn!(
-				stream_id = %self.stream_id,
-				peer_id = %self.link.peer_id(),
-				"Stream closed by producer");
-
-			self.cancel.cancel();
-			return;
-		};
-
-		let bytes = match result {
-			Ok(bytes) => bytes,
-			Err(e) => {
-				// io error receiving data
-				warn!(
-					stream_id = %self.stream_id,
-					peer_id = %self.link.peer_id(),
-					error = %e,
-					"Error receiving data");
-
-				self.cancel.cancel();
-				return;
-			}
-		};
-
-		// Deserialize byte data into datum
-		let datum: D = match rmp_serde::from_slice(&bytes[..]) {
-			Ok(datum) => datum,
-			Err(e) => {
-				// drop any producer that sends invalid data
-				warn!(
-					error = %e,
-					stream_id = %self.stream_id,
-					peer_id = %self.link.peer_id(),
-					"Received invalid data");
-
-				self.cancel.cancel();
-				return;
-			}
-		};
-
-		// Send datum to consumer handle
-		if self.data_tx.send(datum).await.is_err() {
-			// consumer receiver dropped. Terminate the consumer loop, which
-			// will close all active links with all remote producers.
-			warn!(
-					stream_id = %self.stream_id,
-					peer_id = %self.link.peer_id(),
-					"Consumer dropped; terminating subscription sub-loop");
-
-			self.cancel.cancel();
-			return;
-		}
-
-		// update stats
-		self.status.items_received.fetch_add(1, Ordering::Relaxed);
-		self
-			.status
-			.bytes_received
-			.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-	}
-}
-
 slotmap::new_key_type! {
 	/// A unique identifier for a remote subscription for one stream.
 	///
@@ -591,4 +484,42 @@ slotmap::new_key_type! {
 	///
 	/// We may have multiple subscriptions for the same stream, to different producers.
 	struct SubscriptionId;
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn connection_state_backoff_tracks_attempts() {
+		let attempts = 3;
+		let state = ConnectionState::backoff(attempts);
+
+		match state {
+			ConnectionState::Backoff { attempts: stored, .. } => {
+				assert_eq!(stored, attempts);
+			}
+			_ => panic!("expected Backoff"),
+		}
+	}
+
+	#[test]
+	fn connection_state_backoff_sets_deadline_in_future() {
+		let attempts = 2;
+		let expected = Instant::now() + (attempts * Duration::from_secs(5));
+		let tolerance = Duration::from_millis(10);
+		let state = ConnectionState::backoff(attempts);
+
+		match state {
+			ConnectionState::Backoff { until, .. } => {
+				assert!(
+					until >= expected && until <= expected + tolerance,
+					"deadline {:?} outside expected window {:?}",
+					until,
+					expected
+				);
+			}
+			_ => panic!("expected Backoff"),
+		}
+	}
 }
