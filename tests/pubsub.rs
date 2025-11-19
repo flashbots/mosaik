@@ -33,8 +33,7 @@ async fn api_design_auto_disc() {
 	n1.discovery().dial(n0.local().addr()).await.unwrap();
 	n2.discovery().dial(n0.local().addr()).await.unwrap();
 
-	tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-
+	p0.status().subscribed_at_least(2).await;
 	p0.send(Data1("One".into())).await.unwrap();
 
 	let recv_c2a = c2a.next().await;
