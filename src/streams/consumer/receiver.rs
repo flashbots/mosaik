@@ -432,9 +432,9 @@ impl<D: Datum> EventLoop<D> {
 		// Try to subscribe to all known producers for this stream
 		join_all(self.catalog.peers().filter_map(|peer| {
 			peer
-				.streams
+				.streams()
 				.contains(&self.stream_id)
-				.then(|| self.subscribe(peer.address.clone()))
+				.then(|| self.subscribe(peer.into_address()))
 		}))
 		.await;
 	}
@@ -442,8 +442,8 @@ impl<D: Datum> EventLoop<D> {
 	async fn on_discovery_event(&mut self, event: DiscoveryEvent) {
 		match event {
 			DiscoveryEvent::New(peer_info) => {
-				if peer_info.streams.contains(&self.stream_id) {
-					self.subscribe(peer_info.address).await;
+				if peer_info.streams().contains(&self.stream_id) {
+					self.subscribe(peer_info.into_address()).await;
 				}
 			}
 			DiscoveryEvent::Removed(_) => {
@@ -451,8 +451,8 @@ impl<D: Datum> EventLoop<D> {
 				// wait for it to close the link.
 			}
 			DiscoveryEvent::Updated(peer_info) => {
-				if peer_info.streams.contains(&self.stream_id) {
-					self.subscribe(peer_info.address).await;
+				if peer_info.streams().contains(&self.stream_id) {
+					self.subscribe(peer_info.into_address()).await;
 				}
 			}
 			DiscoveryEvent::SignificantlyChanged => {

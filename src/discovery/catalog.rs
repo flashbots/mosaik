@@ -118,6 +118,12 @@ impl Catalog {
 			let _ = self.inner.sender.send(Event::Removed(*removed.id()));
 		}
 	}
+
+	pub(crate) async fn merge(&mut self, other: &[PeerInfo]) {
+		for peer in other.iter() {
+			self.insert(peer.clone());
+		}
+	}
 }
 
 /// Read-only catalog public API.
@@ -181,6 +187,16 @@ impl Catalog {
 	/// Gets latest full `SignedPeerInfo` entry by `PeerId`.
 	pub fn get_signed(&self, id: &PeerId) -> Option<SignedPeerInfo> {
 		self.inner.signed.read().get(id).cloned()
+	}
+
+	// TODO: change this to a merkle root
+	pub(crate) async fn hash(&self) -> Vec<u8> {
+		use sha3::Digest as _;
+		let mut hasher = sha3::Sha3_256::new();
+		for peer in self.peers() {
+			hasher.update(peer.digest().to_vec());
+		}
+		hasher.finalize().to_vec()
 	}
 }
 
@@ -486,14 +502,11 @@ mod tests {
 		catalog.insert(peer_info.clone());
 
 		// Simulate update with new info but same ID
-		let peer_info2 = PeerInfo {
-			address: peer_info.address,
-			streams: {
-				let mut streams = peer_info.streams.clone();
-				streams.insert(StreamId::of::<Data1>());
-				streams
-			},
-		};
+		let peer_info2 = PeerInfo::new_with_streams(peer_info.address().clone(), {
+			let mut streams = peer_info.streams().clone();
+			streams.insert(StreamId::of::<Data1>());
+			streams
+		});
 
 		catalog.insert(peer_info2.clone());
 
@@ -526,27 +539,20 @@ mod tests {
 		catalog.insert(peer_info.clone());
 		assert_eq!(events.next().await, Some(Event::New(peer_info.clone())));
 
-		let peer_info2 = PeerInfo {
-			// Update
-			address: peer_info.address.clone(),
-			streams: {
-				let mut streams = peer_info.streams.clone();
-				streams.insert(StreamId::of::<Data1>());
-				streams
-			},
-		};
+		let peer_info2 = PeerInfo::new_with_streams(peer_info.address().clone(), {
+			let mut streams = peer_info.streams().clone();
+			streams.insert(StreamId::of::<Data1>());
+			streams
+		});
 
 		catalog.insert(peer_info2.clone());
 
-		let peer_info3 = PeerInfo {
-			// Update again
-			address: peer_info2.address.clone(),
-			streams: {
-				let mut streams = peer_info2.streams.clone();
+		let peer_info3 =
+			PeerInfo::new_with_streams(peer_info2.address().clone(), {
+				let mut streams = peer_info2.streams().clone();
 				streams.insert(StreamId::of::<Data2>());
 				streams
-			},
-		};
+			});
 
 		catalog.insert(peer_info3.clone()); // Update again
 
@@ -651,24 +657,19 @@ mod tests {
 
 		// New -> Updated -> Updated -> Removed = (cancelled)
 		catalog.insert(peer_info.clone());
-		let peer_info2 = PeerInfo {
-			address: peer_info.address.clone(),
-			streams: {
-				let mut streams = peer_info.streams.clone();
-				streams.insert(StreamId::of::<Data1>());
-				streams
-			},
-		};
+		let peer_info2 = PeerInfo::new_with_streams(peer_info.address().clone(), {
+			let mut streams = peer_info.streams().clone();
+			streams.insert(StreamId::of::<Data1>());
+			streams
+		});
 		catalog.insert(peer_info2.clone());
 
-		let peer_info3 = PeerInfo {
-			address: peer_info.address.clone(),
-			streams: {
-				let mut streams = peer_info2.streams.clone();
+		let peer_info3 =
+			PeerInfo::new_with_streams(peer_info2.address().clone(), {
+				let mut streams = peer_info2.streams().clone();
 				streams.insert(StreamId::of::<Data2>());
 				streams
-			},
-		};
+			});
 		catalog.insert(peer_info3.clone());
 		catalog.remove(peer_info.id());
 

@@ -12,12 +12,43 @@ pub enum Error {
 	#[error("Connection dropped")]
 	ConnectionDropped,
 
-	#[error("Invalid handshake request: {0}")]
-	InvalidHandshakeRequest(#[from] rmp_serde::decode::Error),
+	#[error("Invalid message: {0}")]
+	InvalidMessage(#[from] rmp_serde::decode::Error),
 
 	#[error("I/O error: {0}")]
 	Io(#[from] std::io::Error),
 
 	#[error("Event loop terminated")]
 	Terminated,
+
+	#[error("Write error: {0}")]
+	Write(#[from] iroh::endpoint::WriteError),
+
+	#[error("Read to end error: {0}")]
+	ReadToEnd(#[from] iroh::endpoint::ReadToEndError),
+
+	#[error("Signature validation failed for signed peer info")]
+	InvalidSignedPeerInfo,
+}
+
+impl Error {
+	pub fn dial(err: iroh::endpoint::ConnectError) -> Self {
+		Error::Dial(err)
+	}
+
+	pub fn connection(err: iroh::endpoint::ConnectionError) -> Self {
+		Error::Connection(err)
+	}
+
+	pub fn invalid_message(err: rmp_serde::decode::Error) -> Self {
+		Error::InvalidMessage(err)
+	}
+
+	pub fn write(err: iroh::endpoint::WriteError) -> Self {
+		Error::Write(err)
+	}
+
+	pub fn read_to_end(err: iroh::endpoint::ReadToEndError) -> Self {
+		Error::ReadToEnd(err)
+	}
 }

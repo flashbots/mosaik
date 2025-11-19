@@ -46,7 +46,7 @@ impl Link {
 	///
 	/// There must be a corresponding `connect` call on the dialing node.
 	pub async fn accept(connection: Connection) -> Result<Self, AcceptError> {
-		let peer_id = connection.remote_id()?;
+		let peer_id = connection.remote_id();
 		let (tx, rx) = connection.accept_bi().await?;
 		let combined = tokio::io::join(rx, tx);
 		let wire = WireStream::new(combined, LengthDelimitedCodec::new());

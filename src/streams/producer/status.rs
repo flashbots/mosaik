@@ -193,7 +193,11 @@ mod tests {
 		let fut = status.online();
 		tokio::pin!(fut);
 
-		assert!(timeout(Duration::from_millis(20), fut.as_mut()).await.is_err());
+		assert!(
+			timeout(Duration::from_millis(20), fut.as_mut())
+				.await
+				.is_err()
+		);
 
 		status.online.store(true, Ordering::Relaxed);
 		status.notify.notify_waiters();
@@ -210,7 +214,11 @@ mod tests {
 
 		status.subscribers_count.store(1, Ordering::Relaxed);
 		status.notify.notify_waiters();
-		assert!(timeout(Duration::from_millis(20), fut.as_mut()).await.is_err());
+		assert!(
+			timeout(Duration::from_millis(20), fut.as_mut())
+				.await
+				.is_err()
+		);
 
 		status.subscribers_count.store(2, Ordering::Relaxed);
 		status.notify.notify_waiters();
@@ -225,7 +233,11 @@ mod tests {
 		let fut = status.unsubscribed();
 		tokio::pin!(fut);
 
-		assert!(timeout(Duration::from_millis(20), fut.as_mut()).await.is_err());
+		assert!(
+			timeout(Duration::from_millis(20), fut.as_mut())
+				.await
+				.is_err()
+		);
 
 		status.subscribers_count.store(0, Ordering::Relaxed);
 		status.notify.notify_waiters();
@@ -239,7 +251,11 @@ mod tests {
 		let fut = status.subscribers_changed();
 		tokio::pin!(fut);
 
-		assert!(timeout(Duration::from_millis(20), fut.as_mut()).await.is_err());
+		assert!(
+			timeout(Duration::from_millis(20), fut.as_mut())
+				.await
+				.is_err()
+		);
 
 		status.subscribers_count.store(1, Ordering::Relaxed);
 		status.notify.notify_waiters();
@@ -253,7 +269,11 @@ mod tests {
 		let fut = status.terminated();
 		tokio::pin!(fut);
 
-		assert!(timeout(Duration::from_millis(20), fut.as_mut()).await.is_err());
+		assert!(
+			timeout(Duration::from_millis(20), fut.as_mut())
+				.await
+				.is_err()
+		);
 
 		status.cancel.cancel();
 		timeout(Duration::from_millis(50), fut).await.unwrap();

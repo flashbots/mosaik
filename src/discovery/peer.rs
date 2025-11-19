@@ -14,13 +14,35 @@ pub type PeerId = iroh::EndpointId;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PeerInfo {
-	pub address: EndpointAddr,
-	pub streams: BTreeSet<StreamId>,
+	address: EndpointAddr,
+	streams: BTreeSet<StreamId>,
 }
 
 impl PeerInfo {
+	pub fn new(address: EndpointAddr) -> Self {
+		Self {
+			address,
+			streams: BTreeSet::new(),
+		}
+	}
+
+	pub fn new_with_streams(
+		address: EndpointAddr,
+		streams: BTreeSet<StreamId>,
+	) -> Self {
+		Self { address, streams }
+	}
+
 	pub const fn id(&self) -> &PeerId {
 		&self.address.id
+	}
+
+	pub fn address(&self) -> &EndpointAddr {
+		&self.address
+	}
+
+	pub fn streams(&self) -> &BTreeSet<StreamId> {
+		&self.streams
 	}
 
 	pub fn digest(&self) -> Digest {
@@ -44,6 +66,10 @@ impl PeerInfo {
 	pub fn update_address(mut self, address: EndpointAddr) -> Self {
 		self.address = address;
 		self
+	}
+
+	pub fn into_address(self) -> EndpointAddr {
+		self.address
 	}
 
 	#[cfg(test)]
@@ -80,6 +106,12 @@ impl SignedPeerInfo {
 
 	pub fn into_peer_info(self) -> PeerInfo {
 		self.info
+	}
+
+	pub(crate) fn from_bytes(
+		bytes: &[u8],
+	) -> Result<Self, rmp_serde::decode::Error> {
+		rmp_serde::from_slice(bytes)
 	}
 }
 
