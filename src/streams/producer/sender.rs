@@ -94,3 +94,59 @@ impl<D: Datum> Sink<D> for Producer<D> {
 			.map_err(|_| PublishError::Terminated)
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use {
+		super::*,
+		core::sync::atomic::Ordering,
+		futures::{future::poll_fn, SinkExt},
+		serde::{Deserialize, Serialize},
+	};
+
+	#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+	struct DummyDatum(String);
+
+	impl DummyDatum {
+		fn new(value: &str) -> Self {
+			Self(value.to_string())
+		}
+	}
+
+	#[tokio::test]
+	async fn start_send_errors_without_subscribers() {
+		let (tx, mut rx) = mpsc::channel::<DummyDatum>(1);
+		let status = Arc::new(Status::new());
+		let mut producer = Producer::init(tx, Arc::clone(&status));
+
+		let err = producer.send(DummyDatum::new("one")).await.unwrap_err();
+		match err {
+			PublishError::NoConsumers(d) => assert_eq!(d, DummyDatum::new("one")),
+			other => panic!("unexpected error {other:?}"),
+		}
+
+		assert!(rx.try_recv().is_err());
+	}
+
+	#[tokio::test]
+	async fn send_succeeds_with_subscriber() {
+		let (tx, mut rx) = mpsc::channel::<DummyDatum>(1);
+		let status = Arc::new(Status::new());
+		status.subscribers_count.store(1, Ordering::Relaxed);
+		let mut producer = Producer::init(tx, Arc::clone(&status));
+
+		producer.send(DummyDatum::new("ok")).await.unwrap();
+		assert_eq!(rx.recv().await, Some(DummyDatum::new("ok")));
+	}
+
+	#[tokio::test]
+	async fn poll_ready_errors_after_channel_closed() {
+		let (tx, rx) = mpsc::channel::<DummyDatum>(1);
+		let status = Arc::new(Status::new());
+		let mut producer = Producer::init(tx, Arc::clone(&status));
+		drop(rx);
+
+		let result = poll_fn(|cx| Pin::new(&mut producer).poll_ready(cx)).await;
+		assert!(matches!(result, Err(PublishError::Terminated)));
+	}
+}

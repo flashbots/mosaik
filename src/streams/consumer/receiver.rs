@@ -485,3 +485,41 @@ slotmap::new_key_type! {
 	/// We may have multiple subscriptions for the same stream, to different producers.
 	struct SubscriptionId;
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn connection_state_backoff_tracks_attempts() {
+		let attempts = 3;
+		let state = ConnectionState::backoff(attempts);
+
+		match state {
+			ConnectionState::Backoff { attempts: stored, .. } => {
+				assert_eq!(stored, attempts);
+			}
+			_ => panic!("expected Backoff"),
+		}
+	}
+
+	#[test]
+	fn connection_state_backoff_sets_deadline_in_future() {
+		let attempts = 2;
+		let expected = Instant::now() + (attempts * Duration::from_secs(5));
+		let tolerance = Duration::from_millis(10);
+		let state = ConnectionState::backoff(attempts);
+
+		match state {
+			ConnectionState::Backoff { until, .. } => {
+				assert!(
+					until >= expected && until <= expected + tolerance,
+					"deadline {:?} outside expected window {:?}",
+					until,
+					expected
+				);
+			}
+			_ => panic!("expected Backoff"),
+		}
+	}
+}
