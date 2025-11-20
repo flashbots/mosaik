@@ -202,7 +202,7 @@ impl Catalog {
 }
 
 /// Iterator over peer infos in a snapshot of the catalog.
-pub struct Iter {
+struct Iter {
 	signed_iter: ConsumingIter<(EndpointId, SignedPeerInfo)>,
 	unsigned_iter: ConsumingIter<(EndpointId, PeerInfo)>,
 }
@@ -246,7 +246,7 @@ struct Inner {
 }
 
 impl Inner {
-	pub fn new() -> Self {
+	fn new() -> Self {
 		let (sender, _updates) = broadcast::channel(32);
 
 		Self {

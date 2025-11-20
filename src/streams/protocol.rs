@@ -16,14 +16,14 @@ use {
 /// This type represents the `/mosaik/streams/1` protocol handler used by
 /// Mosaik nodes to accept incoming stream subscription requests from remote
 /// peers.
-pub struct Protocol {
+pub(crate) struct Protocol {
 	local: Local,
 }
 
 impl Protocol {
-	pub const ALPN: &'static [u8] = b"/mosaik/streams/1";
+	pub(crate) const ALPN: &'static [u8] = b"/mosaik/streams/1";
 
-	pub fn new(local: Local) -> Self {
+	pub(crate) fn new(local: Local) -> Self {
 		Self { local }
 	}
 }
@@ -64,8 +64,22 @@ impl fmt::Debug for Protocol {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubscriptionRequest {
-	pub network_id: NetworkId,
-	pub stream_id: StreamId,
-	pub criteria: Criteria,
+pub(crate) struct SubscriptionRequest {
+	network_id: NetworkId,
+	stream_id: StreamId,
+	criteria: Criteria,
+}
+
+impl SubscriptionRequest {
+	pub(crate) fn new(
+		network_id: NetworkId,
+		stream_id: StreamId,
+		criteria: Criteria,
+	) -> Self {
+		Self {
+			network_id,
+			stream_id,
+			criteria,
+		}
+	}
 }

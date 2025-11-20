@@ -22,7 +22,16 @@ pub mod prelude {
 			groups::{Group, GroupDef, GroupHash, GroupKey, GroupState},
 			id::NetworkId,
 			network::{Error as NetworkError, Network},
-			streams::{Criteria, Datum, Error as StreamsError, Producer},
+			streams::{
+				Consumer,
+				ConsumerError,
+				ConsumerStatus,
+				Criteria,
+				Datum,
+				Error as StreamsError,
+				Producer,
+				StreamId,
+			},
 		},
 		futures::{SinkExt, StreamExt},
 	};

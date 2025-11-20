@@ -80,6 +80,9 @@ repository.workspace = true
 authors.workspace = true
 exclude.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 test-utils = ["tracing-subscriber", "ctor"]
 

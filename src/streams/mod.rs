@@ -7,24 +7,24 @@ mod protocol;
 
 pub(crate) use producer::FanoutSink;
 pub use {
-	consumer::Consumer,
+	consumer::{Consumer, Error as ConsumerError, Status as ConsumerStatus},
 	datum::{Criteria, Datum, StreamId},
 	error::Error,
 	producer::Producer,
 };
 
-pub struct Streams {
+pub(crate) struct Streams {
 	local: crate::local::Local,
 }
 
 impl Streams {
 	const ALPN_STREAMS: &'static [u8] = b"/mosaik/streams/1";
 
-	pub fn new(local: crate::local::Local) -> Self {
+	pub(crate) fn new(local: crate::local::Local) -> Self {
 		Self { local }
 	}
 
-	pub fn attach(
+	pub(crate) fn attach(
 		&mut self,
 		router: iroh::protocol::RouterBuilder,
 	) -> iroh::protocol::RouterBuilder {

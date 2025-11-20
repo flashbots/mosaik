@@ -162,7 +162,7 @@ struct EventLoop<D: Datum> {
 }
 
 impl<D: Datum> EventLoop<D> {
-	pub fn new(network: &Network, criteria: Criteria) -> (Self, Consumer<D>) {
+	fn new(network: &Network, criteria: Criteria) -> (Self, Consumer<D>) {
 		let status = Arc::new(Status::new());
 		let cancel = CancellationToken::new();
 		let stream_id = StreamId::of::<D>();
@@ -193,7 +193,7 @@ impl<D: Datum> EventLoop<D> {
 }
 
 impl<D: Datum> EventLoop<D> {
-	pub async fn run(mut self) {
+	async fn run(mut self) {
 		let mut discovery_events = self.catalog.watch();
 
 		// start with subscribing to all known producers that are known in the
@@ -358,11 +358,11 @@ impl<D: Datum> EventLoop<D> {
 
 		// we have a connection, send subscription request
 		if let Err(e) = link
-			.send_as(SubscriptionRequest {
-				network_id: self.network_id.clone(),
-				stream_id: self.stream_id.clone(),
-				criteria: self.criteria.clone(),
-			})
+			.send_as(SubscriptionRequest::new(
+				self.network_id.clone(),
+				self.stream_id.clone(),
+				self.criteria.clone(),
+			))
 			.await
 		{
 			warn!(
@@ -478,7 +478,7 @@ enum ConnectionState {
 }
 
 impl ConnectionState {
-	pub fn backoff(attempts: u32) -> Self {
+	fn backoff(attempts: u32) -> Self {
 		let until = Instant::now() + (attempts * Duration::from_secs(5));
 		Self::Backoff { until, attempts }
 	}

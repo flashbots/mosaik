@@ -118,7 +118,7 @@ struct EventLoop {
 }
 
 impl EventLoop {
-	pub async fn run(mut self) -> Result<(), Error> {
+	async fn run(mut self) -> Result<(), Error> {
 		let (topic_tx, mut topic_rx) = self
 			.gossip
 			.subscribe(self.local.network_id().topic_id(), vec![])

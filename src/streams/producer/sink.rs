@@ -101,7 +101,7 @@ impl FanoutSink {
 	///
 	/// From this point onwards, this link will receive all data published to this
 	/// sink that matches the given criteria.
-	pub fn accept(&self, link: Link, criteria: Criteria) {
+	pub(crate) fn accept(&self, link: Link, criteria: Criteria) {
 		if let Err(SendError(Command::Accept(link, _))) =
 			self.0.cmd_tx.send(Command::Accept(link, criteria))
 		{
@@ -146,7 +146,7 @@ struct EventLoop<D: Datum> {
 }
 
 impl<D: Datum> EventLoop<D> {
-	pub fn new() -> (Self, Handle) {
+	fn new() -> (Self, Handle) {
 		let stream_id = StreamId::of::<D>();
 		let (data_tx, data_rx) = mpsc::channel(1);
 		let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -174,7 +174,7 @@ impl<D: Datum> EventLoop<D> {
 }
 
 impl<D: Datum> EventLoop<D> {
-	pub async fn run(mut self) {
+	async fn run(mut self) {
 		self.signal_online_status();
 
 		loop {
