@@ -1,7 +1,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-	#[error("Gossip topic join error: {0}")]
-	GossipTopicJoin(#[from] iroh_gossip::api::ApiError),
+	#[error("Gossip error: {0}")]
+	Gossip(#[from] iroh_gossip::api::ApiError),
 
 	#[error("Dial error: {0}")]
 	Dial(#[from] iroh::endpoint::ConnectError),
@@ -11,6 +11,9 @@ pub enum Error {
 
 	#[error("Connection dropped")]
 	ConnectionDropped,
+
+	#[error("Failed to encode message: {0}")]
+	Encode(#[from] rmp_serde::encode::Error),
 
 	#[error("Invalid message: {0}")]
 	InvalidMessage(#[from] rmp_serde::decode::Error),
@@ -43,12 +46,20 @@ pub enum Error {
 }
 
 impl Error {
+	pub fn gossip(err: iroh_gossip::api::ApiError) -> Self {
+		Error::Gossip(err)
+	}
+
 	pub fn dial(err: iroh::endpoint::ConnectError) -> Self {
 		Error::Dial(err)
 	}
 
 	pub fn connection(err: iroh::endpoint::ConnectionError) -> Self {
 		Error::Connection(err)
+	}
+
+	pub fn encode(err: rmp_serde::encode::Error) -> Self {
+		Error::Encode(err)
 	}
 
 	pub fn invalid_message(err: rmp_serde::decode::Error) -> Self {

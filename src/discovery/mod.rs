@@ -9,7 +9,10 @@ use {
 	},
 	protocol::{Protocol, do_catalog_sync},
 	std::sync::Arc,
-	tokio::{sync::mpsc, task::JoinHandle},
+	tokio::{
+		sync::mpsc,
+		task::{JoinHandle, JoinSet},
+	},
 	tokio_util::sync::{CancellationToken, DropGuard},
 	tracing::info,
 };
@@ -74,7 +77,11 @@ impl Discovery {
 
 	pub(crate) fn new(local: Local) -> Self {
 		let catalog = Catalog::default();
+		// add ourselves to the catalog, as other nodes will have us in their
+		// catalog, so comparing hashes for catalog sync will fail if we don't
+		// have ourselves in our catalog.
 		catalog.insert(PeerInfo::new(local.endpoint().addr()));
+
 		let protocol = Protocol::new(local.clone(), catalog.clone());
 		let cancel = CancellationToken::new();
 		let gossip = Gossip::builder()
@@ -126,9 +133,11 @@ impl EventLoop {
 			.split();
 
 		let mut local_info = self.local.changes();
+		// let mut on_local_info_changed_tasks = JoinSet::new();
+		// let mut on_gossip_event_tasks = JoinSet::new();
+		// let mut on_command_tasks = JoinSet::new();
 
 		loop {
-			// TODO: no awaits in select!; use JoinSet
 			// TODO: implement regular broadcast of `SignedPeerInfo` to network
 			tokio::select! {
 				_ = self.cancel.cancelled() => {
@@ -137,7 +146,9 @@ impl EventLoop {
 				}
 				Ok(_) = local_info.changed() => {
 					let info = local_info.borrow().clone();
-					self.on_local_info_changed(info).await;
+					if let Err(e) = self.on_local_info_changed(info, &topic_tx).await {
+						tracing::warn!("Error handling local info change in discovery event loop: {e}");
+					}
 				}
 				Some(Ok(event)) = topic_rx.next() => {
 					if let Err(e) = self.on_gossip_event(event).await {
@@ -177,9 +188,18 @@ impl EventLoop {
 		Ok(())
 	}
 
-	async fn on_local_info_changed(&mut self, info: SignedPeerInfo) {
+	async fn on_local_info_changed(
+		&mut self,
+		info: SignedPeerInfo,
+		topic_tx: &GossipSender,
+	) -> Result<(), Error> {
 		info!("Local peer info updated: {info:?}");
-		self.catalog.insert(info);
+		self.catalog.insert(info.clone());
+		topic_tx
+			.broadcast(info.into_bytes().map_err(Error::encode)?)
+			.await
+			.map_err(Error::gossip)?;
+		Ok(())
 	}
 
 	async fn on_command(&mut self, command: Command, topic_tx: &GossipSender) {

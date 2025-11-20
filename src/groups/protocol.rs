@@ -44,6 +44,4 @@ pub struct SuspectFail {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrepareJoin {
-  
-}
+pub struct PrepareJoin {}
