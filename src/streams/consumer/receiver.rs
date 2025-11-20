@@ -49,6 +49,7 @@ use {
 ///   producing the desired stream. As producers are discovered, the event loop
 ///   connects to them and starts receiving data.
 pub struct Consumer<D: Datum> {
+	stream_id: StreamId,
 	status: Arc<Status>,
 	data_rx: mpsc::Receiver<D>,
 	_abort: DropGuard,
@@ -62,6 +63,11 @@ impl<D: Datum> Consumer<D> {
 	/// the consumer, as well as to await important status changes.
 	pub fn status(&self) -> &Status {
 		&self.status
+	}
+
+	/// Returns the stream ID that this consumer is receiving data for.
+	pub const fn stream_id(&self) -> &StreamId {
+		&self.stream_id
 	}
 
 	/// Receives the next datum from this consumer.
@@ -159,9 +165,11 @@ impl<D: Datum> EventLoop<D> {
 	pub fn new(network: &Network, criteria: Criteria) -> (Self, Consumer<D>) {
 		let status = Arc::new(Status::new());
 		let cancel = CancellationToken::new();
+		let stream_id = StreamId::of::<D>();
 		let (data_tx, data_rx) = mpsc::channel::<D>(1);
 
 		let handle = Consumer {
+			stream_id: stream_id.clone(),
 			status: Arc::clone(&status),
 			data_rx,
 			_abort: cancel.clone().drop_guard(),
@@ -169,7 +177,7 @@ impl<D: Datum> EventLoop<D> {
 
 		let event_loop = Self {
 			network_id: network.network_id().clone(),
-			stream_id: StreamId::of::<D>(),
+			stream_id,
 			endpoint: network.local().endpoint().clone(),
 			catalog: network.discovery().catalog().clone(),
 			active: DashMap::new(),

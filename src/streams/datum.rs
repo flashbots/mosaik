@@ -14,13 +14,7 @@ impl Criteria {
 
 /// Implemented by all data types that are published to streams.
 pub trait Datum:
-	core::fmt::Debug
-	+ PartialEq
-	+ Serialize
-	+ DeserializeOwned
-	+ Send
-	+ Sync
-	+ 'static
+	core::fmt::Debug + Serialize + DeserializeOwned + Send + Sync + 'static
 {
 	fn stream_id(&self) -> &str {
 		core::any::type_name_of_val(&self)
@@ -28,13 +22,7 @@ pub trait Datum:
 }
 
 impl<T> Datum for T where
-	T: core::fmt::Debug
-		+ PartialEq
-		+ Serialize
-		+ DeserializeOwned
-		+ Send
-		+ Sync
-		+ 'static
+	T: core::fmt::Debug + Serialize + DeserializeOwned + Send + Sync + 'static
 {
 }
 

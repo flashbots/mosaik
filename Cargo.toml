@@ -98,6 +98,8 @@ tokio-stream.workspace = true
 
 derive_more = "2.0"
 sha3 = "0.10"
+hmac = "0.12"
+hex = "0.4"
 im = { version = "15.1.0", features = ["serde"] }
 parking_lot = "0.12"
 semver = { version = "1.0", features = ["serde"] }
