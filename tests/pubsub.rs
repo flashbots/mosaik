@@ -14,31 +14,30 @@ struct Data2(pub String);
 struct Data3(pub String);
 
 #[tokio::test]
-async fn api_design() -> anyhow::Result<()> {
+async fn api_design_auto_disc() {
 	let network_id = NetworkId::random();
 
-	let n0 = Network::new(network_id.clone()).await?;
+	let n0 = Network::new(network_id.clone()).await.unwrap();
 	let mut p0 = n0.produce::<Data1>();
 	let p1 = n0.produce::<Data2>();
 
-	let n1 = Network::new(network_id.clone()).await?;
+	let n1 = Network::new(network_id.clone()).await.unwrap();
 	let c1 = n1.consume::<Data1>();
 	let p1 = n1.produce::<Data3>();
 
-	let n2 = Network::new(network_id.clone()).await?;
+	let n2 = Network::new(network_id.clone()).await.unwrap();
 	let mut c2a = n2.consume::<Data1>();
 	let c2b = n2.consume::<Data2>();
 	let c2c = n2.consume::<Data3>();
 
-	n1.discovery().dial(n0.local().addr()).await?;
-	n2.discovery().dial(n0.local().addr()).await?;
+	n1.discovery().dial(n0.local().addr()).await.unwrap();
+	n2.discovery().dial(n0.local().addr()).await.unwrap();
 
-	p0.send(Data1("One".into())).await?;
+	p0.status().subscribed_at_least(2).await;
+	p0.send(Data1("One".into())).await.unwrap();
 
 	let recv_c2a = c2a.next().await;
-
 	assert_eq!(recv_c2a, Some(Data1("One".into())));
-	Ok(())
 }
 
 #[tokio::test]

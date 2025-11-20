@@ -10,7 +10,11 @@ use {
 		pin::Pin,
 		task::{Context, Poll},
 	},
-	iroh::{Endpoint, protocol::Router},
+	iroh::{
+		Endpoint,
+		discovery::static_provider::StaticProvider,
+		protocol::Router,
+	},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -35,15 +39,21 @@ impl Network {
 	///
 	/// This will generate a random peer identity and bind to a random port.
 	pub async fn new(network_id: NetworkId) -> Result<Self, Error> {
-		Self::with_endpoint(network_id, Endpoint::bind().await?).await
+		let static_provider = StaticProvider::new();
+		let endpoint = Endpoint::builder()
+			.discovery(static_provider.clone())
+			.bind()
+			.await?;
+		Self::with_endpoint(network_id, endpoint, static_provider).await
 	}
 
 	/// Creates a new Network instance with the given NetworkId and Endpoint.
 	pub async fn with_endpoint(
 		network_id: NetworkId,
 		endpoint: Endpoint,
+		static_provider: StaticProvider,
 	) -> Result<Self, Error> {
-		let me = Local::new(endpoint, network_id);
+		let me = Local::new(endpoint, network_id, static_provider);
 
 		// wait for the local peer to be online
 		me.online().await;

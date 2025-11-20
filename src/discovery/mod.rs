@@ -7,7 +7,7 @@ use {
 		Gossip,
 		api::{Event as GossipEvent, GossipSender},
 	},
-	protocol::Protocol,
+	protocol::{Protocol, do_catalog_sync},
 	std::sync::Arc,
 	tokio::{sync::mpsc, task::JoinHandle},
 	tokio_util::sync::{CancellationToken, DropGuard},
@@ -17,6 +17,7 @@ use {
 mod catalog;
 mod channel;
 mod error;
+mod message;
 mod peer;
 mod protocol;
 
@@ -53,11 +54,10 @@ impl Discovery {
 		self
 			.0
 			.cmd_tx
-			.send(Command::Dial(peer.clone()))
+			.send(Command::Dial(peer))
 			.await
-			.unwrap();
-
-		self.0.protocol.dial(peer).await
+			.map_err(Error::send_command)?;
+		Ok(())
 	}
 
 	#[cfg(feature = "test-utils")]
@@ -74,6 +74,7 @@ impl Discovery {
 
 	pub(crate) fn new(local: Local) -> Self {
 		let catalog = Catalog::default();
+		catalog.insert(PeerInfo::new(local.endpoint().addr()));
 		let protocol = Protocol::new(local.clone(), catalog.clone());
 		let cancel = CancellationToken::new();
 		let gossip = Gossip::builder()
@@ -127,6 +128,8 @@ impl EventLoop {
 		let mut local_info = self.local.changes();
 
 		loop {
+			// TODO: no awaits in select!; use JoinSet
+			// TODO: implement regular broadcast of `SignedPeerInfo` to network
 			tokio::select! {
 				_ = self.cancel.cancelled() => {
 					self.on_terminated().await;
@@ -136,7 +139,11 @@ impl EventLoop {
 					let info = local_info.borrow().clone();
 					self.on_local_info_changed(info).await;
 				}
-				Some(Ok(event)) = topic_rx.next() => self.on_gossip_event(event).await,
+				Some(Ok(event)) = topic_rx.next() => {
+					if let Err(e) = self.on_gossip_event(event).await {
+						tracing::warn!("Error handling gossip event in discovery event loop: {e}");
+					}
+				}
 				Some(command) = self.commands.recv() => self.on_command(command, &topic_tx).await,
 			}
 		}
@@ -146,18 +153,40 @@ impl EventLoop {
 		info!("Discovery event loop terminated");
 	}
 
-	async fn on_gossip_event(&mut self, event: GossipEvent) {
+	async fn on_gossip_event(&mut self, event: GossipEvent) -> Result<(), Error> {
 		info!("Received gossip event in discovery event loop: {event:?}");
+		match event {
+			GossipEvent::Received(message) => {
+				let signed_peer_info = SignedPeerInfo::from_bytes(&message.content)
+					.map_err(Error::invalid_message)?;
+				if !signed_peer_info.verify() {
+					return Err(Error::InvalidSignedPeerInfo);
+				}
+				self.catalog.insert(signed_peer_info.into_peer_info());
+			}
+			GossipEvent::NeighborUp(peer_id) => {
+				do_catalog_sync(
+					peer_id.into(),
+					self.local.endpoint(),
+					&mut self.catalog,
+				)
+				.await?;
+			}
+			_ => {}
+		}
+		Ok(())
 	}
 
 	async fn on_local_info_changed(&mut self, info: SignedPeerInfo) {
 		info!("Local peer info updated: {info:?}");
+		self.catalog.insert(info);
 	}
 
 	async fn on_command(&mut self, command: Command, topic_tx: &GossipSender) {
 		match command {
 			Command::Dial(peer) => {
 				info!("Dialing peer via discovery event loop: {peer:?}");
+				self.local.static_provider().add_endpoint_info(peer.clone());
 				topic_tx.join_peers(vec![peer.id]).await.unwrap();
 			}
 
