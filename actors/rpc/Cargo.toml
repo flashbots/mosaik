@@ -12,9 +12,18 @@ exclude.workspace = true
 [lints]
 workspace = true
 
-
 [dependencies]
 mosaik.workspace = true
 tokio.workspace = true
+clap.workspace = true
+rblib.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+bytes = "1.11"
+
+nanoid = "0.4"
+sled = "0.34"
 
 jsonrpsee = { version = "0.26", features = ["server", "macros"] }

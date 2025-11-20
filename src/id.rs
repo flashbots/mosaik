@@ -61,3 +61,9 @@ impl FromStr for NetworkId {
 		Ok(Self::new(s))
 	}
 }
+
+impl AsRef<[u8]> for NetworkId {
+	fn as_ref(&self) -> &[u8] {
+		self.0.as_bytes()
+	}
+}

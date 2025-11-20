@@ -1,6 +1,6 @@
 use {
 	super::{super::Datum, *},
-	crate::prelude::Network,
+	crate::{prelude::Network, streams::StreamId},
 	core::{
 		pin::Pin,
 		task::{Context, Poll},
@@ -12,12 +12,21 @@ use {
 };
 
 pub struct Producer<D: Datum> {
+	stream_id: StreamId,
 	status: Arc<Status>,
 	data_tx: PollSender<D>,
 }
 
 /// Public API
 impl<D: Datum> Producer<D> {
+	/// Creates a new producer for the given datum type on the provided network.
+	///
+	/// If this network already has a producer for this datum type, the created
+	/// instance will reuse the existing producer and share its state.
+	pub fn new(network: &Network) -> Self {
+		network.local().create_sink::<D>().producer::<D>()
+	}
+
 	/// Access to the status of this producer.
 	///
 	/// The returned value can be used to query snapshots of statistics about
@@ -26,21 +35,23 @@ impl<D: Datum> Producer<D> {
 		&self.status
 	}
 
-	/// Creates a new producer for the given datum type on the provided network.
-	///
-	/// If this network already has a producer for this datum type, the created
-	/// instance will reuse the existing producer and share its state.
-	pub fn new(network: &Network) -> Self {
-		network.local().create_sink::<D>().producer::<D>()
+	/// Returns the stream ID for the datum type produced by this producer.
+	pub const fn stream_id(&self) -> &StreamId {
+		&self.stream_id
 	}
 }
 
 /// Internal API
 impl<D: Datum> Producer<D> {
 	pub(crate) fn init(data_tx: mpsc::Sender<D>, status: Arc<Status>) -> Self {
+		let stream_id = StreamId::of::<D>();
 		let data_tx = PollSender::new(data_tx);
 
-		Self { data_tx, status }
+		Self {
+			data_tx,
+			status,
+			stream_id,
+		}
 	}
 }
 

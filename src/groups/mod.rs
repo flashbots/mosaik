@@ -55,3 +55,26 @@
 
 mod def;
 mod protocol;
+
+pub use def::{GroupDef, GroupHash, GroupKey, GroupState};
+
+use crate::prelude::Network;
+
+pub struct Group {
+	def: GroupDef,
+}
+
+impl Group {
+	pub async fn new(network: &Network, key: GroupKey) -> Self {
+		Group {
+			def: GroupDef {
+				network_id: network.network_id().clone(),
+				key,
+			},
+		}
+	}
+
+	pub const fn key(&self) -> &GroupKey {
+		&self.def.key
+	}
+}
