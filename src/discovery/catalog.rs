@@ -182,7 +182,7 @@ impl Catalog {
 			.read()
 			.get(id)
 			.map(|p| p.info.clone())
-			.or_else(|| self.inner.unsigned.read().get(id).map(|p| p.clone()))
+			.or_else(|| self.inner.unsigned.read().get(id).cloned())
 	}
 
 	/// Gets latest full `SignedPeerInfo` entry by `PeerId`.
