@@ -1,6 +1,7 @@
 use {
 	super::PeerInfo,
 	crate::discovery::peer::{PeerId, SignedPeerInfo},
+	bytes::Bytes,
 	core::{
 		pin::Pin,
 		task::{Context, Poll},
@@ -119,7 +120,7 @@ impl Catalog {
 		}
 	}
 
-	pub(crate) async fn merge(&mut self, other: &[PeerInfo]) {
+	pub(crate) fn merge(&mut self, other: &[PeerInfo]) {
 		for peer in other.iter() {
 			self.insert(peer.clone());
 		}
@@ -190,13 +191,13 @@ impl Catalog {
 	}
 
 	// TODO: change this to a merkle root
-	pub(crate) async fn hash(&self) -> Vec<u8> {
+	pub(crate) async fn hash(&self) -> Bytes {
 		use sha3::Digest as _;
 		let mut hasher = sha3::Sha3_256::new();
 		for peer in self.peers() {
 			hasher.update(peer.digest().to_vec());
 		}
-		hasher.finalize().to_vec()
+		hasher.finalize().to_vec().into()
 	}
 }
 

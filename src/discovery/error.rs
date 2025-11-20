@@ -29,6 +29,17 @@ pub enum Error {
 
 	#[error("Signature validation failed for signed peer info")]
 	InvalidSignedPeerInfo,
+
+	#[error("Failed to send command: {0}")]
+	SendCommand(
+		#[from] tokio::sync::mpsc::error::SendError<crate::discovery::Command>,
+	),
+
+	#[error("Received no data when comparing catalog hashes")]
+	EmptyCatalogHashCompareResponse,
+
+	#[error("Expected `CatalogHashCompareResponse`, but did not receive it")]
+	InvalidCatalogHashCompareResponse,
 }
 
 impl Error {
@@ -50,5 +61,11 @@ impl Error {
 
 	pub fn read_to_end(err: iroh::endpoint::ReadToEndError) -> Self {
 		Error::ReadToEnd(err)
+	}
+
+	pub fn send_command(
+		err: tokio::sync::mpsc::error::SendError<crate::discovery::Command>,
+	) -> Self {
+		Error::SendCommand(err)
 	}
 }

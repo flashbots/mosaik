@@ -51,7 +51,12 @@ impl Discovery {
 	}
 
 	pub async fn dial(&self, peer: EndpointAddr) -> Result<(), Error> {
-		self.0.cmd_tx.send(Command::Dial(peer)).await.unwrap();
+		self
+			.0
+			.cmd_tx
+			.send(Command::Dial(peer))
+			.await
+			.map_err(Error::send_command)?;
 		Ok(())
 	}
 
