@@ -75,7 +75,7 @@ impl Discovery {
 	pub(crate) fn new(local: Local) -> Self {
 		let catalog = Catalog::default();
 		catalog.insert(PeerInfo::new(local.endpoint().addr()));
-		let protocol = Protocol::new(local.clone(), catalog.clone());
+		let protocol = Protocol::new(catalog.clone());
 		let cancel = CancellationToken::new();
 		let gossip = Gossip::builder()
 			.alpn(Self::ALPN_GOSSIP)
@@ -198,7 +198,7 @@ impl EventLoop {
 	}
 }
 
-enum Command {
+pub enum Command {
 	Dial(EndpointAddr),
 
 	#[cfg(feature = "test-utils")]

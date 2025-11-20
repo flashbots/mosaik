@@ -11,7 +11,7 @@ use {
 		Watcher,
 		discovery::static_provider::StaticProvider,
 	},
-	std::{collections::BTreeSet, sync::Arc},
+	std::sync::Arc,
 	tokio::sync::watch,
 	tokio_util::sync::{CancellationToken, DropGuard},
 	tracing::{debug, warn},

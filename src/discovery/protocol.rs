@@ -7,7 +7,6 @@ use {
 			CatalogHashCompareResponse,
 			DiscoveryMessage,
 		},
-		local::Local,
 		prelude::PeerInfo,
 	},
 	core::fmt,
@@ -27,15 +26,14 @@ const MAX_MESSAGE_SIZE: usize = 1024 * 16; // 16 KiB
 
 #[derive(Clone)]
 pub(crate) struct Protocol {
-	local: Local,
 	catalog: Catalog,
 }
 
 impl Protocol {
 	pub(crate) const ALPN: &'static [u8] = b"/mosaik/discovery/1";
 
-	pub(crate) fn new(local: Local, catalog: Catalog) -> Self {
-		Self { local, catalog }
+	pub(crate) fn new(catalog: Catalog) -> Self {
+		Self { catalog }
 	}
 }
 

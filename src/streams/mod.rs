@@ -1,4 +1,3 @@
-mod channel;
 mod consumer;
 mod datum;
 mod error;

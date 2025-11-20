@@ -1,6 +1,5 @@
 use {
 	crate::streams::StreamId,
-	chrono::Utc,
 	core::ops::Deref,
 	derive_more::{Deref, From, Into},
 	iroh::{EndpointAddr, Signature},
@@ -145,45 +144,6 @@ impl core::fmt::Display for SignedPeerInfo {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		let status = if self.verify() { " [verified]" } else { "" };
 		write!(f, "{}{}", self.info.id(), status)
-	}
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UpdateId {
-	pub run_id: u64,
-	pub seq: u64,
-}
-
-impl Default for UpdateId {
-	fn default() -> Self {
-		Self {
-			run_id: Utc::now().timestamp_millis() as u64,
-			seq: 1,
-		}
-	}
-}
-
-impl UpdateId {
-	pub fn next(&self) -> Self {
-		Self {
-			run_id: self.run_id,
-			seq: self.seq.wrapping_add(1),
-		}
-	}
-}
-
-impl Ord for UpdateId {
-	fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-		self
-			.run_id
-			.cmp(&other.run_id)
-			.then_with(|| self.seq.cmp(&other.seq))
-	}
-}
-
-impl PartialOrd for UpdateId {
-	fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-		Some(self.cmp(other))
 	}
 }
 

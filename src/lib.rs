@@ -1,4 +1,5 @@
 mod discovery;
+#[allow(dead_code)]
 mod groups;
 mod id;
 mod local;
