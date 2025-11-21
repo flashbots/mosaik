@@ -7,7 +7,6 @@ use {
 			CatalogHashCompareResponse,
 			DiscoveryMessage,
 		},
-		local::Local,
 		prelude::PeerInfo,
 	},
 	core::fmt,
@@ -27,15 +26,14 @@ const MAX_MESSAGE_SIZE: usize = 1024 * 16; // 16 KiB
 
 #[derive(Clone)]
 pub(crate) struct Protocol {
-	local: Local,
 	catalog: Catalog,
 }
 
 impl Protocol {
 	pub(crate) const ALPN: &'static [u8] = b"/mosaik/discovery/1";
 
-	pub(crate) fn new(local: Local, catalog: Catalog) -> Self {
-		Self { local, catalog }
+	pub(crate) fn new(catalog: Catalog) -> Self {
+		Self { catalog }
 	}
 }
 
@@ -66,7 +64,7 @@ impl ProtocolHandler for Protocol {
 		};
 
 		// 2. compare with our catalog hash
-		let our_catalog_hash = self.catalog.hash().await;
+		let our_catalog_hash = self.catalog.hash();
 		if peer_catalog_hash.hash() != our_catalog_hash {
 			// 3. if catalogs differ, send our full catalog
 			// TODO: this is unoptimized, implement full catalog sync algo later
@@ -109,7 +107,7 @@ pub(crate) async fn do_catalog_sync(
 		.await
 		.map_err(Error::dial)?;
 	let (mut send, mut recv) = conn.open_bi().await.map_err(Error::connection)?;
-	let our_catalog_hash: CatalogHashCompareRequest = catalog.hash().await.into();
+	let our_catalog_hash: CatalogHashCompareRequest = catalog.hash().into();
 	let message: DiscoveryMessage = our_catalog_hash.into();
 	send
 		.write_all(&message.into_bytes())

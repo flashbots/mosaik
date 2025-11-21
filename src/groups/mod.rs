@@ -65,7 +65,7 @@ pub struct Group {
 }
 
 impl Group {
-	pub async fn new(network: &Network, key: GroupKey) -> Self {
+	pub fn new(network: &Network, key: GroupKey) -> Self {
 		Group {
 			def: GroupDef {
 				network_id: network.network_id().clone(),

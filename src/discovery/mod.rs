@@ -80,14 +80,13 @@ impl Discovery {
 impl Discovery {
 	const ALPN_GOSSIP: &'static [u8] = b"/mosaik/gossip/1";
 
-	pub(crate) fn new(local: Local) -> Self {
+	pub(crate) fn new(local: &Local) -> Self {
 		let catalog = Catalog::default();
 		// add ourselves to the catalog, as other nodes will have us in their
 		// catalog, so comparing hashes for catalog sync will fail if we don't
 		// have ourselves in our catalog.
 		catalog.insert(PeerInfo::new(local.endpoint().addr()));
-
-		let protocol = Protocol::new(local.clone(), catalog.clone());
+		let protocol = Protocol::new(catalog.clone());
 		let cancel = CancellationToken::new();
 		let gossip = Gossip::builder()
 			.alpn(Self::ALPN_GOSSIP)
@@ -130,7 +129,7 @@ struct EventLoop {
 }
 
 impl EventLoop {
-	pub async fn run(self) -> Result<(), Error> {
+	async fn run(self) -> Result<(), Error> {
 		let Self {
 			local,
 			gossip,
@@ -154,11 +153,11 @@ impl EventLoop {
 		loop {
 			// TODO: implement regular broadcast of `SignedPeerInfo` to network
 			tokio::select! {
-				_ = cancel.cancelled() => {
-					on_terminated().await;
+				() = cancel.cancelled() => {
+					on_terminated();
 					return Ok(());
 				}
-				Ok(_) = local_info.changed() => {
+				Ok(()) = local_info.changed() => {
 					let info = local_info.borrow().clone();
 					on_local_info_changed_tasks
 						.spawn(on_local_info_changed(catalog.clone(), info, topic_tx.clone()));
@@ -203,7 +202,7 @@ impl EventLoop {
 	}
 }
 
-async fn on_terminated() {
+fn on_terminated() {
 	info!("Discovery event loop terminated");
 }
 
@@ -263,7 +262,7 @@ async fn on_command(
 	}
 }
 
-enum Command {
+pub enum Command {
 	Dial(EndpointAddr),
 
 	#[cfg(feature = "test-utils")]

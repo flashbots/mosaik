@@ -48,9 +48,9 @@ impl<D: Datum> Producer<D> {
 		let data_tx = PollSender::new(data_tx);
 
 		Self {
-			data_tx,
-			status,
 			stream_id,
+			status,
+			data_tx,
 		}
 	}
 }
