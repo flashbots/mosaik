@@ -26,7 +26,7 @@ use {
 /// This type combines a `RecvStream` and `SendStream` into a single
 /// bidirectional stream using `tokio::io::Join`, and applies length-delimited
 /// framing to it using `LengthDelimitedCodec`.
-pub type WireStream =
+pub(crate) type WireStream =
 	Framed<Join<RecvStream, SendStream>, LengthDelimitedCodec>;
 
 /// This type represents a physical link between two peers that can be used to
@@ -34,7 +34,7 @@ pub type WireStream =
 ///
 /// This type implements transport level framing it data is sent and received in
 /// discrete packets of arbitrary length byte buffers.
-pub struct Link {
+pub(crate) struct Link {
 	peer_id: PeerId,
 	connection: Connection,
 	wire: WireStream,
@@ -45,7 +45,9 @@ impl Link {
 	/// Creates a new Link on the accepting node.
 	///
 	/// There must be a corresponding `connect` call on the dialing node.
-	pub async fn accept(connection: Connection) -> Result<Self, AcceptError> {
+	pub(crate) async fn accept(
+		connection: Connection,
+	) -> Result<Self, AcceptError> {
 		let peer_id = connection.remote_id();
 		let (tx, rx) = connection.accept_bi().await?;
 		let combined = tokio::io::join(rx, tx);
@@ -53,15 +55,15 @@ impl Link {
 
 		Ok(Self {
 			peer_id,
-			wire,
 			connection,
+			wire,
 		})
 	}
 
 	/// Creates a new Link on the dialing node.
 	///
 	/// There must be a corresponding `accept` call on the accepting node.
-	pub async fn connect(
+	pub(crate) async fn connect(
 		local: Endpoint,
 		peer: EndpointAddr,
 	) -> Result<Self, ConnectError> {
@@ -72,26 +74,27 @@ impl Link {
 		let wire = Framed::new(combined, LengthDelimitedCodec::new());
 
 		Ok(Self {
-			wire,
-			connection,
 			peer_id,
+			connection,
+			wire,
 		})
 	}
 }
 
 impl Link {
 	/// Unique identifier of the remote peer on the other end of this link.
-	pub const fn peer_id(&self) -> &PeerId {
+	pub(crate) const fn peer_id(&self) -> &PeerId {
 		&self.peer_id
 	}
 
 	/// Underlying iroh connection for this link.
-	pub const fn connection(&self) -> &Connection {
+	#[allow(dead_code)]
+	pub(crate) const fn connection(&self) -> &Connection {
 		&self.connection
 	}
 
 	/// Sends and flush a packet of data over this link.
-	pub async fn send(
+	pub(crate) async fn send(
 		&mut self,
 		packet: impl Into<Bytes>,
 	) -> Result<(), std::io::Error> {
@@ -99,7 +102,8 @@ impl Link {
 	}
 
 	/// Feeds a packet of data over this link without flushing.
-	pub async fn feed(
+	#[allow(dead_code)]
+	pub(crate) async fn feed(
 		&mut self,
 		packet: impl Into<Bytes>,
 	) -> Result<(), std::io::Error> {
@@ -107,7 +111,7 @@ impl Link {
 	}
 
 	/// Receives a packet of data from this link.
-	pub async fn recv(&mut self) -> Result<Bytes, std::io::Error> {
+	pub(crate) async fn recv(&mut self) -> Result<Bytes, std::io::Error> {
 		let Some(packet) = self.wire.next().await.transpose()? else {
 			return Err(std::io::Error::new(
 				std::io::ErrorKind::UnexpectedEof,
@@ -119,7 +123,9 @@ impl Link {
 	}
 
 	/// Reads and deserializes a packet of data from this link.
-	pub async fn recv_as<T: DeserializeOwned>(&mut self) -> Result<T, io::Error> {
+	pub(crate) async fn recv_as<T: DeserializeOwned>(
+		&mut self,
+	) -> Result<T, io::Error> {
 		let packet = self.recv().await?;
 		let data = rmp_serde::from_slice(&packet)
 			.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -128,7 +134,7 @@ impl Link {
 	}
 
 	/// Serializes and sends a packet of data over this link.
-	pub async fn send_as<T: Serialize>(
+	pub(crate) async fn send_as<T: Serialize>(
 		&mut self,
 		data: T,
 	) -> Result<(), io::Error> {
@@ -139,14 +145,14 @@ impl Link {
 	}
 
 	/// Closes this link without specifying a reason.
-	pub async fn close(self) -> Result<(), std::io::Error> {
+	pub(crate) async fn close(self) -> Result<(), std::io::Error> {
 		self.close_with_reason(CloseReason::Unspecified).await
 	}
 
 	/// Closes this link with a specific reason.
 	///
 	/// This should be used to indicate why the link is being closed abnormally.
-	pub async fn close_with_reason(
+	pub(crate) async fn close_with_reason(
 		mut self,
 		reason: CloseReason,
 	) -> Result<(), std::io::Error> {
@@ -188,7 +194,7 @@ pub enum CloseReason {
 	RemoteLinkClosed = 7,
 }
 
-/// Deref implementations to access the underlying WireStream
+/// Deref implementations to access the underlying `WireStream`
 impl Deref for Link {
 	type Target = WireStream;
 
@@ -197,7 +203,7 @@ impl Deref for Link {
 	}
 }
 
-/// DerefMut implementations to access the underlying WireStream
+/// `DerefMut` implementations to access the underlying `WireStream`
 impl DerefMut for Link {
 	fn deref_mut(&mut self) -> &mut Self::Target {
 		&mut self.wire

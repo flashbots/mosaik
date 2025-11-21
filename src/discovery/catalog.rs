@@ -121,7 +121,7 @@ impl Catalog {
 	}
 
 	pub(crate) fn merge(&mut self, other: &[PeerInfo]) {
-		for peer in other.iter() {
+		for peer in other {
 			self.insert(peer.clone());
 		}
 	}
@@ -182,7 +182,7 @@ impl Catalog {
 			.read()
 			.get(id)
 			.map(|p| p.info.clone())
-			.or_else(|| self.inner.unsigned.read().get(id).map(|p| p.clone()))
+			.or_else(|| self.inner.unsigned.read().get(id).cloned())
 	}
 
 	/// Gets latest full `SignedPeerInfo` entry by `PeerId`.
@@ -191,7 +191,7 @@ impl Catalog {
 	}
 
 	// TODO: change this to a merkle root
-	pub(crate) async fn hash(&self) -> Bytes {
+	pub(crate) fn hash(&self) -> Bytes {
 		use sha3::Digest as _;
 		let mut hasher = sha3::Sha3_256::new();
 		for peer in self.peers() {
@@ -202,7 +202,7 @@ impl Catalog {
 }
 
 /// Iterator over peer infos in a snapshot of the catalog.
-pub struct Iter {
+struct Iter {
 	signed_iter: ConsumingIter<(EndpointId, SignedPeerInfo)>,
 	unsigned_iter: ConsumingIter<(EndpointId, PeerInfo)>,
 }
@@ -246,7 +246,7 @@ struct Inner {
 }
 
 impl Inner {
-	pub fn new() -> Self {
+	fn new() -> Self {
 		let (sender, _updates) = broadcast::channel(32);
 
 		Self {
@@ -312,7 +312,7 @@ impl Stream for Events {
 									// Rule: Removed + New = Updated
 									this.buffer.insert(*info.id(), Event::Updated(info));
 								}
-								Some(Event::New(_)) | Some(Event::Updated(_)) => {
+								Some(Event::New(_) | Event::Updated(_)) => {
 									// Invalid state: shouldn't get New after New/Updated
 									// Keep the buffer as-is (first event wins)
 								}

@@ -162,7 +162,7 @@ struct EventLoop<D: Datum> {
 }
 
 impl<D: Datum> EventLoop<D> {
-	pub fn new(network: &Network, criteria: Criteria) -> (Self, Consumer<D>) {
+	fn new(network: &Network, criteria: Criteria) -> (Self, Consumer<D>) {
 		let status = Arc::new(Status::new());
 		let cancel = CancellationToken::new();
 		let stream_id = StreamId::of::<D>();
@@ -193,7 +193,7 @@ impl<D: Datum> EventLoop<D> {
 }
 
 impl<D: Datum> EventLoop<D> {
-	pub async fn run(mut self) {
+	async fn run(mut self) {
 		let mut discovery_events = self.catalog.watch();
 
 		// start with subscribing to all known producers that are known in the
@@ -203,7 +203,7 @@ impl<D: Datum> EventLoop<D> {
 		loop {
 			tokio::select! {
 				// Termination requested
-				_ = self.cancel.cancelled() => {
+				() = self.cancel.cancelled() => {
 					self.on_terminated().await;
 					return;
 				}
@@ -229,7 +229,7 @@ impl<D: Datum> EventLoop<D> {
 	/// Handles termination of the consumer by closing all active links
 	/// to all connected producers.
 	async fn on_terminated(&mut self) {
-		for sub in mem::take(&mut self.subs).into_iter() {
+		for sub in mem::take(&mut self.subs) {
 			if let Some(link) = sub.into_inner() {
 				self.disconnect(link, None).await;
 			}
@@ -358,11 +358,11 @@ impl<D: Datum> EventLoop<D> {
 
 		// we have a connection, send subscription request
 		if let Err(e) = link
-			.send_as(SubscriptionRequest {
-				network_id: self.network_id.clone(),
-				stream_id: self.stream_id.clone(),
-				criteria: self.criteria.clone(),
-			})
+			.send_as(SubscriptionRequest::new(
+				self.network_id.clone(),
+				self.stream_id.clone(),
+				self.criteria.clone(),
+			))
 			.await
 		{
 			warn!(
@@ -449,7 +449,7 @@ impl<D: Datum> EventLoop<D> {
 
 	async fn on_discovery_event(&mut self, event: DiscoveryEvent) {
 		match event {
-			DiscoveryEvent::New(peer_info) => {
+			DiscoveryEvent::New(peer_info) | DiscoveryEvent::Updated(peer_info) => {
 				if peer_info.streams().contains(&self.stream_id) {
 					self.subscribe(peer_info.into_address()).await;
 				}
@@ -458,14 +458,9 @@ impl<D: Datum> EventLoop<D> {
 				// noop for now, if we're still connected to the producer,
 				// wait for it to close the link.
 			}
-			DiscoveryEvent::Updated(peer_info) => {
-				if peer_info.streams().contains(&self.stream_id) {
-					self.subscribe(peer_info.into_address()).await;
-				}
-			}
 			DiscoveryEvent::SignificantlyChanged => {
 				// do a full sweep and resubscribe to all unsubscribed producers
-				self.subscribe_to_all().await
+				self.subscribe_to_all().await;
 			}
 		}
 	}
@@ -478,7 +473,7 @@ enum ConnectionState {
 }
 
 impl ConnectionState {
-	pub fn backoff(attempts: u32) -> Self {
+	fn backoff(attempts: u32) -> Self {
 		let until = Instant::now() + (attempts * Duration::from_secs(5));
 		Self::Backoff { until, attempts }
 	}

@@ -24,6 +24,7 @@ exclude = [".github/"]
 
 [workspace.lints.rust]
 type_alias_bounds = "allow"
+unreachable_pub = "deny"
 
 [workspace.lints.clippy]
 tabs_in_doc_comments = "allow"
@@ -34,6 +35,7 @@ must_use_candidate = "allow"
 redundant_closure_for_method_calls = "allow"
 similar_names = "allow"
 cast_precision_loss = "allow"
+unused_async = "warn"
 
 [workspace.metadata.scripts]
 lint = "cargo clippy --all-targets -- -D warnings"
@@ -77,6 +79,9 @@ homepage.workspace = true
 repository.workspace = true
 authors.workspace = true
 exclude.workspace = true
+
+[lints]
+workspace = true
 
 [features]
 test-utils = ["tracing-subscriber", "ctor"]

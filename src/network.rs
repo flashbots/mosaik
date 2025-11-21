@@ -35,7 +35,7 @@ pub struct Network {
 
 /// Public network management API
 impl Network {
-	/// Creates a new Network instance with the given NetworkId.
+	/// Creates a new Network instance with the given `NetworkId`.
 	///
 	/// This will generate a random peer identity and bind to a random port.
 	pub async fn new(network_id: NetworkId) -> Result<Self, Error> {
@@ -47,7 +47,7 @@ impl Network {
 		Self::with_endpoint(network_id, endpoint, static_provider).await
 	}
 
-	/// Creates a new Network instance with the given NetworkId and Endpoint.
+	/// Creates a new Network instance with the given `NetworkId` and Endpoint.
 	pub async fn with_endpoint(
 		network_id: NetworkId,
 		endpoint: Endpoint,
@@ -59,7 +59,7 @@ impl Network {
 		me.online().await;
 
 		let mut streams = Streams::new(me.clone());
-		let mut discovery = Discovery::new(me.clone());
+		let mut discovery = Discovery::new(&me);
 
 		let builder = Router::builder(me.endpoint().clone());
 		let builder = streams.attach(builder);
@@ -83,7 +83,7 @@ impl Network {
 		&self.discovery
 	}
 
-	/// Returns the NetworkId of this network.
+	/// Returns the `NetworkId` of this network.
 	pub fn network_id(&self) -> &NetworkId {
 		self.me.network_id()
 	}

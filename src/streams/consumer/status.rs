@@ -110,6 +110,6 @@ impl Status {
 
 	/// Awaits until this consumer has been terminated.
 	pub async fn terminated(&self) {
-		self.cancel.cancelled().await
+		self.cancel.cancelled().await;
 	}
 }

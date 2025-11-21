@@ -11,7 +11,7 @@ use {
 		Watcher,
 		discovery::static_provider::StaticProvider,
 	},
-	std::{collections::BTreeSet, sync::Arc},
+	std::sync::Arc,
 	tokio::sync::watch,
 	tokio_util::sync::{CancellationToken, DropGuard},
 	tracing::{debug, warn},
@@ -89,7 +89,7 @@ impl Local {
 		self.0.endpoint.id()
 	}
 
-	/// Returns the NetworkId of this local peer.
+	/// Returns the `NetworkId` of this local peer.
 	pub fn network_id(&self) -> &NetworkId {
 		&self.0.network_id
 	}
@@ -99,7 +99,7 @@ impl Local {
 	/// When it is online it means that it is registered with discovery and can
 	/// accept incoming connections.
 	pub async fn online(&self) {
-		self.0.endpoint.online().await
+		self.0.endpoint.online().await;
 	}
 
 	/// Returns a watch receiver that yields updates to the local peer's info.
@@ -107,7 +107,7 @@ impl Local {
 		self.0.latest.clone()
 	}
 
-	/// Returns the latest known PeerInfo for the local peer.
+	/// Returns the latest known `PeerInfo` for the local peer.
 	pub fn info(&self) -> SignedPeerInfo {
 		self.0.latest.borrow().clone()
 	}
@@ -174,22 +174,23 @@ impl EventLoop {
 
 		loop {
 			tokio::select! {
-				_ = self.cancel.cancelled() => {
-					self.on_terminated().await;
+				() = self.cancel.cancelled() => {
+					self.on_terminated();
 					break;
 				}
 
 				// Handle discovered own addresses
-				Some(addr) = addrs_stream.next() => self.on_local_addr_changed(addr).await,
+				Some(addr) = addrs_stream.next() => self.on_local_addr_changed(addr),
 			}
 		}
 	}
 
-	async fn on_terminated(&mut self) {
+	#[allow(clippy::unused_self)]
+	fn on_terminated(&mut self) {
 		debug!("Local peer info event loop is terminating");
 	}
 
-	async fn on_local_addr_changed(&mut self, addr: EndpointAddr) {
+	fn on_local_addr_changed(&mut self, addr: EndpointAddr) {
 		debug!("Discovered new local address: {addr:?}");
 		if self.info.address() != &addr {
 			let latest = self.info.info.clone().update_address(addr);

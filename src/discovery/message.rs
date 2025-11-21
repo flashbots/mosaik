@@ -44,17 +44,6 @@ impl CatalogHashCompareRequest {
 	pub(crate) fn hash(&self) -> &[u8] {
 		&self.hash
 	}
-
-	pub(crate) fn into_bytes(self) -> Vec<u8> {
-		rmp_serde::to_vec(&self)
-			.expect("catalog hash compare request serialization cannot fail")
-	}
-
-	pub(crate) fn from_bytes(
-		bytes: &[u8],
-	) -> Result<Self, rmp_serde::decode::Error> {
-		rmp_serde::from_slice(bytes)
-	}
 }
 
 impl From<Bytes> for CatalogHashCompareRequest {
@@ -78,16 +67,6 @@ pub(crate) struct Catalog {
 impl Catalog {
 	pub(crate) fn peers(&self) -> &[PeerInfo] {
 		&self.peers
-	}
-
-	pub(crate) fn into_bytes(self) -> Vec<u8> {
-		rmp_serde::to_vec(&self).expect("catalog serialization cannot fail")
-	}
-
-	pub(crate) fn from_bytes(
-		bytes: &[u8],
-	) -> Result<Self, rmp_serde::decode::Error> {
-		rmp_serde::from_slice(bytes)
 	}
 }
 
