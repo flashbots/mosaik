@@ -1,5 +1,6 @@
 use {
 	crate::streams::StreamId,
+	bytes::Bytes,
 	core::ops::Deref,
 	derive_more::{Deref, From, Into},
 	iroh::{EndpointAddr, Signature},
@@ -118,6 +119,10 @@ impl SignedPeerInfo {
 		bytes: &[u8],
 	) -> Result<Self, rmp_serde::decode::Error> {
 		rmp_serde::from_slice(bytes)
+	}
+
+	pub(crate) fn into_bytes(self) -> Result<Bytes, rmp_serde::encode::Error> {
+		rmp_serde::to_vec(&self).map(Bytes::from)
 	}
 }
 
