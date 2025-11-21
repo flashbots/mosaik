@@ -55,8 +55,8 @@ impl Link {
 
 		Ok(Self {
 			peer_id,
-			wire,
 			connection,
+			wire,
 		})
 	}
 
@@ -74,9 +74,9 @@ impl Link {
 		let wire = Framed::new(combined, LengthDelimitedCodec::new());
 
 		Ok(Self {
-			wire,
-			connection,
 			peer_id,
+			connection,
+			wire,
 		})
 	}
 }
@@ -194,7 +194,7 @@ pub enum CloseReason {
 	RemoteLinkClosed = 7,
 }
 
-/// Deref implementations to access the underlying WireStream
+/// Deref implementations to access the underlying `WireStream`
 impl Deref for Link {
 	type Target = WireStream;
 
@@ -203,7 +203,7 @@ impl Deref for Link {
 	}
 }
 
-/// DerefMut implementations to access the underlying WireStream
+/// `DerefMut` implementations to access the underlying `WireStream`
 impl DerefMut for Link {
 	fn deref_mut(&mut self) -> &mut Self::Target {
 		&mut self.wire

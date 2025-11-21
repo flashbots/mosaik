@@ -72,7 +72,7 @@ impl Discovery {
 impl Discovery {
 	const ALPN_GOSSIP: &'static [u8] = b"/mosaik/gossip/1";
 
-	pub(crate) fn new(local: Local) -> Self {
+	pub(crate) fn new(local: &Local) -> Self {
 		let catalog = Catalog::default();
 		catalog.insert(PeerInfo::new(local.endpoint().addr()));
 		let protocol = Protocol::new(catalog.clone());
@@ -131,13 +131,13 @@ impl EventLoop {
 			// TODO: no awaits in select!; use JoinSet
 			// TODO: implement regular broadcast of `SignedPeerInfo` to network
 			tokio::select! {
-				_ = self.cancel.cancelled() => {
-					self.on_terminated().await;
+				() = self.cancel.cancelled() => {
+					self.on_terminated();
 					return Ok(());
 				}
-				Ok(_) = local_info.changed() => {
+				Ok(()) = local_info.changed() => {
 					let info = local_info.borrow().clone();
-					self.on_local_info_changed(info).await;
+					self.on_local_info_changed(info);
 				}
 				Some(Ok(event)) = topic_rx.next() => {
 					if let Err(e) = self.on_gossip_event(event).await {
@@ -149,7 +149,8 @@ impl EventLoop {
 		}
 	}
 
-	async fn on_terminated(&mut self) {
+	#[allow(clippy::unused_self)]
+	fn on_terminated(&mut self) {
 		info!("Discovery event loop terminated");
 	}
 
@@ -177,7 +178,7 @@ impl EventLoop {
 		Ok(())
 	}
 
-	async fn on_local_info_changed(&mut self, info: SignedPeerInfo) {
+	fn on_local_info_changed(&mut self, info: SignedPeerInfo) {
 		info!("Local peer info updated: {info:?}");
 		self.catalog.insert(info);
 	}

@@ -180,14 +180,14 @@ impl<D: Datum> EventLoop<D> {
 		loop {
 			tokio::select! {
 				// Stream is terminated.
-				_ = self.cancel.cancelled() => {
-					self.on_terminated().await;
+				() = self.cancel.cancelled() => {
+					self.on_terminated();
 					break;
 				}
 
 				// Control command received from the `Handle`.
 				Some(command) = self.cmds.recv() => {
-					self.on_command(command).await;
+					self.on_command(command);
 				}
 
 				// New data item was produced by local producers.
@@ -198,16 +198,16 @@ impl<D: Datum> EventLoop<D> {
 		}
 	}
 
-	async fn on_command(&mut self, cmd: Command) {
+	fn on_command(&mut self, cmd: Command) {
 		match cmd {
 			Command::Accept(link, criteria) => {
-				self.accept_subscriber(link, criteria).await
+				self.accept_subscriber(link, criteria);
 			}
 		}
 	}
 
 	/// Invoked when a new remote subscriber requests to subscribe to this stream.
-	async fn accept_subscriber(&mut self, link: Link, criteria: Criteria) {
+	fn accept_subscriber(&mut self, link: Link, criteria: Criteria) {
 		tracing::info!(
 			stream_id = %self.stream_id,
 			peer_id = %link.peer_id(),
@@ -231,7 +231,7 @@ impl<D: Datum> EventLoop<D> {
 		let mut serialized: Option<Bytes> = None;
 		let mut sends = FuturesUnordered::new();
 
-		for (sub_id, sub) in self.subs.iter_mut() {
+		for (sub_id, sub) in &mut self.subs {
 			if sub.criteria.matches(&item) {
 				// serialize the datum only once when we identify the first
 				// matching subscriber
@@ -315,7 +315,7 @@ impl<D: Datum> EventLoop<D> {
 		}
 	}
 
-	async fn on_terminated(&mut self) {
+	fn on_terminated(&mut self) {
 		info!("Fanout loop for stream {} is terminating", self.stream_id);
 	}
 

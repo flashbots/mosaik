@@ -203,7 +203,7 @@ impl<D: Datum> EventLoop<D> {
 		loop {
 			tokio::select! {
 				// Termination requested
-				_ = self.cancel.cancelled() => {
+				() = self.cancel.cancelled() => {
 					self.on_terminated().await;
 					return;
 				}
@@ -229,7 +229,7 @@ impl<D: Datum> EventLoop<D> {
 	/// Handles termination of the consumer by closing all active links
 	/// to all connected producers.
 	async fn on_terminated(&mut self) {
-		for sub in mem::take(&mut self.subs).into_iter() {
+		for sub in mem::take(&mut self.subs) {
 			if let Some(link) = sub.into_inner() {
 				self.disconnect(link, None).await;
 			}
@@ -449,7 +449,7 @@ impl<D: Datum> EventLoop<D> {
 
 	async fn on_discovery_event(&mut self, event: DiscoveryEvent) {
 		match event {
-			DiscoveryEvent::New(peer_info) => {
+			DiscoveryEvent::New(peer_info) | DiscoveryEvent::Updated(peer_info) => {
 				if peer_info.streams().contains(&self.stream_id) {
 					self.subscribe(peer_info.into_address()).await;
 				}
@@ -458,14 +458,9 @@ impl<D: Datum> EventLoop<D> {
 				// noop for now, if we're still connected to the producer,
 				// wait for it to close the link.
 			}
-			DiscoveryEvent::Updated(peer_info) => {
-				if peer_info.streams().contains(&self.stream_id) {
-					self.subscribe(peer_info.into_address()).await;
-				}
-			}
 			DiscoveryEvent::SignificantlyChanged => {
 				// do a full sweep and resubscribe to all unsubscribed producers
-				self.subscribe_to_all().await
+				self.subscribe_to_all().await;
 			}
 		}
 	}

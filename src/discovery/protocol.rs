@@ -64,7 +64,7 @@ impl ProtocolHandler for Protocol {
 		};
 
 		// 2. compare with our catalog hash
-		let our_catalog_hash = self.catalog.hash().await;
+		let our_catalog_hash = self.catalog.hash();
 		if peer_catalog_hash.hash() != our_catalog_hash {
 			// 3. if catalogs differ, send our full catalog
 			// TODO: this is unoptimized, implement full catalog sync algo later
@@ -107,7 +107,7 @@ pub(crate) async fn do_catalog_sync(
 		.await
 		.map_err(Error::dial)?;
 	let (mut send, mut recv) = conn.open_bi().await.map_err(Error::connection)?;
-	let our_catalog_hash: CatalogHashCompareRequest = catalog.hash().await.into();
+	let our_catalog_hash: CatalogHashCompareRequest = catalog.hash().into();
 	let message: DiscoveryMessage = our_catalog_hash.into();
 	send
 		.write_all(&message.into_bytes())

@@ -44,6 +44,11 @@ impl PeerInfo {
 		&self.streams
 	}
 
+	/// Computes a digest of the `PeerInfo`.
+	///
+	/// # Panics
+	///
+	/// This function will panic if serialization fails, which should not happen.
 	pub fn digest(&self) -> Digest {
 		let serialized = rmp_serde::to_vec(self).expect("infallible");
 		Digest(Sha3_256::digest(&serialized).into())
@@ -57,11 +62,13 @@ impl PeerInfo {
 		}
 	}
 
+	#[must_use]
 	pub fn add_stream(mut self, stream_id: StreamId) -> Self {
 		self.streams.insert(stream_id);
 		self
 	}
 
+	#[must_use]
 	pub fn update_address(mut self, address: EndpointAddr) -> Self {
 		self.address = address;
 		self

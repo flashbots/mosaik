@@ -121,7 +121,7 @@ impl Catalog {
 	}
 
 	pub(crate) fn merge(&mut self, other: &[PeerInfo]) {
-		for peer in other.iter() {
+		for peer in other {
 			self.insert(peer.clone());
 		}
 	}
@@ -191,7 +191,7 @@ impl Catalog {
 	}
 
 	// TODO: change this to a merkle root
-	pub(crate) async fn hash(&self) -> Bytes {
+	pub(crate) fn hash(&self) -> Bytes {
 		use sha3::Digest as _;
 		let mut hasher = sha3::Sha3_256::new();
 		for peer in self.peers() {
@@ -312,7 +312,7 @@ impl Stream for Events {
 									// Rule: Removed + New = Updated
 									this.buffer.insert(*info.id(), Event::Updated(info));
 								}
-								Some(Event::New(_)) | Some(Event::Updated(_)) => {
+								Some(Event::New(_) | Event::Updated(_)) => {
 									// Invalid state: shouldn't get New after New/Updated
 									// Keep the buffer as-is (first event wins)
 								}
