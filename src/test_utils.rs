@@ -14,7 +14,7 @@ fn init_test_logging() {
 
 		let prefix_blacklist: &[&'static str] = &[];
 
-		tracing_subscriber::registry()
+		let _ = tracing_subscriber::registry()
 			.with(tracing_subscriber::fmt::layer())
 			.with(filter_fn(move |metadata| {
 				metadata.level() <= &level
@@ -22,11 +22,6 @@ fn init_test_logging() {
 						.iter()
 						.any(|prefix| metadata.target().starts_with(prefix))
 			}))
-			.init();
-
-		std::panic::set_hook(Box::new(|panic_info| {
-			tracing::error!("Fatal panic: {panic_info:?}");
-			std::process::exit(-1);
-		}));
+			.try_init();
 	}
 }

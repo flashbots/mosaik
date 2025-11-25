@@ -116,3 +116,4 @@ ctor = { version = "0.6", optional = true }
 
 [dev-dependencies]
 mosaik = { workspace = true, features = ["test-utils"] }
+rblib = { workspace = true, features = ["test-utils"] }

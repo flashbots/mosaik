@@ -1,54 +1,46 @@
-use {mosaik::prelude::*, std::collections::HashMap};
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct Data1 {
-	pub a: String,
-	pub b: u64,
-}
+use {
+	core::ops::Range,
+	mosaik::prelude::*,
+	rblib::alloy::primitives::{Address, BlockHash, U160, U256},
+	std::collections::{BTreeMap, HashMap},
+};
 
 #[tokio::test]
 async fn accumulator_api_design() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 
 	let n0 = Network::new(network_id.clone()).await?;
-	let p0_1 = n0.produce::<Data1>().keyed_by(|d| d.b);
+	let p0_1 = n0.produce::<NoncesUpdate>();
 
 	let mut acc_p0_1 =
-		Accumulated::new(p0_1, |acc: &mut HashMap<u64, Data1>, datum| {
-			acc.extend([datum.into()]);
+		Accumulated::producer(p0_1, |acc: &mut HashMap<Address, Nonce>, datum| {
+			acc.extend(datum.nonces);
 		});
 
 	let n1 = Network::new(network_id.clone()).await?;
-	let mut c1_1 = n1.consume::<Data1>().keyed_by(|d| d.b);
+	let mut c1_1 = n1.consume::<NoncesUpdate>();
 
 	full_manual_disco(&[&n0, &n1]);
 
-	acc_p0_1.as_ref().status().subscribed().await;
+	acc_p0_1.status().subscribed().await;
 	c1_1.status().subscribed().await;
 	tracing::info!("Both sides subscribed");
 
-	for i in 0..10 {
-		acc_p0_1
-			.send(Data1 {
-				a: format!("Message #{i}"),
-				b: i + 3,
-			})
-			.await?;
+	let updates = (0..10)
+		.map(|i| make_nonces_update(i..(i + 10)))
+		.collect::<Vec<_>>();
+
+	for update in &updates {
+		acc_p0_1.send(update.clone()).await?;
 	}
 
-	for i in 0..10 {
+	for update in &updates {
 		let recv_c1_1 = c1_1.next().await;
 		let Some(datum) = recv_c1_1 else {
 			panic!("Expected datum received None");
 		};
 
-		let (key, datum) = datum.into();
-
-		assert_eq!(key, i + 3);
-		assert_eq!(datum, Data1 {
-			a: format!("Message #{i}"),
-			b: i + 3
-		});
+		assert_eq!(datum, *update);
 	}
 
 	tracing::info!("Data received correctly");
@@ -56,17 +48,44 @@ async fn accumulator_api_design() -> anyhow::Result<()> {
 	for i in 0..10 {
 		let stored = acc_p0_1
 			.state()
-			.get(&(i + 3))
+			.get(&address_of(i))
 			.expect("Expected datum to be in accumulator");
 
-		assert_eq!(stored, &Data1 {
-			a: format!("Message #{i}"),
-			b: i + 3
-		});
+		assert_eq!(stored, &nonce_of(i));
 	}
 
 	tracing::info!("Data stored correctly in producer accumulator");
 
+	let n2 = Network::new(network_id.clone()).await?;
+	let c2_1 = n2.consume::<NoncesUpdate>();
+	let mut acc_c2_1 =
+		Accumulated::consumer(c2_1, |acc: &mut HashMap<Address, Nonce>, datum| {
+			acc.extend(datum.nonces);
+		});
+
+	// replay all accumulated state from p0_1 to c2_1
+	full_manual_disco(&[&n0, &n1, &n2]);
+	acc_c2_1.status().subscribed().await;
+	acc_p0_1.status().subscribed_at_least(2).await;
+
+	tracing::info!("c2_1 subscribed");
+
+	acc_p0_1.send(make_nonces_update(3..8)).await?;
+	tracing::info!("Sent Message #10 from p0_1");
+
+	let recv_c2_1 = acc_c2_1.next().await;
+	let Some(datum) = recv_c2_1 else {
+		panic!("Expected datum received None");
+	};
+	tracing::info!("c2_1 received data");
+	assert_eq!(datum, make_nonces_update(3..8));
+	tracing::info!("Data received correctly on c2_1 after replay");
+	let item = acc_c2_1
+		.state()
+		.get(&address_of(5))
+		.expect("Expected datum to be in accumulator");
+	assert_eq!(item, &nonce_of(5));
+	tracing::info!("Data stored correctly in c2_1 accumulator after replay");
 	Ok(())
 }
 
@@ -78,4 +97,33 @@ fn full_manual_disco(peers: &[&Network]) {
 			}
 		}
 	}
+}
+
+pub type Nonce = u64;
+pub type Balance = U256;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NoncesUpdate {
+	pub block: BlockHash,
+	pub nonces: BTreeMap<Address, Nonce>,
+}
+
+fn make_nonces_update(accounts: Range<u64>) -> NoncesUpdate {
+	let mut nonces = BTreeMap::new();
+	let block = U256::from(accounts.start + accounts.end).into();
+
+	for i in accounts {
+		let address = U160::from(i).into();
+		nonces.insert(address, i + 7);
+	}
+
+	NoncesUpdate { block, nonces }
+}
+
+fn address_of(i: u64) -> Address {
+	U160::from(i).into()
+}
+
+fn nonce_of(i: u64) -> Nonce {
+	i + 7
 }

@@ -1,7 +1,12 @@
 use {
-	crate::prelude::{Datum, Key, Keyed, KeyedDatum, Producer},
-	core::{marker::PhantomData, pin::Pin},
-	futures::Sink,
+	crate::prelude::Datum,
+	core::{
+		marker::PhantomData,
+		ops::{Deref, DerefMut},
+		pin::Pin,
+		task::{Context, Poll},
+	},
+	futures::{Sink, Stream},
 };
 
 pub struct Accumulated<C, D: Datum, Acc, F> {
@@ -21,71 +26,98 @@ impl<C, D: Datum, Acc, F> Accumulated<C, D, Acc, F> {
 	}
 }
 
-impl<D, K, Acc, F> Accumulated<Keyed<Producer<D>, D, K>, D, Acc, F>
+impl<C, D: Datum, Acc, F> Accumulated<C, D, Acc, F>
 where
-	D: Datum,
-	K: Key,
-	F: Fn(&mut Acc, KeyedDatum<D, K>) + Unpin,
+	F: Fn(&mut Acc, D) + Unpin,
 {
-	pub fn new(producer: Keyed<Producer<D>, D, K>, fold_fn: F) -> Self
+	pub fn accumulate(&mut self, datum: D) {
+		(self.fold_fn)(&mut self.state, datum);
+	}
+}
+
+impl<C, D: Datum, Acc, F> Accumulated<C, D, Acc, F>
+where
+	F: Fn(&mut Acc, D) + Unpin,
+	C: Stream<Item = D> + Unpin,
+{
+	pub fn consumer(underlying: C, fold_fn: F) -> Self
 	where
-		Acc: Default + Unpin,
+		Acc: Default,
 	{
 		Self {
 			fold_fn,
 			state: Acc::default(),
-			underlying: producer,
+			underlying,
 			_p: PhantomData,
 		}
 	}
 
-	pub fn new_with_state(
-		producer: Keyed<Producer<D>, D, K>,
-		initial: Acc,
-		fold_fn: F,
-	) -> Self {
+	pub fn consumer_with_state(underlying: C, initial: Acc, fold_fn: F) -> Self {
 		Self {
 			fold_fn,
 			state: initial,
-			underlying: producer,
+			underlying,
 			_p: PhantomData,
 		}
 	}
 }
 
-impl<C, D, Acc, F> AsRef<C> for Accumulated<C, D, Acc, F>
+impl<C, D: Datum, Acc, F> Accumulated<C, D, Acc, F>
 where
-	D: Datum,
+	F: Fn(&mut Acc, D) + Unpin,
+	C: Sink<D> + Unpin,
 {
-	fn as_ref(&self) -> &C {
+	pub fn producer(underlying: C, fold_fn: F) -> Self
+	where
+		Acc: Default,
+	{
+		Self {
+			fold_fn,
+			state: Acc::default(),
+			underlying,
+			_p: PhantomData,
+		}
+	}
+
+	pub fn producer_with_state(underlying: C, initial: Acc, fold_fn: F) -> Self {
+		Self {
+			fold_fn,
+			state: initial,
+			underlying,
+			_p: PhantomData,
+		}
+	}
+}
+
+impl<C, D: Datum, Acc, F> Deref for Accumulated<C, D, Acc, F> {
+	type Target = C;
+
+	fn deref(&self) -> &Self::Target {
 		&self.underlying
 	}
 }
 
-impl<C, D, Acc, F> AsMut<C> for Accumulated<C, D, Acc, F>
-where
-	D: Datum,
-{
-	fn as_mut(&mut self) -> &mut C {
+impl<C, D: Datum, Acc, F> DerefMut for Accumulated<C, D, Acc, F> {
+	fn deref_mut(&mut self) -> &mut Self::Target {
 		&mut self.underlying
 	}
 }
 
-impl<D, K, Acc, F> Sink<D> for Accumulated<Keyed<Producer<D>, D, K>, D, Acc, F>
+impl<C, D, Acc, F> Sink<D> for Accumulated<C, D, Acc, F>
 where
 	D: Datum + Clone,
-	K: Key,
-	F: Fn(&mut Acc, KeyedDatum<D, K>) + Unpin,
+	F: Fn(&mut Acc, D) + Unpin,
 	Acc: Unpin,
+	C: Sink<D> + Unpin,
 {
-	type Error = <Producer<D> as Sink<D>>::Error;
+	type Error = <C as Sink<D>>::Error;
 
 	fn poll_ready(
 		self: std::pin::Pin<&mut Self>,
 		cx: &mut std::task::Context<'_>,
 	) -> std::task::Poll<Result<(), Self::Error>> {
 		let this = self.get_mut();
-		Producer::poll_ready(Pin::new(&mut this.underlying), cx)
+		C::poll_ready(Pin::new(&mut this.underlying), cx)
 	}
 
 	fn start_send(
@@ -93,10 +125,8 @@ where
 		item: D,
 	) -> Result<(), Self::Error> {
 		let this = self.get_mut();
-		let key = this.underlying.key_of(&item);
-		let keyed_datum = KeyedDatum(key, item.clone());
-		(this.fold_fn)(&mut this.state, keyed_datum);
-		Producer::start_send(Pin::new(&mut this.underlying), item)
+		(this.fold_fn)(&mut this.state, item.clone());
+		C::start_send(Pin::new(&mut this.underlying), item)
 	}
 
 	fn poll_flush(
@@ -104,7 +134,7 @@ where
 		cx: &mut std::task::Context<'_>,
 	) -> std::task::Poll<Result<(), Self::Error>> {
 		let this = self.get_mut();
-		Producer::poll_flush(Pin::new(&mut this.underlying), cx)
+		C::poll_flush(Pin::new(&mut this.underlying), cx)
 	}
 
 	fn poll_close(
@@ -112,6 +142,32 @@ where
 		cx: &mut std::task::Context<'_>,
 	) -> std::task::Poll<Result<(), Self::Error>> {
 		let this = self.get_mut();
-		Producer::poll_close(Pin::new(&mut this.underlying), cx)
+		C::poll_close(Pin::new(&mut this.underlying), cx)
+	}
+}
+
+impl<C, D, Acc, F> Stream for Accumulated<C, D, Acc, F>
+where
+	D: Datum + Clone,
+	C: Stream<Item = D> + Unpin,
+	F: Fn(&mut Acc, D) + Unpin,
+	Acc: Unpin,
+{
+	type Item = D;
+
+	fn poll_next(
+		self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+	) -> Poll<Option<Self::Item>> {
+		let this = self.get_mut();
+		tracing::info!("Polling next on Accumulated stream");
+		match Pin::new(&mut this.underlying).poll_next(cx) {
+			Poll::Ready(Some(datum)) => {
+				(this.fold_fn)(&mut this.state, datum.clone());
+				Poll::Ready(Some(datum))
+			}
+			Poll::Ready(None) => Poll::Ready(None),
+			Poll::Pending => Poll::Pending,
+		}
 	}
 }

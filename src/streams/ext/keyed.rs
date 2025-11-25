@@ -17,8 +17,18 @@ impl<T> Key for T where T: Eq + Ord + Hash {}
 /// Notes:
 /// - When stream datums are keyed they gain more properties that enable
 ///   joining, deduplication, ranges, etc.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct KeyedDatum<D: Datum, K: Key>(pub K, pub D);
+
+impl<D, K> Clone for KeyedDatum<D, K>
+where
+	D: Datum + Clone,
+	K: Key + Clone,
+{
+	fn clone(&self) -> Self {
+		Self(self.0.clone(), self.1.clone())
+	}
+}
 
 impl<D: Datum, K: Key> KeyedDatum<D, K> {
 	pub const fn key(&self) -> &K {
