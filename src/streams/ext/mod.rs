@@ -1,15 +1,17 @@
+mod accum;
 mod append;
 mod consumer;
-mod fold;
 mod join;
 mod keyed;
 mod producer;
+mod snapshot;
 
 pub use {
+	accum::Accumulated,
 	append::Append,
 	consumer::ConsumerExt,
-	fold::Accumulated,
 	join::Join,
 	keyed::{Key, Keyed, KeyedDatum},
 	producer::ProducerExt,
+	snapshot::{SnapshotMapConsumer, SnapshotMapProducer},
 };

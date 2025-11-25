@@ -6,7 +6,7 @@ use {
 		pin::Pin,
 		task::{Context, Poll},
 	},
-	futures::Stream,
+	futures::{Sink, Stream},
 };
 
 pub trait Key: Eq + Ord + Hash {}
@@ -35,7 +35,7 @@ impl<D: Datum, K: Key> KeyedDatum<D, K> {
 		&self.0
 	}
 
-	pub const fn item(&self) -> &D {
+	pub const fn value(&self) -> &D {
 		&self.1
 	}
 
@@ -86,22 +86,19 @@ impl<D: Datum, K: Key> From<KeyedDatum<D, K>> for (K, D) {
 	}
 }
 
-pub struct Keyed<C, D: Datum, K: Key> {
-	underlying: C,
+pub struct Keyed<S, D: Datum, K: Key> {
+	underlying: S,
 	key_fn: Box<dyn Fn(&D) -> K + 'static>,
 }
 
-impl<C, D: Datum, K: Key> Keyed<C, D, K> {
+impl<S, D: Datum, K: Key> Keyed<S, D, K> {
 	pub fn key_of(&self, datum: &D) -> K {
 		(self.key_fn)(datum)
 	}
 }
 
-impl<D: Datum, K: Key> Keyed<Consumer<D>, D, K> {
-	pub fn new(
-		consumer: Consumer<D>,
-		extractor: impl Fn(&D) -> K + 'static,
-	) -> Self {
+impl<S: Stream<Item = D>, D: Datum, K: Key> Keyed<S, D, K> {
+	pub fn consumer(consumer: S, extractor: impl Fn(&D) -> K + 'static) -> Self {
 		Self {
 			underlying: consumer,
 			key_fn: Box::new(extractor),
@@ -109,7 +106,7 @@ impl<D: Datum, K: Key> Keyed<Consumer<D>, D, K> {
 	}
 }
 
-impl<D: Datum, K: Key> Stream for Keyed<Consumer<D>, D, K> {
+impl<S: Stream<Item = D> + Unpin, D: Datum, K: Key> Stream for Keyed<S, D, K> {
 	type Item = KeyedDatum<D, K>;
 
 	fn poll_next(
@@ -142,14 +139,49 @@ impl<C, D: Datum, K: Key> DerefMut for Keyed<C, D, K> {
 	}
 }
 
-impl<D: Datum, K: Key> Keyed<Producer<D>, D, K> {
-	pub fn new(
-		consumer: Producer<D>,
-		extractor: impl Fn(&D) -> K + 'static,
-	) -> Self {
+impl<S: Sink<D>, D: Datum, K: Key> Keyed<S, D, K> {
+	pub fn producer(producer: S, extractor: impl Fn(&D) -> K + 'static) -> Self {
 		Self {
-			underlying: consumer,
+			underlying: producer,
 			key_fn: Box::new(extractor),
 		}
+	}
+}
+
+impl<S, D, K> Sink<D> for Keyed<S, D, K>
+where
+	S: Sink<D> + Unpin,
+	D: Datum,
+	K: Key,
+{
+	type Error = <S as Sink<D>>::Error;
+
+	fn poll_ready(
+		self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+	) -> Poll<Result<(), Self::Error>> {
+		let this = self.get_mut();
+		Pin::new(&mut this.underlying).poll_ready(cx)
+	}
+
+	fn start_send(self: Pin<&mut Self>, item: D) -> Result<(), Self::Error> {
+		let this = self.get_mut();
+		Pin::new(&mut this.underlying).start_send(item)
+	}
+
+	fn poll_flush(
+		self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+	) -> Poll<Result<(), Self::Error>> {
+		let this = self.get_mut();
+		Pin::new(&mut this.underlying).poll_flush(cx)
+	}
+
+	fn poll_close(
+		self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+	) -> Poll<Result<(), Self::Error>> {
+		let this = self.get_mut();
+		Pin::new(&mut this.underlying).poll_close(cx)
 	}
 }
