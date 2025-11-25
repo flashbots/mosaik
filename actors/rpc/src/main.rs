@@ -19,20 +19,21 @@
 use {
 	crate::{
 		rpc::RpcEndpoints,
-		state::{BalancesUpdate, NoncesUpdate, Store},
+		store::Store,
+		sync::{BalancesUpdate, NoncesUpdate},
 	},
 	clap::Parser,
 	mosaik::prelude::*,
-	rblib::prelude::*,
+	rblib::{alloy::consensus::Sealable, prelude::*},
 	std::sync::Arc,
 	tracing::info,
 	tracing_subscriber::EnvFilter,
 };
 
-mod boot;
 mod cli;
 mod rpc;
-mod state;
+mod store;
+mod sync;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -53,17 +54,24 @@ async fn run<P: Platform>(opts: cli::Opts) -> anyhow::Result<()> {
 	// connect to mosaik network
 	let network = Network::new(opts.network_id).await?;
 
+	// local state store
+	let store = Arc::new(Store::open(opts.data_dir)?);
+
 	// consumers
-	let mut nonces = network.consume::<NoncesUpdate>();
-	let mut balances = network.consume::<BalancesUpdate>();
-	let mut headers = network.consume::<types::Header<P>>();
+	let nonces = network.consume::<NoncesUpdate>();
+	let balances = network.consume::<BalancesUpdate>();
+	let headers = network.consume::<types::Header<P>>();
+
+	// correlate streams by key
+	let mut nonces = nonces.keyed_by(|update| update.block);
+	let mut balances = balances.keyed_by(|update| update.block);
+	let mut headers = headers.keyed_by(|header| header.hash_slow());
+
+	let inputs = nonces.join(balances).join(headers);
 
 	// producers
 	let mut bundles = network.produce::<types::Bundle<P>>();
 	let mut transactions = network.produce::<types::Transaction<P>>();
-
-	// local state store
-	let store = Arc::new(Store::open(opts.data_dir)?);
 
 	// RPC server
 	let mut rpc = RpcEndpoints::<P>::start(
@@ -78,16 +86,26 @@ async fn run<P: Platform>(opts: cli::Opts) -> anyhow::Result<()> {
 	info!("balances stream_id: {}", balances.stream_id());
 	info!("rpc listen addr: {}", opts.listen_addr);
 
+	let mut last_header = ();
+	let mut pending = Store::open(opts.data_dir.join("pending"))?;
+
 	loop {
 		tokio::select! {
-			// stay in sync with the latest headers (todo)
-			header = headers.recv() => {
-				let header = header?;
-				info!("New header: {header:?}");
-				// todo: find out if we are in sync with the state
-				// todo: of the chain, if not, sync up historical nonces
+			Some((nonces, balances, header)) = inputs.recv() => {
+				if header.is_successor_of(&last_header) {
+					// we're in sync, keep going
+					store.merge(pending);
+					store.insert_nonces(nonces).unwrap();
+					store.insert_balances(balances).unwrap();
+					last_header.set(header);
+				} else {
+					info!("We're out of sync, sync compacted history");
+					pending.insert_nonces(nonces);
+					pending.insert_balances(balances);
+					// trigger full compacted stream sync for nonces and balances only
+					todo!();
+				}
 			}
-
 			// new validated transaction via RPC
 			Some(tx) = rpc.transactions.recv() => {
 				info!("New transaction received via RPC: {tx:?}");
@@ -98,20 +116,6 @@ async fn run<P: Platform>(opts: cli::Opts) -> anyhow::Result<()> {
 			Some(bundle) = rpc.bundles.recv() => {
 				info!("New bundle received via RPC: {bundle:?}");
 				bundles.send(bundle).await?;
-			}
-
-			// stay in sync with the latest nonces
-			nonces = nonces.recv() => {
-				let nonces = nonces?;
-				info!("New nonces update: {nonces:?}");
-				store.insert_nonces(nonces)?;
-			}
-
-			// stay in sync with the latest balances
-			balances = balances.recv() => {
-				let balances = balances?;
-				info!("New balances update: {balances:?}");
-				store.insert_balances(balances)?;
 			}
 		}
 	}

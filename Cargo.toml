@@ -9,6 +9,7 @@ members = [
   "actors/reputation",
   "actors/sim",
   "actors/engine-api",
+  "actors/model",
 ]
 resolver = "2"
 
@@ -106,6 +107,7 @@ semver = { version = "1.0", features = ["serde"] }
 dashmap = "6.1"
 strum = { version = "0.27", features = ["derive"] }
 slotmap = "1.0"
+paste = "1.0"
 
 # optional dependencies for testing
 tracing-subscriber = { workspace = true, optional = true }

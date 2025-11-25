@@ -1,5 +1,5 @@
 use {
-	crate::streams::StreamId,
+	crate::datum::StreamId,
 	chrono::Utc,
 	core::ops::Deref,
 	derive_more::{Deref, From, Into},

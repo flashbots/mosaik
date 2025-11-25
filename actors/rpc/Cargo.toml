@@ -13,10 +13,13 @@ exclude.workspace = true
 workspace = true
 
 [dependencies]
+model = { path = "../model" }
 mosaik.workspace = true
+rblib.workspace = true
+
 tokio.workspace = true
 clap.workspace = true
-rblib.workspace = true
+
 anyhow.workspace = true
 serde.workspace = true
 tracing.workspace = true

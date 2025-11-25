@@ -1,7 +1,7 @@
 use {
 	crate::{
-		prelude::{Datum, NetworkId, PeerInfo, SignedPeerInfo},
-		streams::{FanoutSink, StreamId},
+		prelude::{Datum, NetworkId, PeerInfo, SignedPeerInfo, StreamId},
+		streams::FanoutSink,
 	},
 	dashmap::{DashMap, Entry},
 	futures::StreamExt,

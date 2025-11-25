@@ -1,5 +1,5 @@
 use {
-	crate::state::Store,
+	crate::store::Store,
 	bytes::Bytes,
 	jsonrpsee::{
 		core::async_trait,
@@ -16,13 +16,17 @@ use {
 		reth::{
 			core::primitives::constants::MINIMUM_GAS_LIMIT,
 			ethereum::rpc::eth::utils::recover_raw_transaction,
-			primitives::Recovered,
+			primitives::{Recovered, SealedHeader},
+			rpc::types::mev::EthBundleHash,
 		},
 	},
 	std::sync::Arc,
 	tokio::{
 		net::ToSocketAddrs,
-		sync::mpsc::{self, Sender},
+		sync::{
+			mpsc::{self, Sender},
+			watch,
+		},
 	},
 };
 
@@ -38,24 +42,21 @@ pub trait EthApi<P: Platform> {
 	async fn send_bundle(
 		&self,
 		bundle: types::Bundle<P>,
-	) -> Result<String, ErrorObjectOwned>;
+	) -> Result<EthBundleHash, ErrorObjectOwned>;
 }
 
 struct EthApiImpl<P: Platform> {
 	store: Arc<Store>,
+	latest_header: watch::Receiver<SealedHeader<types::Header<P>>>,
 	tx_sender: Sender<types::Transaction<P>>,
-	_bundle_sender: Sender<types::Bundle<P>>,
+	bundle_sender: Sender<types::Bundle<P>>,
 }
 
-#[async_trait]
-impl<P: Platform> EthApiServer<P> for EthApiImpl<P> {
-	async fn send_raw_transaction(
+impl<P: Platform> EthApiImpl<P> {
+	fn validate_transaction(
 		&self,
-		tx: Bytes,
-	) -> Result<TxHash, ErrorObjectOwned> {
-		let recovered: Recovered<types::Transaction<P>> =
-			recover_raw_transaction(&tx)?;
-
+		recovered: &Recovered<types::Transaction<P>>,
+	) -> Result<(), ErrorObjectOwned> {
 		let min_nonce = self
 			.store
 			.get_nonce(recovered.signer_ref())
@@ -86,6 +87,21 @@ impl<P: Platform> EthApiServer<P> for EthApiImpl<P> {
 			));
 		}
 
+		Ok(())
+	}
+}
+
+#[async_trait]
+impl<P: Platform> EthApiServer<P> for EthApiImpl<P> {
+	async fn send_raw_transaction(
+		&self,
+		tx: Bytes,
+	) -> Result<TxHash, ErrorObjectOwned> {
+		let recovered: Recovered<types::Transaction<P>> =
+			recover_raw_transaction(&tx)?;
+
+		self.validate_transaction(&recovered)?;
+
 		let txhash = *recovered.tx_hash();
 
 		self
@@ -101,29 +117,55 @@ impl<P: Platform> EthApiServer<P> for EthApiImpl<P> {
 
 	async fn send_bundle(
 		&self,
-		_bundle: types::Bundle<P>,
-	) -> Result<String, ErrorObjectOwned> {
-		todo!()
+		bundle: types::Bundle<P>,
+	) -> Result<EthBundleHash, ErrorObjectOwned> {
+		let header = self.latest_header.borrow();
+
+		// run platform specific bundle eligibility checks
+		if bundle.is_permanently_ineligible(&*header) {
+			return Err(ErrorObjectOwned::owned(
+				-32003,
+				"Bundle is permanently ineligible",
+				None::<()>,
+			));
+		}
+
+		// validate all transactions in the bundle
+		// todo: account for txs that fund subsequent txs in the bundle
+		for tx in bundle.transactions() {
+			self.validate_transaction(tx)?;
+		}
+
+		let hash = EthBundleHash {
+			bundle_hash: bundle.hash(),
+		};
+
+		Ok(hash)
 	}
 }
 
 pub struct RpcEndpoints<P: Platform> {
 	pub bundles: mpsc::Receiver<types::Bundle<P>>,
 	pub transactions: mpsc::Receiver<types::Transaction<P>>,
+	pub headers: watch::Sender<SealedHeader<types::Header<P>>>,
 }
 
 impl<P: Platform> RpcEndpoints<P> {
 	pub async fn start(
 		store: Arc<Store>,
+		latest_header: types::Header<P>,
 		listen_addr: impl ToSocketAddrs,
 	) -> anyhow::Result<Self> {
+		let latest_header = SealedHeader::new_unhashed(latest_header);
 		let (tx_sender, transactions) = mpsc::channel(1);
 		let (bundle_sender, bundles) = mpsc::channel(1);
+		let (headers, _) = watch::channel(latest_header);
 
 		let api = EthApiImpl::<P> {
 			store: store.clone(),
+			latest_header: headers.subscribe(),
 			tx_sender,
-			_bundle_sender: bundle_sender,
+			bundle_sender,
 		};
 
 		Server::builder()
@@ -134,6 +176,7 @@ impl<P: Platform> RpcEndpoints<P> {
 		Ok(Self {
 			bundles,
 			transactions,
+			headers,
 		})
 	}
 }

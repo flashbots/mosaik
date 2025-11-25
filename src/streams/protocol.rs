@@ -1,9 +1,9 @@
 use {
-	super::{StreamId, link::Link},
+	super::link::{CloseReason, Link},
 	crate::{
+		datum::{Criteria, StreamId},
 		local::Local,
 		prelude::NetworkId,
-		streams::{Criteria, link::CloseReason},
 	},
 	core::fmt,
 	iroh::{

@@ -384,7 +384,7 @@ impl Stream for Events {
 mod tests {
 	use {
 		super::*,
-		crate::streams::StreamId,
+		crate::datum::StreamId,
 		serde::{Deserialize, Serialize},
 	};
 

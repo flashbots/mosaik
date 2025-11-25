@@ -1,18 +1,13 @@
 mod channel;
 mod consumer;
-mod datum;
 mod error;
+mod ext;
 mod link;
 mod producer;
 mod protocol;
 
 pub(crate) use producer::FanoutSink;
-pub use {
-	consumer::Consumer,
-	datum::{Criteria, Datum, StreamId},
-	error::Error,
-	producer::Producer,
-};
+pub use {consumer::Consumer, error::Error, ext::*, producer::Producer};
 
 pub struct Streams {
 	local: crate::local::Local,

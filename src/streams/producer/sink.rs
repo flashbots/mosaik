@@ -1,10 +1,10 @@
 use {
 	super::{
-		super::{Criteria, Datum, StreamId, link::Link},
+		super::link::{CloseReason, Link},
 		Producer,
 		Status,
 	},
-	crate::streams::link::CloseReason,
+	crate::datum::{Criteria, Datum, StreamId},
 	bytes::Bytes,
 	core::{any::Any, sync::atomic::Ordering},
 	futures::{StreamExt, stream::FuturesUnordered},

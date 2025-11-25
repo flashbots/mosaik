@@ -1,10 +1,11 @@
 use {
 	crate::{
+		datum::{Criteria, Datum},
 		discovery::Discovery,
 		id::NetworkId,
 		local::Local,
 		prelude::DiscoveryError,
-		streams::{Consumer, Criteria, Datum, Producer, Streams},
+		streams::{Consumer, Producer, Streams},
 	},
 	core::{
 		pin::Pin,

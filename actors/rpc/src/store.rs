@@ -1,23 +1,7 @@
 use {
-	rblib::alloy::primitives::{Address, BlockHash, U256},
-	serde::{Deserialize, Serialize},
-	std::collections::BTreeSet,
+	crate::sync::{Balance, BalancesUpdate, Nonce, NoncesUpdate},
+	rblib::alloy::primitives::{Address, U256},
 };
-
-pub type Nonce = u64;
-pub type Balance = U256;
-
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct NoncesUpdate {
-	pub block: BlockHash,
-	pub nonces: BTreeSet<(Address, Nonce)>,
-}
-
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
-pub struct BalancesUpdate {
-	pub block: BlockHash,
-	pub balances: BTreeSet<(Address, Balance)>,
-}
 
 pub struct Store {
 	_db: sled::Db,

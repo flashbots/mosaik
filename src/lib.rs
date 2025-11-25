@@ -1,3 +1,4 @@
+mod datum;
 mod discovery;
 mod groups;
 mod id;
@@ -9,6 +10,7 @@ mod streams;
 pub mod prelude {
 	pub use {
 		super::{
+			datum::{Accumulator, Criteria, Datum, StreamId},
 			discovery::{
 				Catalog,
 				Error as DiscoveryError,
@@ -21,9 +23,17 @@ pub mod prelude {
 			groups::{Group, GroupDef, GroupHash, GroupKey, GroupState},
 			id::NetworkId,
 			network::{Error as NetworkError, Network},
-			streams::{Criteria, Datum, Error as StreamsError, Producer},
+			streams::{
+				Consumer,
+				ConsumerExt,
+				Error as StreamsError,
+				Producer,
+				ProducerExt,
+				*,
+			},
 		},
 		futures::{SinkExt, StreamExt},
+		serde::{Deserialize, Serialize},
 	};
 }
 

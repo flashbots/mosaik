@@ -1,4 +1,4 @@
-use crate::streams::StreamId;
+use crate::datum::StreamId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {

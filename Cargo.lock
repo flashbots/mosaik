@@ -5995,6 +5995,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "model"
+version = "0.1.0"
+dependencies = [
+ "mosaik",
+ "rblib",
+ "serde",
+]
+
+[[package]]
 name = "modular-bitfield"
 version = "0.11.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6057,6 +6066,7 @@ dependencies = [
  "iroh-gossip",
  "mosaik",
  "parking_lot 0.12.5",
+ "paste",
  "rand 0.9.2",
  "rmp-serde",
  "semver 1.0.27",
@@ -11078,6 +11088,7 @@ dependencies = [
  "bytes",
  "clap",
  "jsonrpsee",
+ "model",
  "mosaik",
  "nanoid",
  "rblib",

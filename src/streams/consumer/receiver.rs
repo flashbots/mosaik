@@ -1,11 +1,16 @@
 use {
-	super::{
-		super::{Datum, StreamId},
-		Error,
-		Status,
-	},
+	super::{Error, Status},
 	crate::{
-		prelude::{Catalog, Criteria, DiscoveryEvent, Network, NetworkId, PeerId},
+		prelude::{
+			Catalog,
+			Criteria,
+			Datum,
+			DiscoveryEvent,
+			Network,
+			NetworkId,
+			PeerId,
+			StreamId,
+		},
 		streams::{
 			link::{CloseReason, Link},
 			protocol::SubscriptionRequest,
