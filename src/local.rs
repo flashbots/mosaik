@@ -40,18 +40,18 @@ impl Local {
 		endpoint: Endpoint,
 		network_id: NetworkId,
 		static_provider: StaticProvider,
+		cancel: CancellationToken,
 	) -> Self {
 		let initial = PeerInfo::new(endpoint.addr()).sign(endpoint.secret_key());
 
 		let sinks = DashMap::new();
-		let cancellation = CancellationToken::new();
 		let (info_tx, latest) = watch::channel(initial.clone());
 
 		let event_loop = EventLoop {
 			info: initial,
 			info_tx: info_tx.clone(),
 			endpoint: endpoint.clone(),
-			cancel: cancellation.clone(),
+			cancel: cancel.clone(),
 		};
 
 		tokio::spawn(event_loop.run());
@@ -63,7 +63,7 @@ impl Local {
 			sinks,
 			latest,
 			info_tx,
-			_abort: cancellation.drop_guard(),
+			_abort: cancel.drop_guard(),
 		}))
 	}
 

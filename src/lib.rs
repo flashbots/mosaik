@@ -21,7 +21,7 @@ pub mod prelude {
 			},
 			groups::{Group, GroupDef, GroupHash, GroupKey, GroupState},
 			id::NetworkId,
-			network::{Error as NetworkError, Network},
+			network::{Error as NetworkError, Network, NetworkBuilder},
 			streams::{
 				Consumer,
 				ConsumerError,
