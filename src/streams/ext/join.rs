@@ -1,20 +1,18 @@
 use {
 	crate::{
-		prelude::{Consumer, Datum},
-		streams::ext::{Append, Key, Keyed, KeyedDatum},
+		prelude::Datum,
+		streams::ext::{Key, KeyedDatum},
 	},
 	core::{
 		pin::Pin,
 		task::{Context, Poll},
 	},
-	futures::Stream,
+	futures::{Stream, StreamExt},
 	std::collections::HashMap,
 };
 
 pub struct Join<S1, S2, L, R, K>
 where
-	L: Datum,
-	R: Datum,
 	K: Key,
 	S1: Stream<Item = KeyedDatum<L, K>>,
 	S2: Stream<Item = KeyedDatum<R, K>>,
@@ -45,14 +43,13 @@ where
 
 impl<S1, S2, L, R, K> Stream for Join<S1, S2, L, R, K>
 where
+	L: Unpin,
+	R: Unpin,
 	S1: Stream<Item = KeyedDatum<L, K>> + Unpin,
 	S2: Stream<Item = KeyedDatum<R, K>> + Unpin,
-	L: Datum + Append<R> + Unpin,
-	R: Datum + Unpin,
-	<L as Append<R>>::Out: Datum + Unpin,
-	K: Key + Clone + Unpin,
+	K: Key + core::fmt::Debug + Clone + Unpin,
 {
-	type Item = KeyedDatum<<L as Append<R>>::Out, K>;
+	type Item = KeyedDatum<(L, R), K>;
 
 	fn poll_next(
 		self: Pin<&mut Self>,
@@ -70,8 +67,7 @@ where
 			{
 				let left = this.buf_left.remove(&k).unwrap();
 				let right = this.buf_right.remove(&k).unwrap();
-				let joined = left.append(right);
-				return Some(KeyedDatum(k, joined));
+				return Some(KeyedDatum(k, (left, right)));
 			}
 			None
 		};
@@ -81,8 +77,9 @@ where
 		}
 
 		// poll left
-		match Pin::new(&mut this.left).poll_next(cx) {
+		match this.left.poll_next_unpin(cx) {
 			Poll::Ready(Some(KeyedDatum(k, l))) => {
+				tracing::info!("Join: received left item with key {k:?}");
 				this.buf_left.insert(k, l);
 			}
 			Poll::Ready(None) | Poll::Pending => {}
@@ -93,8 +90,9 @@ where
 		}
 
 		// poll right
-		match Pin::new(&mut this.right).poll_next(cx) {
+		match this.right.poll_next_unpin(cx) {
 			Poll::Ready(Some(KeyedDatum(k, r))) => {
+				tracing::info!("Join: received right item with key {k:?}");
 				this.buf_right.insert(k, r);
 			}
 			Poll::Ready(None) | Poll::Pending => {}

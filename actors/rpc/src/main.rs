@@ -55,8 +55,8 @@ async fn run<P: Platform>(opts: cli::Opts) -> anyhow::Result<()> {
 	let balances = network.consume::<BalancesUpdate>();
 
 	// correlate streams by key
-	let mut nonces = nonces.keyed_by(|update| update.block);
-	let mut balances = balances.keyed_by(|update| update.block);
+	let nonces = nonces.keyed_by(|update| update.block);
+	let balances = balances.keyed_by(|update| update.block);
 
 	info!("RPC server started on network {}", network.network_id());
 	info!("nonces stream_id: {}", nonces.stream_id());
@@ -66,13 +66,14 @@ async fn run<P: Platform>(opts: cli::Opts) -> anyhow::Result<()> {
 	nonces.status().subscribed().await;
 	balances.status().subscribed().await;
 
+	let mut joined = Join::new(nonces, balances);
+
 	loop {
 		tokio::select! {
-			Some(nonces_update) = nonces.next() => {
-				info!("Received nonces update for block {}", nonces_update.block);
-			}
-			Some(balances_update) = balances.next() => {
-				info!("Received balances update for block {}", balances_update.block);
+			Some(KeyedDatum(block, (nonces, balances))) = joined.next() => {
+				info!("Received correlated updates at block {block}");
+				info!("  NoncesUpdate: {nonces:?}");
+				info!("  BalancesUpdate: {balances:?}");
 			}
 		}
 	}

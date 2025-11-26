@@ -19,6 +19,7 @@ for ENTRY in "${ACTORS[@]}"; do
   fi
 done
 
+
 echo "Launching VMs for ${#ACTORS[@]} actors..."
 
 # Launch a VM for each actor, copy binary, and start it

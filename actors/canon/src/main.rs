@@ -19,6 +19,7 @@ use {
 		*,
 	},
 	std::collections::BTreeMap,
+	tokio::time::interval,
 };
 
 #[tokio::main]
@@ -54,17 +55,31 @@ async fn run<P: Platform>(opts: CliNetOpts) -> anyhow::Result<()> {
 	balances_tx.status().subscribed().await;
 
 	let mut counter = 1;
+	let mut interval = interval(std::time::Duration::from_secs(2));
 
 	loop {
-		let new_nonces = make_nonces_update(counter..(counter + 10));
-		let new_balances = make_balances_update(counter..(counter + 10));
+		tokio::select! {
+			_ = interval.tick() => {
+				if nonces_tx.status().is_subscribed() && balances_tx.status().is_subscribed() {
+					info!("Producing new updates for block {counter}");
+					let new_nonces = make_nonces_update(counter..(counter + 10));
+					let new_balances = make_balances_update(counter..(counter + 10));
 
-		nonces_tx.send(new_nonces).await?;
-		balances_tx.send(new_balances).await?;
+					nonces_tx.send(new_nonces).await?;
+					balances_tx.send(new_balances).await?;
 
-		tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+					counter += 1;
+				}
+			}
 
-		counter += 1;
+			() = nonces_tx.status().unsubscribed() => {
+				info!("No more subscribers to nonces updates, pausing producer");
+			}
+
+			() = balances_tx.status().unsubscribed() => {
+				info!("No more subscribers to balances updates, pausing producer");
+			}
+		}
 	}
 }
 
