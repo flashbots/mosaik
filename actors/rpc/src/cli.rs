@@ -1,7 +1,7 @@
 use shared::cli::CliNetOpts;
 
 #[derive(Debug, Clone, clap::Parser)]
-pub struct Opts {
+pub(crate) struct Opts {
 	#[clap(flatten)]
 	pub network: CliNetOpts,
 
@@ -13,12 +13,10 @@ pub struct Opts {
 #[allow(clippy::derivable_impls)]
 impl Default for Opts {
 	fn default() -> Self {
-		let opts = Opts {
+		Opts {
 			network: CliNetOpts::default(),
 			..clap::Parser::parse()
-		};
-
-		opts
+		}
 	}
 }
 

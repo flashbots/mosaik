@@ -25,6 +25,7 @@ exclude = [".github/"]
 
 [workspace.lints.rust]
 type_alias_bounds = "allow"
+unreachable_pub = "deny"
 
 [workspace.lints.clippy]
 tabs_in_doc_comments = "allow"
@@ -35,6 +36,7 @@ must_use_candidate = "allow"
 redundant_closure_for_method_calls = "allow"
 similar_names = "allow"
 cast_precision_loss = "allow"
+unused_async = "warn"
 
 [workspace.metadata.scripts]
 lint = "cargo clippy --all-targets -- -D warnings"
@@ -61,10 +63,11 @@ chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-iroh = "0.94"
-iroh-gossip = "0.94"
+iroh = "0.95"
+iroh-gossip = "0.95"
 iroh-blobs = "0.96"
 iroh-docs = "0.94"
+n0-error = "0.1"
 
 [package]
 name = "mosaik"
@@ -77,6 +80,9 @@ homepage.workspace = true
 repository.workspace = true
 authors.workspace = true
 exclude.workspace = true
+
+[lints]
+workspace = true
 
 [features]
 test-utils = ["tracing-subscriber", "ctor"]
@@ -96,6 +102,7 @@ chrono.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 tokio-stream.workspace = true
+n0-error.workspace = true
 
 derive_more = "2.0"
 sha3 = "0.10"
@@ -112,7 +119,6 @@ paste = "1.0"
 # optional dependencies for testing
 tracing-subscriber = { workspace = true, optional = true }
 ctor = { version = "0.6", optional = true }
-
 
 [dev-dependencies]
 mosaik = { workspace = true, features = ["test-utils"] }

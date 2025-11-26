@@ -5,8 +5,13 @@ use {
 	},
 	dashmap::{DashMap, Entry},
 	futures::StreamExt,
-	iroh::{Endpoint, EndpointAddr, Watcher},
-	std::{collections::BTreeSet, sync::Arc},
+	iroh::{
+		Endpoint,
+		EndpointAddr,
+		Watcher,
+		discovery::static_provider::StaticProvider,
+	},
+	std::sync::Arc,
 	tokio::sync::watch,
 	tokio_util::sync::{CancellationToken, DropGuard},
 	tracing::{debug, warn},
@@ -31,12 +36,12 @@ impl Clone for Local {
 }
 
 impl Local {
-	pub fn new(endpoint: Endpoint, network_id: NetworkId) -> Self {
-		let initial = PeerInfo {
-			address: endpoint.addr(),
-			streams: BTreeSet::new(),
-		}
-		.sign(endpoint.secret_key());
+	pub fn new(
+		endpoint: Endpoint,
+		network_id: NetworkId,
+		static_provider: StaticProvider,
+	) -> Self {
+		let initial = PeerInfo::new(endpoint.addr()).sign(endpoint.secret_key());
 
 		let sinks = DashMap::new();
 		let cancellation = CancellationToken::new();
@@ -53,6 +58,7 @@ impl Local {
 
 		Self(Arc::new(Inner {
 			endpoint,
+			static_provider,
 			network_id,
 			sinks,
 			latest,
@@ -64,6 +70,10 @@ impl Local {
 	/// Returns the transport layer endpoint of the local peer.
 	pub fn endpoint(&self) -> &Endpoint {
 		&self.0.endpoint
+	}
+
+	pub fn static_provider(&self) -> &StaticProvider {
+		&self.0.static_provider
 	}
 
 	/// Returns all known addresses and relay nodes of the local peer.
@@ -79,7 +89,7 @@ impl Local {
 		self.0.endpoint.id()
 	}
 
-	/// Returns the NetworkId of this local peer.
+	/// Returns the `NetworkId` of this local peer.
 	pub fn network_id(&self) -> &NetworkId {
 		&self.0.network_id
 	}
@@ -89,7 +99,7 @@ impl Local {
 	/// When it is online it means that it is registered with discovery and can
 	/// accept incoming connections.
 	pub async fn online(&self) {
-		self.0.endpoint.online().await
+		self.0.endpoint.online().await;
 	}
 
 	/// Returns a watch receiver that yields updates to the local peer's info.
@@ -97,7 +107,7 @@ impl Local {
 		self.0.latest.clone()
 	}
 
-	/// Returns the latest known PeerInfo for the local peer.
+	/// Returns the latest known `PeerInfo` for the local peer.
 	pub fn info(&self) -> SignedPeerInfo {
 		self.0.latest.borrow().clone()
 	}
@@ -143,6 +153,7 @@ impl Local {
 
 struct Inner {
 	endpoint: Endpoint,
+	static_provider: StaticProvider,
 	network_id: NetworkId,
 	sinks: DashMap<StreamId, FanoutSink>,
 	latest: watch::Receiver<SignedPeerInfo>,
@@ -163,24 +174,25 @@ impl EventLoop {
 
 		loop {
 			tokio::select! {
-				_ = self.cancel.cancelled() => {
-					self.on_terminated().await;
+				() = self.cancel.cancelled() => {
+					self.on_terminated();
 					break;
 				}
 
 				// Handle discovered own addresses
-				Some(addr) = addrs_stream.next() => self.on_local_addr_changed(addr).await,
+				Some(addr) = addrs_stream.next() => self.on_local_addr_changed(addr),
 			}
 		}
 	}
 
-	async fn on_terminated(&mut self) {
+	#[allow(clippy::unused_self)]
+	fn on_terminated(&mut self) {
 		debug!("Local peer info event loop is terminating");
 	}
 
-	async fn on_local_addr_changed(&mut self, addr: EndpointAddr) {
+	fn on_local_addr_changed(&mut self, addr: EndpointAddr) {
 		debug!("Discovered new local address: {addr:?}");
-		if self.info.address != addr {
+		if self.info.address() != &addr {
 			let latest = self.info.info.clone().update_address(addr);
 			self.info = latest.sign(self.endpoint.secret_key());
 

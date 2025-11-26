@@ -8,14 +8,14 @@ use {
 	serde::{Deserialize, Serialize},
 };
 
-pub struct Protocol {
+struct Protocol {
 	local: Local,
 }
 
 impl Protocol {
-	pub const ALPN: &'static [u8] = b"/mosaik/groups/1";
+	const ALPN: &'static [u8] = b"/mosaik/groups/1";
 
-	pub fn new(local: Local) -> Self {
+	fn new(local: Local) -> Self {
 		Self { local }
 	}
 }
@@ -39,11 +39,9 @@ impl fmt::Debug for Protocol {
 /// message about the same peer, then the suspect peer is removed from the
 /// latest `GroupState` structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SuspectFail {
-	pub peer: PeerId,
+struct SuspectFail {
+	peer: PeerId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PrepareJoin {
-  
-}
+struct PrepareJoin {}
