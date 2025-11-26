@@ -1,0 +1,11 @@
+compile:
+  scripts/compile-devnet.sh
+
+start:
+  scripts/start-devnet.sh
+
+stop:
+  scripts/stop-devnet.sh
+
+watch:
+  scripts/watch-devnet.sh

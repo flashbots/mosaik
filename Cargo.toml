@@ -9,7 +9,7 @@ members = [
   "actors/reputation",
   "actors/sim",
   "actors/engine-api",
-  "actors/model",
+  "actors/shared", "actors/beacon",
 ]
 resolver = "2"
 

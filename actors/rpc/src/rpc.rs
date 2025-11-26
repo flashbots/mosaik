@@ -1,5 +1,4 @@
 use {
-	crate::store::Store,
 	bytes::Bytes,
 	jsonrpsee::{
 		core::async_trait,

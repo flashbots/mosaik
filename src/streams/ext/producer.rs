@@ -1,16 +1,18 @@
 use {
 	super::{Key, Keyed},
-	crate::prelude::{Accumulated, Datum},
+	crate::prelude::Accumulated,
 	futures::Sink,
 };
 
-pub trait ProducerExt<D: Datum>: Sized {
+pub trait ProducerExt<D>: Sized + Sink<D> {
 	fn keyed_by<K: Key, F: Fn(&D) -> K + 'static>(
 		self,
-		_: F,
-	) -> Keyed<Self, D, K>;
+		extractor: F,
+	) -> Keyed<Self, D, K> {
+		Keyed::<Self, D, K>::producer(self, extractor)
+	}
 
-	fn accumulate<Acc, F>(self, fold_fn: F) -> Accumulated<Self, D, Acc, F>
+	fn accumulate<Acc, F>(self, fold_fn: F) -> Accumulated<Self, Acc, F>
 	where
 		Acc: Default,
 		F: FnMut(&mut Acc, &D) + Unpin,
@@ -20,11 +22,4 @@ pub trait ProducerExt<D: Datum>: Sized {
 	}
 }
 
-impl<T: Sink<D>, D: Datum> ProducerExt<D> for T {
-	fn keyed_by<K: Key, F: Fn(&D) -> K + 'static>(
-		self,
-		extractor: F,
-	) -> Keyed<Self, D, K> {
-		Keyed::<T, D, K>::producer(self, extractor)
-	}
-}
+impl<T: Sink<D>, D> ProducerExt<D> for T {}

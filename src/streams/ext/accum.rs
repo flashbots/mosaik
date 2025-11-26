@@ -1,7 +1,5 @@
 use {
-	crate::prelude::Datum,
 	core::{
-		marker::PhantomData,
 		ops::{Deref, DerefMut},
 		pin::Pin,
 		task::{Context, Poll},
@@ -9,14 +7,13 @@ use {
 	futures::{Sink, Stream},
 };
 
-pub struct Accumulated<C, D: Datum, Acc, F> {
+pub struct Accumulated<C, Acc, F> {
 	fold_fn: F,
 	state: Acc,
 	underlying: C,
-	_p: PhantomData<D>,
 }
 
-impl<C, D: Datum, Acc, F> Accumulated<C, D, Acc, F> {
+impl<C, Acc, F> Accumulated<C, Acc, F> {
 	pub const fn state(&self) -> &Acc {
 		&self.state
 	}
@@ -26,16 +23,7 @@ impl<C, D: Datum, Acc, F> Accumulated<C, D, Acc, F> {
 	}
 }
 
-impl<C, D: Datum, Acc, F> Accumulated<C, D, Acc, F>
-where
-	F: FnMut(&mut Acc, &D) + Unpin,
-{
-	pub fn accumulate(&mut self, datum: &D) {
-		(self.fold_fn)(&mut self.state, datum);
-	}
-}
-
-impl<C, D: Datum, Acc, F> Accumulated<C, D, Acc, F>
+impl<C, D, Acc, F> Accumulated<C, Acc, F>
 where
 	F: FnMut(&mut Acc, &D) + Unpin,
 	C: Stream<Item = D> + Unpin,
@@ -48,7 +36,6 @@ where
 			fold_fn,
 			state: Acc::default(),
 			underlying,
-			_p: PhantomData,
 		}
 	}
 
@@ -57,25 +44,21 @@ where
 			fold_fn,
 			state: initial,
 			underlying,
-			_p: PhantomData,
 		}
 	}
 }
 
-impl<C, D: Datum, Acc, F> Accumulated<C, D, Acc, F>
-where
-	F: FnMut(&mut Acc, &D) + Unpin,
-	C: Sink<D>,
-{
-	pub fn producer(underlying: C, fold_fn: F) -> Self
+impl<C, Acc, F> Accumulated<C, Acc, F> {
+	pub fn producer<D>(underlying: C, fold_fn: F) -> Self
 	where
 		Acc: Default,
+		F: FnMut(&mut Acc, &D) + Unpin,
+		C: Sink<D>,
 	{
 		Self {
 			fold_fn,
 			state: Acc::default(),
 			underlying,
-			_p: PhantomData,
 		}
 	}
 
@@ -84,12 +67,11 @@ where
 			fold_fn,
 			state: initial,
 			underlying,
-			_p: PhantomData,
 		}
 	}
 }
 
-impl<C, D: Datum, Acc, F> Deref for Accumulated<C, D, Acc, F> {
+impl<C, Acc, F> Deref for Accumulated<C, Acc, F> {
 	type Target = C;
 
 	fn deref(&self) -> &Self::Target {
@@ -97,15 +79,16 @@ impl<C, D: Datum, Acc, F> Deref for Accumulated<C, D, Acc, F> {
 	}
 }
 
-impl<C, D: Datum, Acc, F> DerefMut for Accumulated<C, D, Acc, F> {
+impl<C, Acc, F> DerefMut for Accumulated<C, Acc, F> {
 	fn deref_mut(&mut self) -> &mut Self::Target {
 		&mut self.underlying
 	}
 }
 
-impl<C, D, Acc, F> Sink<D> for Accumulated<C, D, Acc, F>
+impl<C, Acc, F> Unpin for Accumulated<C, Acc, F> {}
+
+impl<C, D, Acc, F> Sink<D> for Accumulated<C, Acc, F>
 where
-	D: Datum,
 	F: FnMut(&mut Acc, &D) + Unpin,
 	Acc: Unpin,
 	C: Sink<D> + Unpin,
@@ -122,7 +105,7 @@ where
 
 	fn start_send(self: Pin<&mut Self>, item: D) -> Result<(), Self::Error> {
 		let this = self.get_mut();
-		this.accumulate(&item);
+		(this.fold_fn)(&mut this.state, &item);
 		C::start_send(Pin::new(&mut this.underlying), item)
 	}
 
@@ -143,9 +126,8 @@ where
 	}
 }
 
-impl<C, D, Acc, F> Stream for Accumulated<C, D, Acc, F>
+impl<C, D, Acc, F> Stream for Accumulated<C, Acc, F>
 where
-	D: Datum,
 	C: Stream<Item = D> + Unpin,
 	F: FnMut(&mut Acc, &D) + Unpin,
 	Acc: Unpin,
@@ -159,7 +141,7 @@ where
 		let this = self.get_mut();
 		match Pin::new(&mut this.underlying).poll_next(cx) {
 			Poll::Ready(Some(datum)) => {
-				this.accumulate(&datum);
+				(this.fold_fn)(&mut this.state, &datum);
 				Poll::Ready(Some(datum))
 			}
 			Poll::Ready(None) => Poll::Ready(None),

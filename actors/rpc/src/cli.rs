@@ -1,22 +1,25 @@
-use mosaik::prelude::*;
+use shared::cli::CliNetOpts;
 
 #[derive(Debug, Clone, clap::Parser)]
 pub struct Opts {
-	/// Network ID to connect to.
-	#[clap(short, long)]
-	pub network_id: NetworkId,
-
-	/// Enable Optimism L2, otherwise Ethereum L1 is used.
-	#[clap(long)]
-	pub optimism: bool,
-
-	/// Directory to store state. Defaults to a temporary directory.
-	#[clap(short, long, default_value_t = default_work_dir())]
-	pub data_dir: String,
+	#[clap(flatten)]
+	pub network: CliNetOpts,
 
 	/// HTTP JSON-RPC endpoint listen address.
 	#[clap(long, default_value = "0.0.0.0:8545")]
 	pub listen_addr: String,
+}
+
+#[allow(clippy::derivable_impls)]
+impl Default for Opts {
+	fn default() -> Self {
+		let opts = Opts {
+			network: CliNetOpts::default(),
+			..clap::Parser::parse()
+		};
+
+		opts
+	}
 }
 
 fn default_work_dir() -> String {

@@ -25,8 +25,19 @@ async fn accumulator_api_design() -> anyhow::Result<()> {
 		});
 
 	let n1 = Network::new(network_id.clone()).await?;
-	let mut c1_1 = n1.consume::<NoncesUpdate>().keyed_by(|n| n.block);
-	let mut c1_2 = n1.consume::<BalancesUpdate>().keyed_by(|b| b.block);
+	let mut c1_1 = n1
+		.consume::<NoncesUpdate>()
+		.keyed_by(|n| n.block)
+		.accumulate(|acc: &mut HashMap<_, _>, datum| {
+			acc.extend(datum.nonces.clone());
+		});
+
+	let mut c1_2 = n1
+		.consume::<BalancesUpdate>()
+		.keyed_by(|b| b.block)
+		.accumulate(|acc: &mut HashMap<_, _>, datum| {
+			acc.extend(datum.balances.clone());
+		});
 
 	full_manual_disco(&[&n0, &n1]);
 
@@ -90,10 +101,11 @@ async fn accumulator_api_design() -> anyhow::Result<()> {
 	tracing::info!("Data stored correctly in producer accumulator");
 
 	let n2 = Network::new(network_id.clone()).await?;
-	let acc_c2_1 = n2.consume::<NoncesUpdate>();
-	let mut acc_c2_1 = acc_c2_1.accumulate(|acc: &mut HashMap<_, _>, datum| {
-		acc.extend(datum.nonces.clone());
-	});
+	let mut acc_c2_1 = n2.consume::<NoncesUpdate>().accumulate(
+		|acc: &mut HashMap<_, _>, datum| {
+			acc.extend(datum.nonces.clone());
+		},
+	);
 
 	// replay all accumulated state from p0_1 to c2_1
 	full_manual_disco(&[&n0, &n1, &n2]);

@@ -8,6 +8,7 @@ use {
 	bytes::Bytes,
 	core::{any::Any, sync::atomic::Ordering},
 	futures::{StreamExt, stream::FuturesUnordered},
+	serde::Serialize,
 	slotmap::DenseSlotMap,
 	std::sync::Arc,
 	tokio::sync::mpsc::{self, error::SendError},
@@ -56,7 +57,7 @@ impl Clone for FanoutSink {
 impl FanoutSink {
 	/// Creates a new `FanoutSink` for the given stream ID with no local producers
 	/// or remote subscribers.
-	pub fn new<D: Datum>() -> Self {
+	pub fn new<D: Datum + Serialize>() -> Self {
 		let (event_loop, handle) = EventLoop::<D>::new();
 		let handle = Arc::new(handle);
 		tokio::spawn(event_loop.run());
@@ -173,7 +174,7 @@ impl<D: Datum> EventLoop<D> {
 	}
 }
 
-impl<D: Datum> EventLoop<D> {
+impl<D: Datum + Serialize> EventLoop<D> {
 	pub async fn run(mut self) {
 		self.signal_online_status();
 

@@ -13,7 +13,7 @@ exclude.workspace = true
 workspace = true
 
 [dependencies]
-model = { path = "../model" }
+shared = { path = "../shared" }
 mosaik.workspace = true
 rblib.workspace = true
 

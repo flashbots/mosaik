@@ -4,17 +4,14 @@ use {
 	serde::{Deserialize, Serialize, de::DeserializeOwned},
 };
 
-mod acc;
 mod criteria;
 
-pub use {acc::Accumulator, criteria::Criteria};
+pub use criteria::Criteria;
 
 /// Implemented by all data types that are published as streams.
 /// This type gives us zero-friction default implementations for
 /// any serializable rust type.
-pub trait Datum:
-	Serialize + DeserializeOwned + Send + Sync + Unpin + 'static
-{
+pub trait Datum: Serialize + DeserializeOwned + Send + Sync + 'static {
 	/// Returns a globally unique stream identifier.
 	/// The default implementation uses the rust type name, but in a production
 	/// system this should be overridden to provide a stable identifier.
@@ -23,10 +20,8 @@ pub trait Datum:
 	}
 }
 
-impl<T> Datum for T where
-	T: Serialize + DeserializeOwned + Send + Sync + Unpin + 'static
-{
-}
+impl<T> Datum for T where T: Serialize + DeserializeOwned + Send + Sync + 'static
+{}
 
 /// This type uniquely identifies a stream within the network.
 ///

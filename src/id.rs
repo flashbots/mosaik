@@ -1,6 +1,6 @@
 use {
-	core::str::FromStr,
-	derive_more::{Deref, Display, From, Into},
+	core::{fmt, str::FromStr},
+	derive_more::{Deref, From, Into},
 	iroh_gossip::TopicId,
 	rand::{Rng, distr::Alphanumeric},
 	serde::{Deserialize, Serialize},
@@ -12,17 +12,7 @@ use {
 /// On the protocol level this is represented by a gossip `TopicId` that is a
 /// 32-byte sha3-256 hash of the network name bytes.
 #[derive(
-	Debug,
-	Clone,
-	PartialEq,
-	Eq,
-	Hash,
-	Serialize,
-	Deserialize,
-	Deref,
-	From,
-	Into,
-	Display,
+	Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Deref, From, Into,
 )]
 pub struct NetworkId(String);
 
@@ -45,6 +35,18 @@ impl NetworkId {
 			.collect();
 
 		NetworkId(format!("mosaik{random}"))
+	}
+}
+
+impl fmt::Display for NetworkId {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{}", self.0)
+	}
+}
+
+impl fmt::Debug for NetworkId {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "NetworkId({})", self.0)
 	}
 }
 

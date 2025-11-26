@@ -1,16 +1,16 @@
 use {
 	super::{Key, Keyed},
-	crate::prelude::{Accumulated, Datum},
+	crate::prelude::Accumulated,
 	futures::Stream,
 };
 
-pub trait ConsumerExt<D: Datum>: Sized {
+pub trait ConsumerExt<D>: Sized {
 	fn keyed_by<K: Key, F: Fn(&D) -> K + 'static>(
 		self,
 		_: F,
 	) -> Keyed<Self, D, K>;
 
-	fn accumulate<Acc, F>(self, fold_fn: F) -> Accumulated<Self, D, Acc, F>
+	fn accumulate<Acc, F>(self, fold_fn: F) -> Accumulated<Self, Acc, F>
 	where
 		Acc: Default,
 		F: FnMut(&mut Acc, &D) + Unpin,
@@ -20,11 +20,11 @@ pub trait ConsumerExt<D: Datum>: Sized {
 	}
 }
 
-impl<T: Stream<Item = D>, D: Datum> ConsumerExt<D> for T {
+impl<T: Stream<Item = D> + Unpin, D> ConsumerExt<D> for T {
 	fn keyed_by<K: Key, F: Fn(&D) -> K + 'static>(
 		self,
 		extractor: F,
 	) -> Keyed<Self, D, K> {
-		Keyed::<T, D, K>::consumer(self, extractor)
+		Keyed::<Self, D, K>::consumer(self, extractor)
 	}
 }

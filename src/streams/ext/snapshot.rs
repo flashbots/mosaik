@@ -12,7 +12,6 @@ where
 {
 	accumulator: Accumulated<
 		S,
-		D,
 		im::OrdMap<K, D>,
 		Box<dyn Fn(&mut im::OrdMap<K, D>, &D) + Unpin + 'static>,
 	>,

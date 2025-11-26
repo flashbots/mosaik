@@ -6,38 +6,88 @@
 //!   transactions.
 
 use {
-	clap::Parser,
-	core::net::{Ipv4Addr, SocketAddrV4},
-	engine_api::ChainUpdate,
+	core::ops::Range,
 	mosaik::prelude::*,
-	primitives::SignerNonces,
-	rblib::prelude::*,
+	rblib::{
+		alloy::primitives::{U160, U256},
+		prelude::*,
+	},
+	shared::{
+		cli::CliNetOpts,
+		model::{BalancesUpdate, NoncesUpdate},
+		tracing::info,
+		*,
+	},
+	std::collections::BTreeMap,
 };
 
-mod cli;
-mod primitives;
-
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let opts = cli::Opts::parse();
-	println!("Starting canon actor with options: {opts:#?}");
-
-	let id = Identity::default();
-	let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 40150).into();
-	let network = Network::<Tcp>::new(id, addr).await?;
+async fn main() -> anyhow::Result<()> {
+	let opts = CliNetOpts::default();
+	info!("Starting canonical chain state actor with options: {opts:#?}");
 
 	if opts.optimism {
-		println!("Running canonical chain state actor in optimism mode");
-		run::<Optimism, _>(&network);
+		run::<Optimism>(opts).await
 	} else {
-		println!("Running canonical chain state actor in standard mode");
-		run::<Ethereum, _>(&network);
+		run::<Ethereum>(opts).await
 	}
-
-	Ok(())
 }
 
-fn run<P: Platform, T: Transport>(network: &Network<T>) {
-	let chain_updates_rx = network.stream::<ChainUpdate<P>>();
-	let nonces_tx = network.sink::<SignerNonces>();
+#[allow(clippy::extra_unused_type_parameters)]
+async fn run<P: Platform>(opts: CliNetOpts) -> anyhow::Result<()> {
+	let network = Network::new(opts.network_id.clone()).await?;
+
+	// wait for network to be online
+	network.local().online().await;
+
+	// connect to bootstrap peers
+	for bootstrap in opts.bootstrap {
+		info!("Dialing bootstrap peer {bootstrap}");
+		network.discovery().dial(bootstrap.into()).await?;
+	}
+
+	let mut nonces_tx = network.produce::<NoncesUpdate>();
+	let mut balances_tx = network.produce::<BalancesUpdate>();
+
+	// wait for subscribers
+	nonces_tx.status().subscribed().await;
+	balances_tx.status().subscribed().await;
+
+	let mut counter = 1;
+
+	loop {
+		let new_nonces = make_nonces_update(counter..(counter + 10));
+		let new_balances = make_balances_update(counter..(counter + 10));
+
+		nonces_tx.send(new_nonces).await?;
+		balances_tx.send(new_balances).await?;
+
+		tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+
+		counter += 1;
+	}
+}
+
+fn make_nonces_update(accounts: Range<u64>) -> NoncesUpdate {
+	let mut nonces = BTreeMap::new();
+	let block = U256::from(accounts.start + accounts.end).into();
+
+	for i in accounts {
+		let address = U160::from(i).into();
+		nonces.insert(address, i + 7);
+	}
+
+	NoncesUpdate { block, nonces }
+}
+
+fn make_balances_update(accounts: Range<u64>) -> BalancesUpdate {
+	let mut balances = BTreeMap::new();
+	let block = U256::from(accounts.start + accounts.end).into();
+
+	for i in accounts {
+		let address = U160::from(i).into();
+		balances.insert(address, U256::from(i * 1000));
+	}
+
+	BalancesUpdate { block, balances }
 }

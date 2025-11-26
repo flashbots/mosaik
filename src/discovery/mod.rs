@@ -60,6 +60,16 @@ impl Discovery {
 		self.0.protocol.dial(peer).await
 	}
 
+	pub async fn dial_all(
+		&self,
+		peers: impl Iterator<Item = EndpointAddr>,
+	) -> Result<(), Error> {
+		for peer in peers {
+			self.dial(peer).await?;
+		}
+		Ok(())
+	}
+
 	#[cfg(feature = "test-utils")]
 	pub async fn insert(&self, info: PeerInfo) -> Result<(), Error> {
 		info!("Inserting peer info into discovery catalog: {info:?}");

@@ -10,7 +10,7 @@ mod streams;
 pub mod prelude {
 	pub use {
 		super::{
-			datum::{Accumulator, Criteria, Datum, StreamId},
+			datum::{Criteria, Datum, StreamId},
 			discovery::{
 				Catalog,
 				Error as DiscoveryError,
@@ -33,6 +33,17 @@ pub mod prelude {
 			},
 		},
 		futures::{SinkExt, StreamExt},
+		iroh::{
+			self,
+			EndpointAddr,
+			EndpointId,
+			KeyParsingError,
+			PublicKey,
+			SecretKey,
+			Signature,
+			SignatureError,
+			TransportAddr,
+		},
 		serde::{Deserialize, Serialize},
 	};
 }
