@@ -1,5 +1,5 @@
 use {
-	super::{PublishError, Status},
+	super::{PublishError, Status, Subscribed},
 	crate::prelude::{Datum, Network, StreamId},
 	core::{
 		pin::Pin,
@@ -13,7 +13,7 @@ use {
 
 pub struct Producer<D: Datum> {
 	stream_id: StreamId,
-	status: Arc<Status>,
+	status: Status,
 	data_tx: PollSender<D>,
 }
 
@@ -33,6 +33,13 @@ impl<D: Datum> Producer<D> {
 	/// the producer, as well as to await important status changes.
 	pub fn status(&self) -> &Status {
 		&self.status
+	}
+
+	/// Returns a future that allows awaiting certain subscription conditions.
+	/// By default the returned future resolves when there is at least one
+	/// subscriber.
+	pub fn subscribed(&self) -> Subscribed {
+		self.status.subscribed()
 	}
 
 	/// Returns the stream ID for the datum type produced by this producer.

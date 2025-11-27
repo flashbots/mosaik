@@ -20,6 +20,7 @@ pub mod prelude {
 				PeerId,
 				PeerInfo,
 				SignedPeerInfo,
+				Tag,
 			},
 			groups::{Group, GroupDef, GroupHash, GroupKey, GroupState},
 			id::NetworkId,

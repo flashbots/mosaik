@@ -8,15 +8,38 @@
 //! - Accepts async update to orders
 
 use {
-	core::net::{Ipv4Addr, SocketAddrV4},
 	mosaik::prelude::*,
+	rblib::{prelude::*, reth::rpc::api::eth::bundle},
+	shared::{anyhow, cli::CliNetOpts, tracing::info},
 };
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let id = Identity::default();
-	let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 40150).into();
-	let network = Network::<Tcp>::new(id, addr).await?;
+async fn main() -> anyhow::Result<()> {
+	let opts = CliNetOpts::default();
+	info!("Starting pending orders actor with options: {opts:#?}");
+
+	if opts.optimism {
+		run::<Optimism>(opts).await
+	} else {
+		run::<Ethereum>(opts).await
+	}
+
+	Ok(())
+}
+
+async fn run<P: Platform>(opts: CliNetOpts) -> anyhow::Result<()> {
+	let network = Network::new(opts.network_id.clone()).await?;
+
+	// wait for network to be online
+	network.local().online().await;
+
+	info!(
+		"Pending orders actor started with identity {}",
+		network.local().id(),
+	);
+
+	let mut bundles_rx = network.consume::<types::Bundle<P>>();
+	let mut transactions_rx = network.consume::<types::Transaction<P>>();
 
 	Ok(())
 }

@@ -2,8 +2,11 @@ mod sender;
 mod sink;
 mod status;
 
-pub use sender::Producer;
-pub(crate) use {sink::FanoutSink, status::Status};
+pub(crate) use sink::FanoutSink;
+pub use {
+	sender::Producer,
+	status::{Status, Subscribed, Unsubscribed},
+};
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum PublishError<D: crate::prelude::Datum> {

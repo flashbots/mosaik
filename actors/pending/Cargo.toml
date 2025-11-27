@@ -14,5 +14,10 @@ workspace = true
 
 
 [dependencies]
+shared = { path = "../shared" }
+
 mosaik.workspace = true
 tokio.workspace = true
+rblib.workspace = true
+serde.workspace = true
+clap.workspace = true

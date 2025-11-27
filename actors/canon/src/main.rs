@@ -50,12 +50,10 @@ async fn run<P: Platform>(opts: CliNetOpts) -> anyhow::Result<()> {
 	let mut nonces_tx = network.produce::<NoncesUpdate>();
 	let mut balances_tx = network.produce::<BalancesUpdate>();
 
-	// wait for subscribers
-	nonces_tx.status().subscribed().await;
-	balances_tx.status().subscribed().await;
-
 	let mut counter = 1;
 	let mut interval = interval(std::time::Duration::from_secs(2));
+
+	let nonces_ready = nonces_tx.subscribed();
 
 	loop {
 		tokio::select! {
@@ -69,15 +67,9 @@ async fn run<P: Platform>(opts: CliNetOpts) -> anyhow::Result<()> {
 					balances_tx.send(new_balances).await?;
 
 					counter += 1;
+				} else {
+					info!("No subscribers yet, skipping update for block {counter}");
 				}
-			}
-
-			() = nonces_tx.status().unsubscribed() => {
-				info!("No more subscribers to nonces updates, pausing producer");
-			}
-
-			() = balances_tx.status().unsubscribed() => {
-				info!("No more subscribers to balances updates, pausing producer");
 			}
 		}
 	}

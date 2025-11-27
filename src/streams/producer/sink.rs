@@ -151,7 +151,7 @@ impl<D: Datum> EventLoop<D> {
 		let stream_id = StreamId::of::<D>();
 		let (data_tx, data_rx) = mpsc::channel(1);
 		let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
-		let status = Arc::new(Status::new());
+		let status = Status::new();
 
 		let handle = Handle {
 			stream_id: stream_id.clone(),

@@ -15,6 +15,7 @@ pub type PeerId = iroh::EndpointId;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct PeerInfo {
 	address: EndpointAddr,
+	tags: BTreeSet<Tag>,
 	streams: BTreeSet<StreamId>,
 }
 
@@ -22,6 +23,7 @@ impl PeerInfo {
 	pub fn new(address: EndpointAddr) -> Self {
 		Self {
 			address,
+			tags: BTreeSet::new(),
 			streams: BTreeSet::new(),
 		}
 	}
@@ -30,7 +32,11 @@ impl PeerInfo {
 		address: EndpointAddr,
 		streams: BTreeSet<StreamId>,
 	) -> Self {
-		Self { address, streams }
+		Self {
+			address,
+			tags: BTreeSet::new(),
+			streams,
+		}
 	}
 
 	pub const fn id(&self) -> &PeerId {
@@ -43,6 +49,10 @@ impl PeerInfo {
 
 	pub fn streams(&self) -> &BTreeSet<StreamId> {
 		&self.streams
+	}
+
+	pub fn tags(&self) -> &BTreeSet<Tag> {
+		&self.tags
 	}
 
 	/// Computes a digest of the `PeerInfo`.
@@ -70,6 +80,12 @@ impl PeerInfo {
 	}
 
 	#[must_use]
+	pub fn add_tag(mut self, tag: Tag) -> Self {
+		self.tags.insert(tag);
+		self
+	}
+
+	#[must_use]
 	pub fn update_address(mut self, address: EndpointAddr) -> Self {
 		self.address = address;
 		self
@@ -87,8 +103,13 @@ impl PeerInfo {
 		let public = secret.public();
 		let address = EndpointAddr::new(public);
 		let streams = BTreeSet::new();
+		let tags = BTreeSet::new();
 
-		Self { address, streams }
+		Self {
+			address,
+			streams,
+			tags,
+		}
 	}
 }
 
@@ -174,3 +195,53 @@ impl core::fmt::Display for SignedPeerInfo {
 	Deref,
 )]
 pub struct Digest(pub [u8; 32]);
+
+/// A tag is an opaque 32-byte hash that can be used to label peers.
+#[derive(
+	PartialEq,
+	Eq,
+	PartialOrd,
+	Ord,
+	Hash,
+	Clone,
+	Serialize,
+	Deserialize,
+	From,
+	Into,
+	Deref,
+)]
+pub struct Tag(Digest);
+
+impl core::fmt::Debug for Tag {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		for byte in &self.0.0[..4] {
+			write!(f, "{:02x}", byte)?;
+		}
+		Ok(())
+	}
+}
+
+impl core::fmt::Display for Tag {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		for byte in &self.0.0[..4] {
+			write!(f, "{:02x}", byte)?;
+		}
+		Ok(())
+	}
+}
+
+impl Tag {
+	/// Creates a new tag from arbitrary data by hashing it.
+	pub fn new<D: AsRef<[u8]>>(data: D) -> Self {
+		let mut hasher = Sha3_256::new();
+		hasher.update(data.as_ref());
+		let result = hasher.finalize();
+		Tag(Digest(result.into()))
+	}
+}
+
+impl<T: AsRef<str>> From<T> for Tag {
+	fn from(s: T) -> Self {
+		Tag::new(s.as_ref().as_bytes())
+	}
+}

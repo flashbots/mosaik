@@ -32,7 +32,7 @@ mod protocol;
 pub use {
 	catalog::{Catalog, Event, Events},
 	error::Error,
-	peer::{PeerId, PeerInfo, SignedPeerInfo},
+	peer::{PeerId, PeerInfo, SignedPeerInfo, Tag},
 };
 
 pub struct Discovery(Arc<Inner>);

@@ -10,7 +10,7 @@ pub use {
 	consumer::{Consumer, Error as ConsumerError, Status as ConsumerStatus},
 	error::Error,
 	ext::*,
-	producer::Producer,
+	producer::{Producer, Status as ProducerStatus, Subscribed, Unsubscribed},
 };
 
 pub(crate) struct Streams {

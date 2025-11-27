@@ -7139,7 +7139,11 @@ dependencies = [
 name = "pending"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "mosaik",
+ "rblib",
+ "serde",
+ "shared",
  "tokio",
 ]
 
