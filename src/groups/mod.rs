@@ -53,28 +53,26 @@
 //!     connection is maintained and the new node becomes a member of the
 //!     availability group.
 
-mod def;
-mod protocol;
+use {
+	crate::{Discovery, LocalNode, ProtocolProvider},
+	accept::Acceptor,
+	iroh::protocol::RouterBuilder,
+};
 
-pub use def::{GroupDef, GroupHash, GroupKey, GroupState};
+mod accept;
 
-use crate::prelude::Network;
+pub struct Groups {}
 
-pub struct Group {
-	def: GroupDef,
+impl Groups {
+	const ALPN: &'static [u8] = b"/mosaik/groups/1";
+
+	pub fn new(_local: LocalNode, _discovery: &Discovery) -> Self {
+		Self {}
+	}
 }
 
-impl Group {
-	pub fn new(network: &Network, key: GroupKey) -> Self {
-		Group {
-			def: GroupDef {
-				network_id: network.network_id().clone(),
-				key,
-			},
-		}
-	}
-
-	pub const fn key(&self) -> &GroupKey {
-		&self.def.key
+impl ProtocolProvider for Groups {
+	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
+		protocols.accept(Self::ALPN, Acceptor)
 	}
 }

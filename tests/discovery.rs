@@ -1,13 +1,13 @@
-use {core::time::Duration, mosaik::prelude::*, tracing::info};
+use {core::time::Duration, mosaik::*, tracing::info};
 
 #[tokio::test]
 async fn peers_have_consistent_maps() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
-	let n0 = Network::new(network_id.clone()).await?;
+	let n0 = Network::new(network_id).await?;
 
 	info!(
 		"Node0 is known as {:?} on network {}",
-		n0.local().info(),
+		n0.local().id(),
 		n0.network_id()
 	);
 
@@ -16,7 +16,7 @@ async fn peers_have_consistent_maps() -> anyhow::Result<()> {
 	let mut nodes = vec![];
 
 	for _ in 0..10 {
-		let node = Network::new(network_id.clone()).await?;
+		let node = Network::new(network_id).await?;
 		nodes.push(node);
 	}
 

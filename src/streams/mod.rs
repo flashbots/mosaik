@@ -1,36 +1,23 @@
-mod consumer;
-mod error;
-mod ext;
-mod link;
-mod producer;
-mod protocol;
-
-pub(crate) use producer::FanoutSink;
-pub use {
-	consumer::{Consumer, Error as ConsumerError, Status as ConsumerStatus},
-	error::Error,
-	ext::*,
-	producer::{Producer, Status as ProducerStatus, Subscribed, Unsubscribed},
+use {
+	crate::{Discovery, LocalNode, ProtocolProvider},
+	accept::Acceptor,
+	iroh::protocol::RouterBuilder,
 };
 
-pub(crate) struct Streams {
-	local: crate::local::Local,
-}
+mod accept;
+
+pub struct Streams {}
 
 impl Streams {
-	const ALPN_STREAMS: &'static [u8] = b"/mosaik/streams/1";
+	const ALPN: &'static [u8] = b"/mosaik/streams/1";
 
-	pub(crate) fn new(local: crate::local::Local) -> Self {
-		Self { local }
+	pub fn new(_local: LocalNode, _discovery: &Discovery) -> Self {
+		Self {}
 	}
+}
 
-	pub(crate) fn attach(
-		&mut self,
-		router: iroh::protocol::RouterBuilder,
-	) -> iroh::protocol::RouterBuilder {
-		router.accept(
-			Self::ALPN_STREAMS,
-			protocol::Protocol::new(self.local.clone()),
-		)
+impl ProtocolProvider for Streams {
+	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
+		protocols.accept(Self::ALPN, Acceptor)
 	}
 }
