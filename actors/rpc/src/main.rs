@@ -30,6 +30,7 @@ mod cli;
 async fn main() -> anyhow::Result<()> {
 	let opts = cli::Opts::default();
 	info!("Starting RPC actor with options: {opts:#?}");
+	info!("v3");
 
 	if opts.network.optimism {
 		run::<Optimism>(opts).await

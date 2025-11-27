@@ -96,7 +96,7 @@ impl Discovery {
 		// add ourselves to the catalog, as other nodes will have us in their
 		// catalog, so comparing hashes for catalog sync will fail if we don't
 		// have ourselves in our catalog.
-		catalog.insert(PeerInfo::new(local.endpoint().addr()));
+		catalog.insert_unsigned(PeerInfo::new(local.endpoint().addr()));
 		let protocol = Protocol::new(catalog.clone());
 		let cancel = CancellationToken::new();
 		let gossip = Gossip::builder()
@@ -226,7 +226,7 @@ async fn on_local_info_changed(
 	topic_tx: GossipSender,
 ) -> Result<(), Error> {
 	info!("Local peer info updated: {info:?}");
-	catalog.insert(info.clone());
+	catalog.insert_signed(info.clone());
 	topic_tx
 		.broadcast(info.into_bytes().map_err(Error::encode)?)
 		.await
@@ -247,7 +247,7 @@ async fn on_gossip_event(
 			if !signed_peer_info.verify() {
 				return Err(Error::InvalidSignedPeerInfo);
 			}
-			catalog.insert(signed_peer_info.into_peer_info());
+			catalog.insert_signed(signed_peer_info);
 		}
 		GossipEvent::NeighborUp(peer_id) => {
 			do_catalog_sync(peer_id.into(), &endpoint, &mut catalog).await?;

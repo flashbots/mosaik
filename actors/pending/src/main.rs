@@ -9,7 +9,7 @@
 
 use {
 	mosaik::prelude::*,
-	rblib::{prelude::*, reth::rpc::api::eth::bundle},
+	rblib::prelude::*,
 	shared::{anyhow, cli::CliNetOpts, tracing::info},
 };
 
@@ -23,8 +23,6 @@ async fn main() -> anyhow::Result<()> {
 	} else {
 		run::<Ethereum>(opts).await
 	}
-
-	Ok(())
 }
 
 async fn run<P: Platform>(opts: CliNetOpts) -> anyhow::Result<()> {

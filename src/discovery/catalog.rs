@@ -74,6 +74,25 @@ impl Default for Catalog {
 
 /// Manual catalog manipulation public API.
 impl Catalog {
+	pub fn insert_signed(&self, peer: SignedPeerInfo) {
+		let id = peer.info.id();
+		let mut signed_writer = self.inner.signed.write();
+		let mut is_update = false;
+
+		if signed_writer.insert(*id, peer.clone()).is_some() {
+			is_update = true;
+		}
+
+		drop(signed_writer);
+
+		// notify observers about change to the catalog
+		if is_update {
+			let _ = self.inner.sender.send(Event::Updated(peer.info));
+		} else {
+			let _ = self.inner.sender.send(Event::New(peer.info));
+		}
+	}
+
 	/// Manually adds a peer info to the catalog locally.
 	///
 	/// Notes:
@@ -81,7 +100,7 @@ impl Catalog {
 	///   peers and only used by the local node.
 	///
 	/// - This will overwrite any existing peer info with the same peer id.
-	pub fn insert(&self, peer: impl Into<PeerInfo>) {
+	pub fn insert_unsigned(&self, peer: impl Into<PeerInfo>) {
 		let peer = peer.into();
 		let id = peer.id();
 		let mut signed_writer = self.inner.signed.write();
@@ -122,7 +141,7 @@ impl Catalog {
 
 	pub(crate) fn merge(&mut self, other: &[PeerInfo]) {
 		for peer in other {
-			self.insert(peer.clone());
+			self.insert_unsigned(peer.clone());
 		}
 	}
 }
@@ -424,14 +443,14 @@ mod tests {
 		let peer_info1 = PeerInfo::random();
 		let peer_info2 = PeerInfo::random();
 
-		catalog.insert(peer_info1.clone());
+		catalog.insert_unsigned(peer_info1.clone());
 		assert!(!catalog.is_empty());
 		assert_eq!(catalog.len(), 1);
 
 		let iter = catalog.peers();
 		assert_eq!(iter.count(), 1);
 
-		catalog.insert(peer_info2.clone());
+		catalog.insert_unsigned(peer_info2.clone());
 		assert!(!catalog.is_empty());
 		assert_eq!(catalog.len(), 2);
 
@@ -467,10 +486,10 @@ mod tests {
 		let peer_info1 = PeerInfo::random();
 		let peer_info2 = PeerInfo::random();
 
-		catalog.insert(peer_info1.clone());
+		catalog.insert_unsigned(peer_info1.clone());
 		assert_eq!(events.next().await, Some(Event::New(peer_info1.clone())));
 
-		catalog.insert(peer_info2.clone());
+		catalog.insert_unsigned(peer_info2.clone());
 		assert_eq!(events.next().await, Some(Event::New(peer_info2.clone())));
 
 		catalog.remove(peer_info1.id());
@@ -487,9 +506,9 @@ mod tests {
 
 		let peer_info1 = PeerInfo::random();
 
-		catalog.insert(peer_info1.clone());
-		catalog.insert(peer_info1.clone());
-		catalog.insert(peer_info1.clone());
+		catalog.insert_unsigned(peer_info1.clone());
+		catalog.insert_unsigned(peer_info1.clone());
+		catalog.insert_unsigned(peer_info1.clone());
 
 		assert_eq!(events.next().await, Some(Event::New(peer_info1.clone())));
 	}
@@ -500,7 +519,7 @@ mod tests {
 		let mut events = catalog.watch();
 
 		let peer_info = PeerInfo::random();
-		catalog.insert(peer_info.clone());
+		catalog.insert_unsigned(peer_info.clone());
 
 		// Simulate update with new info but same ID
 		let peer_info2 = PeerInfo::new_with_streams(peer_info.address().clone(), {
@@ -509,7 +528,7 @@ mod tests {
 			streams
 		});
 
-		catalog.insert(peer_info2.clone());
+		catalog.insert_unsigned(peer_info2.clone());
 
 		// Rule: New + Updated = New (with latest info)
 		assert_eq!(events.next().await, Some(Event::New(peer_info2.clone())));
@@ -521,7 +540,7 @@ mod tests {
 		let mut events = catalog.watch();
 
 		let peer_info = PeerInfo::random();
-		catalog.insert(peer_info.clone());
+		catalog.insert_unsigned(peer_info.clone());
 		catalog.remove(peer_info.id());
 
 		// Rule: New + Removed = (cancelled)
@@ -537,7 +556,7 @@ mod tests {
 		let mut events = catalog.watch();
 
 		let peer_info = PeerInfo::random();
-		catalog.insert(peer_info.clone());
+		catalog.insert_unsigned(peer_info.clone());
 		assert_eq!(events.next().await, Some(Event::New(peer_info.clone())));
 
 		let peer_info2 = PeerInfo::new_with_streams(peer_info.address().clone(), {
@@ -546,7 +565,7 @@ mod tests {
 			streams
 		});
 
-		catalog.insert(peer_info2.clone());
+		catalog.insert_unsigned(peer_info2.clone());
 
 		let peer_info3 =
 			PeerInfo::new_with_streams(peer_info2.address().clone(), {
@@ -555,7 +574,7 @@ mod tests {
 				streams
 			});
 
-		catalog.insert(peer_info3.clone()); // Update again
+		catalog.insert_unsigned(peer_info3.clone()); // Update again
 
 		// Rule: Updated + Updated = Updated (with latest info)
 		assert_eq!(
@@ -570,10 +589,10 @@ mod tests {
 		let mut events = catalog.watch();
 
 		let peer_info = PeerInfo::random();
-		catalog.insert(peer_info.clone());
+		catalog.insert_unsigned(peer_info.clone());
 		assert_eq!(events.next().await, Some(Event::New(peer_info.clone())));
 
-		catalog.insert(peer_info.clone()); // Update
+		catalog.insert_unsigned(peer_info.clone()); // Update
 		catalog.remove(peer_info.id());
 
 		// Rule: Updated + Removed = Removed
@@ -586,11 +605,11 @@ mod tests {
 		let mut events = catalog.watch();
 
 		let peer_info = PeerInfo::random();
-		catalog.insert(peer_info.clone());
+		catalog.insert_unsigned(peer_info.clone());
 		assert_eq!(events.next().await, Some(Event::New(peer_info.clone())));
 
 		catalog.remove(peer_info.id());
-		catalog.insert(peer_info.clone()); // Re-add
+		catalog.insert_unsigned(peer_info.clone()); // Re-add
 
 		// Rule: Removed + New = Updated
 		assert_eq!(events.next().await, Some(Event::Updated(peer_info.clone())));
@@ -602,7 +621,7 @@ mod tests {
 		let mut events = catalog.watch();
 
 		let peer_info = PeerInfo::random();
-		catalog.insert(peer_info.clone());
+		catalog.insert_unsigned(peer_info.clone());
 		assert_eq!(events.next().await, Some(Event::New(peer_info.clone())));
 
 		catalog.remove(peer_info.id());
@@ -618,12 +637,12 @@ mod tests {
 		let mut events = catalog.watch();
 
 		let peer_info = PeerInfo::random();
-		catalog.insert(peer_info.clone());
+		catalog.insert_unsigned(peer_info.clone());
 
 		// Trigger SignificantlyChanged by making the receiver lag
 		// Fill up the channel buffer (32 events)
 		for _ in 0..35 {
-			catalog.insert(PeerInfo::random());
+			catalog.insert_unsigned(PeerInfo::random());
 		}
 
 		// First event should be SignificantlyChanged due to lag
@@ -638,8 +657,8 @@ mod tests {
 		let peer_info1 = PeerInfo::random();
 		let peer_info2 = PeerInfo::random();
 
-		catalog.insert(peer_info1.clone());
-		catalog.insert(peer_info2.clone());
+		catalog.insert_unsigned(peer_info1.clone());
+		catalog.insert_unsigned(peer_info2.clone());
 
 		// Each peer should get independent events
 		let event1 = events.next().await;
@@ -657,13 +676,13 @@ mod tests {
 		let peer_info = PeerInfo::random();
 
 		// New -> Updated -> Updated -> Removed = (cancelled)
-		catalog.insert(peer_info.clone());
+		catalog.insert_unsigned(peer_info.clone());
 		let peer_info2 = PeerInfo::new_with_streams(peer_info.address().clone(), {
 			let mut streams = peer_info.streams().clone();
 			streams.insert(StreamId::of::<Data1>());
 			streams
 		});
-		catalog.insert(peer_info2.clone());
+		catalog.insert_unsigned(peer_info2.clone());
 
 		let peer_info3 =
 			PeerInfo::new_with_streams(peer_info2.address().clone(), {
@@ -671,7 +690,7 @@ mod tests {
 				streams.insert(StreamId::of::<Data2>());
 				streams
 			});
-		catalog.insert(peer_info3.clone());
+		catalog.insert_unsigned(peer_info3.clone());
 		catalog.remove(peer_info.id());
 
 		// Should be cancelled (no event)

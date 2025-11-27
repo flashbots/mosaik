@@ -19,13 +19,14 @@ use {
 		*,
 	},
 	std::collections::BTreeMap,
-	tokio::time::interval,
+	tokio::time::{MissedTickBehavior, interval},
 };
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 	let opts = CliNetOpts::default();
 	info!("Starting canonical chain state actor with options: {opts:#?}");
+	info!("v3");
 
 	if opts.optimism {
 		run::<Optimism>(opts).await
@@ -52,14 +53,23 @@ async fn run<P: Platform>(opts: CliNetOpts) -> anyhow::Result<()> {
 
 	let mut counter = 1;
 	let mut interval = interval(std::time::Duration::from_secs(2));
+	interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
-	let nonces_ready = nonces_tx.subscribed();
+	let mut subscribed_nonces = nonces_tx.subscribed();
+	let mut unsubscribed_nonces = nonces_tx.unsubscribed();
+
+	let mut subscribed_balances = balances_tx.subscribed();
+	let mut unsubscribed_balances = balances_tx.unsubscribed();
 
 	loop {
 		tokio::select! {
 			_ = interval.tick() => {
 				if nonces_tx.status().is_subscribed() && balances_tx.status().is_subscribed() {
-					info!("Producing new updates for block {counter}");
+					info!("Producing new updates for block {counter}, n: {}, b: {}",
+						nonces_tx.status().subscribers_count(),
+						balances_tx.status().subscribers_count()
+					);
+
 					let new_nonces = make_nonces_update(counter..(counter + 10));
 					let new_balances = make_balances_update(counter..(counter + 10));
 
@@ -70,6 +80,22 @@ async fn run<P: Platform>(opts: CliNetOpts) -> anyhow::Result<()> {
 				} else {
 					info!("No subscribers yet, skipping update for block {counter}");
 				}
+			}
+
+			() = &mut subscribed_nonces => {
+				info!("NoncesUpdate producer has subscribers");
+			}
+
+			() = &mut subscribed_balances => {
+				info!("BalancesUpdate producer has subscribers");
+			}
+
+			() = &mut unsubscribed_nonces => {
+				info!("NoncesUpdate producer has no more subscribers");
+			}
+
+			() = &mut unsubscribed_balances => {
+				info!("BalancesUpdate producer has no more subscribers");
 			}
 		}
 	}

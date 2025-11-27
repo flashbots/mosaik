@@ -456,6 +456,11 @@ impl<D: Datum> EventLoop<D> {
 		match event {
 			DiscoveryEvent::New(peer_info) | DiscoveryEvent::Updated(peer_info) => {
 				if peer_info.streams().contains(&self.stream_id) {
+					tracing::info!(
+						peer_id = %peer_info.address().id,
+						stream_id = %self.stream_id,
+						"Discovered new/updated producer for stream"
+					);
 					self.subscribe(peer_info.into_address()).await;
 				}
 			}

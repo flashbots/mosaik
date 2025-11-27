@@ -1,7 +1,11 @@
 compile:
   scripts/compile-devnet.sh
 
+deploy:
+  scripts/deploy-devnet.sh
+  
 start:
+  scripts/deploy-devnet.sh
   scripts/start-devnet.sh
 
 stop:

@@ -96,7 +96,7 @@ fn full_manual_disco(peers: &[&Network]) {
 	for a in peers {
 		for b in peers {
 			if a.local().id() != b.local().id() {
-				a.discovery().catalog().insert(b.local().info());
+				a.discovery().catalog().insert_unsigned(b.local().info());
 			}
 		}
 	}

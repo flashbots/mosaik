@@ -28,12 +28,20 @@ for ENTRY in "${ACTORS[@]}"; do
   ARGS=$(get_actor_args "$ENTRY")
   VM_NAME="mosaik-${ACTOR}"
 
-  echo "==> Starting $ACTOR on $VM_NAME${ARGS:+ with args: $ARGS}"
-  multipass exec "$VM_NAME" -- daemonize \
-    -c /home/ubuntu \
-    -o "/home/ubuntu/$ACTOR.log" \
-    -l "/home/ubuntu/$ACTOR.lock" \
-    "/home/ubuntu/$ACTOR" $ARGS
+  echo "==> Launching VM $VM_NAME for actor $ACTOR"
+  multipass launch --name "$VM_NAME" --cpus 2 --memory 1G --disk 4G "$VM_IMAGE" || true
+  multipass exec "$VM_NAME" -- sudo apt-get update -y
+  multipass exec "$VM_NAME" -- sudo apt-get install -y daemonize 
+
+  # Kill any previous instance of the actor process
+  echo "==> Killing any previous instance of $ACTOR on $VM_NAME"
+  multipass exec "$VM_NAME" -- pkill -f "/home/ubuntu/$ACTOR" 2>/dev/null || true
+
+  echo "==> Copying $ACTOR binary to $VM_NAME"
+  multipass transfer "$BUILD_DIR/$ACTOR" "$VM_NAME:/home/ubuntu/$ACTOR"
+
+  echo "==> Marking binary executable in $VM_NAME"
+  multipass exec "$VM_NAME" -- chmod +x "/home/ubuntu/$ACTOR"
 done
 
 echo "Done. Current VMs:"

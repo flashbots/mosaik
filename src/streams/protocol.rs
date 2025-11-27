@@ -32,6 +32,7 @@ impl ProtocolHandler for Protocol {
 	/// This code is called on the stream producer node when a remote peer
 	/// connects and wants to subscribe to a stream.
 	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+		tracing::info!(">--> receiving stream request from {connection:?}");
 		let mut link = Link::accept(connection).await?;
 
 		// The accepting node expects a subscription request message as the first

@@ -131,7 +131,7 @@ impl Status {
 	pub fn subscribed(&self) -> Subscribed {
 		Subscribed {
 			variant: WatchType::AtLeast(1),
-			last_count: self.subscribers_count(),
+			last_count: 0,
 			status: self.clone(),
 			pending: Box::pin(self.0.notify.clone().notified_owned()),
 		}
@@ -215,37 +215,37 @@ impl Future for Subscribed {
 
 	fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
 		let this = self.get_mut();
+		tracing::info!(">---> poll subscribed future");
+		// Check if the condition is already met.
+		let current_count = this.status.subscribers_count();
 
-		loop {
-			// Check if the condition is already met.
-			let current_count = this.status.subscribers_count();
-			match this.variant {
-				WatchType::Change => {
-					if current_count != this.last_count {
-						return Poll::Ready(());
-					}
+		let last_count = this.last_count;
+		this.last_count = current_count;
+
+		let poll_result = match this.variant {
+			WatchType::Change => {
+				if current_count != last_count {
+					return Poll::Ready(());
 				}
-				WatchType::AtLeast(threshold) => {
-					if current_count >= threshold {
-						return Poll::Ready(());
-					}
-				}
+				Poll::Pending
 			}
+			WatchType::AtLeast(threshold) => {
+				if current_count >= threshold && current_count != last_count {
+					return Poll::Ready(());
+				}
+				Poll::Pending
+			}
+		};
 
-			// Poll the notification future.
-			let pinned = Pin::new(&mut this.pending);
-			match pinned.poll(cx) {
-				Poll::Ready(()) => {
-					// Notification received, but condition not met yet.
-					// Create a new notified future for the next notification.
-					this.pending =
-						Box::pin(this.status.0.notify.clone().notified_owned());
-				}
-				Poll::Pending => {
-					return Poll::Pending;
-				}
+		if Poll::Pending == poll_result {
+			if let Poll::Ready(()) = Pin::new(&mut this.pending).poll(cx) {
+				this.pending = Box::pin(this.status.0.notify.clone().notified_owned());
+				tracing::info!(">---> notified");
+				cx.waker().wake_by_ref();
 			}
 		}
+
+		poll_result
 	}
 }
 
@@ -254,34 +254,30 @@ impl Future for Unsubscribed {
 
 	fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
 		let this = self.get_mut();
+		tracing::info!(">---> poll unsubscribed future");
 
-		loop {
-			let count = this.status.subscribers_count();
+		let count = this.status.subscribers_count();
 
-			// If we have subscribers, mark that we've seen the subscribed state.
-			if count > 0 {
-				this.seen_subscribed = true;
-			}
-
-			// Only resolve if we've seen subscribers and now have none.
-			if this.seen_subscribed && count == 0 {
-				// Reset so next poll requires a new subscribed -> unsubscribed
-				// transition.
-				this.seen_subscribed = false;
-				return Poll::Ready(());
-			}
-
-			// Poll the notification future.
-			match this.pending.as_mut().poll(cx) {
-				Poll::Ready(()) => {
-					this.pending =
-						Box::pin(this.status.0.notify.clone().notified_owned());
-				}
-				Poll::Pending => {
-					return Poll::Pending;
-				}
-			}
+		// If we have subscribers, mark that we've seen the subscribed state.
+		if count > 0 && !this.seen_subscribed {
+			this.seen_subscribed = true;
+			return Poll::Ready(());
 		}
+
+		// Only resolve if we've seen subscribers and now have none.
+		if this.seen_subscribed && count == 0 {
+			// Reset so next poll requires a new subscribed -> unsubscribed
+			// transition.
+			this.seen_subscribed = false;
+			return Poll::Ready(());
+		}
+
+		if Poll::Ready(()) == Pin::new(&mut this.pending).poll(cx) {
+			this.pending = Box::pin(this.status.0.notify.clone().notified_owned());
+			cx.waker().wake_by_ref();
+		}
+
+		Poll::Pending
 	}
 }
 

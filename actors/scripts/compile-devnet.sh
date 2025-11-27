@@ -42,11 +42,13 @@ for ENTRY in "${ACTORS[@]}"; do
   ACTOR=$(get_actor_name "$ENTRY")
   ARGS=$(get_actor_args "$ENTRY")
   echo "Building actor: $ACTOR"
+  multipass exec mosaik-build -- rm -rf /home/ubuntu/build/release/$ACTOR
   multipass exec mosaik-build -- bash -lc "
     source \$HOME/.cargo/env
     cd /home/ubuntu/project/
     CARGO_TARGET_DIR=/home/ubuntu/build cargo build --release -p $ACTOR
   "
+  rm -f ../target/devnet-build/$ACTOR
   multipass transfer mosaik-build:/home/ubuntu/build/release/$ACTOR ../target/devnet-build/$ACTOR
 done
 

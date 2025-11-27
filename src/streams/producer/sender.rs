@@ -1,6 +1,6 @@
 use {
 	super::{PublishError, Status, Subscribed},
-	crate::prelude::{Datum, Network, StreamId},
+	crate::prelude::{Datum, Network, StreamId, Unsubscribed},
 	core::{
 		pin::Pin,
 		task::{Context, Poll},
@@ -39,6 +39,14 @@ impl<D: Datum> Producer<D> {
 	/// subscriber.
 	pub fn subscribed(&self) -> Subscribed {
 		self.status.subscribed()
+	}
+
+	/// Returns a future that resolves when the producer transitions from having
+	/// subscribers to having none. The future waits until it observes at least
+	/// one subscriber, then resolves when all subscribers leave. Can be polled
+	/// repeatedly to detect multiple transitions.
+	pub fn unsubscribed(&self) -> Unsubscribed {
+		self.status.unsubscribed()
 	}
 
 	/// Returns the stream ID for the datum type produced by this producer.

@@ -262,6 +262,7 @@ impl<D: Datum + Serialize> EventLoop<D> {
 				// if a failure occurs.
 				sends.push(async move {
 					let result = sub.link.send(bytes).await;
+					tracing::info!("sent with result: {result:?}");
 					let peer = *sub.link.peer_id();
 					(sub_id, peer, result)
 				});
