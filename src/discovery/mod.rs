@@ -5,6 +5,7 @@ use {
 	iroh::{
 		Endpoint,
 		EndpointAddr,
+		EndpointId,
 		discovery::static_provider::StaticProvider,
 		protocol::RouterBuilder,
 	},
@@ -90,7 +91,7 @@ impl Discovery {
 impl Discovery {
 	const ALPN_GOSSIP: &'static [u8] = b"/mosaik/gossip/1";
 
-	pub(crate) fn new(local: &Local) -> Self {
+	pub(crate) fn new(local: &Local, bootstrap_peers: Vec<EndpointId>) -> Self {
 		let catalog = Catalog::default();
 		// add ourselves to the catalog, as other nodes will have us in their
 		// catalog, so comparing hashes for catalog sync will fail if we don't
@@ -106,6 +107,7 @@ impl Discovery {
 			local: local.clone(),
 			gossip: gossip.clone(),
 			catalog: catalog.clone(),
+			bootstrap_peers,
 			commands: Channel::default(),
 			cancel: cancel.clone(),
 		};
@@ -134,6 +136,7 @@ struct EventLoop {
 	local: Local,
 	gossip: Gossip,
 	catalog: Catalog,
+	bootstrap_peers: Vec<EndpointId>,
 	commands: Channel<Command>,
 	cancel: CancellationToken,
 }
@@ -144,6 +147,7 @@ impl EventLoop {
 			local,
 			gossip,
 			catalog,
+			bootstrap_peers,
 			mut commands,
 			cancel,
 		} = self;
@@ -151,7 +155,7 @@ impl EventLoop {
 		// TODO: topic_id should be defined in the discovery module as it's
 		// discovery-specific
 		let (topic_tx, mut topic_rx) = gossip
-			.subscribe(local.network_id().topic_id(), vec![])
+			.subscribe(local.network_id().topic_id(), bootstrap_peers)
 			.await?
 			.split();
 
