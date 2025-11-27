@@ -95,7 +95,7 @@ impl FanoutSink {
 			.expect("stream-id mismatch; this is a bug; qed")
 			.clone();
 
-		Producer::init(data_tx, Arc::clone(&handle.status))
+		Producer::init(data_tx, handle.status.clone())
 	}
 
 	/// Accepts a new connected remote subscriber link to this fanout sink.
@@ -137,7 +137,7 @@ struct EventLoop<D: Datum> {
 
 	/// Used to keep track of statistics and status updates for local producers
 	/// of this stream.
-	status: Arc<Status>,
+	status: Status,
 
 	/// A list of remote subscribers to this stream
 	subs: DenseSlotMap<SubscriptionId, Subscriber>,
@@ -157,13 +157,13 @@ impl<D: Datum> EventLoop<D> {
 			stream_id: stream_id.clone(),
 			data_tx: Box::new(data_tx),
 			cmd_tx,
-			status: Arc::clone(&status),
-			_abort: status.cancel.clone().drop_guard(),
+			status: status.clone(),
+			_abort: status.0.cancel.clone().drop_guard(),
 		};
 
 		let event_loop = Self {
 			stream_id,
-			cancel: status.cancel.clone(),
+			cancel: status.0.cancel.clone(),
 			data_rx,
 			cmds: cmd_rx,
 			status,
@@ -221,10 +221,11 @@ impl<D: Datum + Serialize> EventLoop<D> {
 
 		self
 			.status
+			.0
 			.subscribers_count
 			.fetch_add(1, Ordering::Relaxed);
 
-		self.status.notify.notify_waiters();
+		self.status.0.notify.notify_waiters();
 	}
 
 	/// Invoked when any of the local producers publish a new data item.
@@ -250,7 +251,7 @@ impl<D: Datum + Serialize> EventLoop<D> {
 								error = %e,
 								"Failed to serialize datum for stream",
 							);
-							self.status.items_dropped.fetch_add(1, Ordering::Relaxed);
+							self.status.0.items_dropped.fetch_add(1, Ordering::Relaxed);
 							return;
 						}
 					},
@@ -290,15 +291,17 @@ impl<D: Datum + Serialize> EventLoop<D> {
 					if !first_success {
 						first_success = true;
 
-						self.status.items_sent.fetch_add(1, Ordering::Relaxed);
+						self.status.0.items_sent.fetch_add(1, Ordering::Relaxed);
 						self
 							.status
+							.0
 							.bytes_sent
 							.fetch_add(packet_len, Ordering::Relaxed);
 					}
 
 					self
 						.status
+						.0
 						.cumulative_bytes_sent
 						.fetch_add(packet_len, Ordering::Relaxed);
 				}
@@ -312,7 +315,7 @@ impl<D: Datum + Serialize> EventLoop<D> {
 			}
 		} else {
 			// no subscribers matched the datum
-			self.status.items_dropped.fetch_add(1, Ordering::Relaxed);
+			self.status.0.items_dropped.fetch_add(1, Ordering::Relaxed);
 		}
 	}
 
@@ -327,17 +330,18 @@ impl<D: Datum + Serialize> EventLoop<D> {
 
 			self
 				.status
+				.0
 				.subscribers_count
 				.fetch_sub(1, Ordering::Relaxed);
-			self.status.notify.notify_waiters();
+			self.status.0.notify.notify_waiters();
 		}
 	}
 
 	/// Signals to all local producers that this fanout loop is now online
 	/// and ready to accept subscriptions from consumers.
 	fn signal_online_status(&self) {
-		self.status.online.store(true, Ordering::SeqCst);
-		self.status.notify.notify_waiters();
+		self.status.0.online.store(true, Ordering::SeqCst);
+		self.status.0.notify.notify_waiters();
 		debug!(stream_id = %self.stream_id, "Producer for stream is now online");
 	}
 }
@@ -364,7 +368,7 @@ struct Handle {
 
 	/// Statistics about this fanout loop. Used to inform local producers.
 	/// about the number of remote subscribers. Updated by the fanout loop.
-	status: Arc<Status>,
+	status: Status,
 
 	/// Terminates the fanout loop when `FanoutSink` is dropped.
 	_abort: DropGuard,

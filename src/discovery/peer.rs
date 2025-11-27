@@ -80,8 +80,23 @@ impl PeerInfo {
 	}
 
 	#[must_use]
-	pub fn add_tag(mut self, tag: Tag) -> Self {
-		self.tags.insert(tag);
+	pub fn add_tag(mut self, tag: impl Into<Tag>) -> Self {
+		self.tags.insert(tag.into());
+		self
+	}
+
+	#[must_use]
+	pub fn add_tags(
+		mut self,
+		tags: impl Iterator<Item = impl Into<Tag>>,
+	) -> Self {
+		self.tags.extend(tags.map(Into::into));
+		self
+	}
+
+	#[must_use]
+	pub fn remove_tag(mut self, tag: &Tag) -> Self {
+		self.tags.remove(tag);
 		self
 	}
 
@@ -107,8 +122,8 @@ impl PeerInfo {
 
 		Self {
 			address,
-			streams,
 			tags,
+			streams,
 		}
 	}
 }
@@ -215,7 +230,7 @@ pub struct Tag(Digest);
 impl core::fmt::Debug for Tag {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		for byte in &self.0.0[..4] {
-			write!(f, "{:02x}", byte)?;
+			write!(f, "{byte:02x}")?;
 		}
 		Ok(())
 	}
@@ -224,7 +239,7 @@ impl core::fmt::Debug for Tag {
 impl core::fmt::Display for Tag {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		for byte in &self.0.0[..4] {
-			write!(f, "{:02x}", byte)?;
+			write!(f, "{byte:02x}")?;
 		}
 		Ok(())
 	}

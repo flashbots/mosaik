@@ -6,7 +6,6 @@ use {
 		task::{Context, Poll},
 	},
 	futures::{Sink, SinkExt},
-	std::sync::Arc,
 	tokio::sync::mpsc,
 	tokio_util::sync::PollSender,
 };
@@ -50,7 +49,7 @@ impl<D: Datum> Producer<D> {
 
 /// Internal API
 impl<D: Datum> Producer<D> {
-	pub(crate) fn init(data_tx: mpsc::Sender<D>, status: Arc<Status>) -> Self {
+	pub(crate) fn init(data_tx: mpsc::Sender<D>, status: Status) -> Self {
 		let stream_id = StreamId::of::<D>();
 		let data_tx = PollSender::new(data_tx);
 

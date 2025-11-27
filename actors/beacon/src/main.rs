@@ -8,12 +8,15 @@ use {
 async fn main() -> anyhow::Result<()> {
 	let opts = CliNetOpts::default();
 	info!("Starting beacon actor with options: {opts:#?}");
-	let endpoint = match &opts.secret_key {
-		Some(sk) => Endpoint::builder().secret_key(sk.clone()).bind().await?,
-		None => Endpoint::bind().await?,
-	};
 
-	let network = Network::with_endpoint(opts.network_id, endpoint).await?;
+	let mut builder = Network::builder(opts.network_id);
+	builder.with_bootstrap_peers(opts.bootstrap);
+
+	if let Some(secret_key) = opts.secret_key {
+		builder = builder.with_secret_key(secret_key);
+	}
+
+	let network = builder.build().await?;
 
 	// wait for network to be online
 	network.local().online().await;

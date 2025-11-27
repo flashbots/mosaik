@@ -28,7 +28,10 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn run<P: Platform>(opts: CliNetOpts) -> anyhow::Result<()> {
-	let network = Network::new(opts.network_id.clone()).await?;
+	let network = Network::builder(opts.network_id)
+		.with_bootstrap_peers(opts.bootstrap)
+		.build()
+		.await?;
 
 	// wait for network to be online
 	network.local().online().await;

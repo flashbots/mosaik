@@ -4,7 +4,7 @@ use {
 		discovery::Discovery,
 		id::NetworkId,
 		local::Local,
-		prelude::DiscoveryError,
+		prelude::{DiscoveryError, Tag},
 		streams::{Consumer, Producer, Streams},
 	},
 	core::{
@@ -16,7 +16,7 @@ use {
 		discovery::static_provider::StaticProvider,
 		protocol::Router,
 	},
-	std::net::SocketAddrV4,
+	std::{collections::BTreeSet, net::SocketAddrV4},
 	tokio_util::sync::CancellationToken,
 };
 
@@ -36,32 +36,17 @@ pub struct Network {
 	_protocols: Router,
 }
 
+/// Public network instantiation API
 impl Network {
-	async fn run(
-		network_id: NetworkId,
-		endpoint: Endpoint,
-		static_provider: StaticProvider,
-		bootstrap_peers: Vec<iroh::EndpointId>,
-		cancel: CancellationToken,
-	) -> Result<Self, Error> {
-		let me = Local::new(endpoint, network_id, static_provider, cancel);
+	/// Builds and runs a new `Network` instance with the given `NetworkId` and
+	/// default configuration.
+	pub async fn new(network_id: NetworkId) -> Result<Self, Error> {
+		NetworkBuilder::new(network_id).build().await
+	}
 
-		// wait for the local peer to be online
-		me.online().await;
-
-		let mut streams = Streams::new(me.clone());
-		let mut discovery = Discovery::new(&me, bootstrap_peers);
-
-		let builder = Router::builder(me.endpoint().clone());
-		let builder = streams.attach(builder);
-		let builder = discovery.attach(builder);
-		let protocols = builder.spawn();
-
-		Ok(Self {
-			me,
-			discovery,
-			_protocols: protocols,
-		})
+	/// Creates a new `NetworkBuilder` for the given `NetworkId`.
+	pub fn builder(network_id: NetworkId) -> NetworkBuilder {
+		NetworkBuilder::new(network_id)
 	}
 }
 
@@ -98,6 +83,42 @@ impl Network {
 	}
 }
 
+impl Network {
+	async fn run(
+		network_id: NetworkId,
+		tags: BTreeSet<Tag>,
+		endpoint: Endpoint,
+		static_provider: StaticProvider,
+		bootstrap_peers: Vec<iroh::EndpointId>,
+		cancel: CancellationToken,
+	) -> Result<Self, Error> {
+		let me = Local::new(
+			endpoint,
+			network_id,
+			tags.into_iter(),
+			static_provider,
+			cancel,
+		);
+
+		// wait for the local peer to be online
+		me.online().await;
+
+		let mut streams = Streams::new(me.clone());
+		let mut discovery = Discovery::new(&me, bootstrap_peers);
+
+		let builder = Router::builder(me.endpoint().clone());
+		let builder = streams.attach(builder);
+		let builder = discovery.attach(builder);
+		let protocols = builder.spawn();
+
+		Ok(Self {
+			me,
+			discovery,
+			_protocols: protocols,
+		})
+	}
+}
+
 impl Future for Network {
 	type Output = ();
 
@@ -108,6 +129,7 @@ impl Future for Network {
 
 pub struct NetworkBuilder {
 	network_id: NetworkId,
+	tags: BTreeSet<Tag>,
 	endpoint_builder: iroh::endpoint::Builder,
 	static_provider: StaticProvider,
 	bootstrap_peers: Vec<iroh::EndpointAddr>,
@@ -124,6 +146,7 @@ impl NetworkBuilder {
 		let static_provider = StaticProvider::new();
 		Self {
 			network_id,
+			tags: BTreeSet::new(),
 			endpoint_builder: Endpoint::builder().discovery(static_provider.clone()),
 			static_provider,
 			bootstrap_peers: Vec::new(),
@@ -132,17 +155,22 @@ impl NetworkBuilder {
 	}
 
 	#[must_use]
-	pub fn with_bootstrap_peer(mut self, peer: iroh::EndpointAddr) -> Self {
-		self.bootstrap_peers.push(peer);
+	pub fn with_bootstrap_peer(
+		mut self,
+		peer: impl Into<iroh::EndpointAddr>,
+	) -> Self {
+		self.bootstrap_peers.push(peer.into());
 		self
 	}
 
 	#[must_use]
 	pub fn with_bootstrap_peers(
 		mut self,
-		peers: Vec<iroh::EndpointAddr>,
+		peers: Vec<impl Into<iroh::EndpointAddr>>,
 	) -> Self {
-		self.bootstrap_peers.extend(peers);
+		self
+			.bootstrap_peers
+			.extend(peers.into_iter().map(Into::into));
 		self
 	}
 
@@ -165,10 +193,26 @@ impl NetworkBuilder {
 		self
 	}
 
+	#[must_use]
+	pub fn with_tag(mut self, tag: Tag) -> Self {
+		self.tags.insert(tag);
+		self
+	}
+
+	#[must_use]
+	pub fn with_tags(
+		mut self,
+		tags: impl Iterator<Item = impl Into<Tag>>,
+	) -> Self {
+		self.tags.extend(tags.map(Into::into));
+		self
+	}
+
 	/// Builds and runs a new `Network` instance with the given `NetworkId`.
-	pub async fn build_and_run(self) -> Result<Network, Error> {
+	pub async fn build(self) -> Result<Network, Error> {
 		let Self {
 			network_id,
+			tags,
 			endpoint_builder,
 			static_provider,
 			bootstrap_peers,
@@ -179,6 +223,7 @@ impl NetworkBuilder {
 			.iter()
 			.map(|addr| addr.id)
 			.collect::<Vec<_>>();
+
 		for bootstrap_peer in bootstrap_peers {
 			static_provider.add_endpoint_info(bootstrap_peer);
 		}
@@ -190,6 +235,7 @@ impl NetworkBuilder {
 
 		Network::run(
 			network_id,
+			tags,
 			endpoint,
 			static_provider,
 			bootstrap_peer_ids,

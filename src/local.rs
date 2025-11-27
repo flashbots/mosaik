@@ -1,6 +1,6 @@
 use {
 	crate::{
-		prelude::{Datum, NetworkId, PeerInfo, SignedPeerInfo, StreamId},
+		prelude::{Datum, NetworkId, PeerInfo, SignedPeerInfo, StreamId, Tag},
 		streams::FanoutSink,
 	},
 	dashmap::{DashMap, Entry},
@@ -39,10 +39,13 @@ impl Local {
 	pub fn new(
 		endpoint: Endpoint,
 		network_id: NetworkId,
+		tags: impl Iterator<Item = Tag>,
 		static_provider: StaticProvider,
 		cancel: CancellationToken,
 	) -> Self {
-		let initial = PeerInfo::new(endpoint.addr()).sign(endpoint.secret_key());
+		let initial = PeerInfo::new(endpoint.addr())
+			.add_tags(tags)
+			.sign(endpoint.secret_key());
 
 		let sinks = DashMap::new();
 		let (info_tx, latest) = watch::channel(initial.clone());
@@ -148,6 +151,31 @@ impl Local {
 			.sinks
 			.get(stream_id)
 			.map(|entry| entry.value().clone())
+	}
+
+	/// Adds a tag to the local peer info and notifies watchers of the change.
+	/// If the tag already exists, no change is made.
+	pub fn add_tag(&self, tag: Tag) {
+		let latest = self.0.latest.borrow().clone();
+		if self.0.latest.borrow().tags().contains(&tag) {
+			return;
+		}
+		let updated = latest.info.add_tag(tag).sign(self.0.endpoint.secret_key());
+		let _ = self.0.info_tx.send(updated);
+	}
+
+	/// Removes a tag from the local peer info and notifies watchers of the
+	/// change. If the tag does not exist, no change is made.
+	pub fn remove_tag(&self, tag: &Tag) {
+		let latest = self.0.latest.borrow().clone();
+		if !self.0.latest.borrow().tags().contains(tag) {
+			return;
+		}
+		let updated = latest
+			.info
+			.remove_tag(tag)
+			.sign(self.0.endpoint.secret_key());
+		let _ = self.0.info_tx.send(updated);
 	}
 }
 

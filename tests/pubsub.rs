@@ -33,7 +33,7 @@ async fn api_design_auto_disc() {
 	n1.discovery().dial(n0.local().addr()).await.unwrap();
 	n2.discovery().dial(n0.local().addr()).await.unwrap();
 
-	p0.status().subscribed_at_least(2).await;
+	p0.status().subscribed().by_at_least(2).await;
 	p0.send(Data1("One".into())).await.unwrap();
 
 	let recv_c2a = c2a.next().await;
@@ -56,7 +56,7 @@ async fn api_design_manual_disc() -> anyhow::Result<()> {
 
 	full_manual_disco(&[&n0, &n1, &n2]);
 
-	p0_1.status().subscribed_at_least(2).await;
+	p0_1.status().subscribed().by_at_least(2).await;
 	p1_1.status().subscribed().await;
 	c1_1.status().subscribed().await;
 	c2_1.status().subscribed().await;
@@ -79,7 +79,7 @@ async fn api_design_manual_disc() -> anyhow::Result<()> {
 
 	full_manual_disco(&[&n1, &n2, &n3]);
 
-	c3_1.status().subscribed_at_least(2).await;
+	c3_1.status().subscribed().by_at_least(2).await;
 
 	c3_1.send(Data1("Five".into())).await?;
 

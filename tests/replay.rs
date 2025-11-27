@@ -110,7 +110,7 @@ async fn accumulator_api_design() -> anyhow::Result<()> {
 	// replay all accumulated state from p0_1 to c2_1
 	full_manual_disco(&[&n0, &n1, &n2]);
 	acc_c2_1.status().subscribed().await;
-	acc_p0_1.status().subscribed_at_least(2).await;
+	acc_p0_1.status().subscribed().by_at_least(2).await;
 
 	tracing::info!("c2_1 subscribed");
 
