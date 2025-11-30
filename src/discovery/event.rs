@@ -1,13 +1,7 @@
-use crate::PeerEntry;
+use super::{announce::Event as AnnounceEvent, sync::Event as SyncEvent};
 
 #[derive(Debug, Clone)]
 pub enum Event {
-	/// A new peer has been discovered.
-	PeerDiscovered(PeerEntry),
-
-	/// An existing peer has been updated.
-	PeerUpdated(PeerEntry),
-
-	/// A peer has been lost.
-	PeerLost(PeerEntry),
+	Announcement(AnnounceEvent),
+	CatalogSync(SyncEvent),
 }

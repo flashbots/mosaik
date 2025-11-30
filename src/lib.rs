@@ -1,3 +1,4 @@
+mod channel;
 mod discovery;
 mod groups;
 mod id;
@@ -6,6 +7,7 @@ mod streams;
 
 pub use {
 	discovery::{
+		AnnounceEvent,
 		Catalog,
 		Config as DiscoveryConfig,
 		ConfigBuilder as DiscoveryConfigBuilder,
@@ -13,7 +15,9 @@ pub use {
 		Error as DiscoveryError,
 		Event as DiscoveryEvent,
 		PeerEntry,
+		PeerEntryVersion,
 		SignedPeerEntry,
+		SyncEvent,
 	},
 	groups::*,
 	id::*,

@@ -1,9 +1,17 @@
 use {
-	crate::{LocalNode, PeerId, ProtocolProvider},
-	iroh::protocol::RouterBuilder,
+	crate::{
+		LocalNode,
+		PeerId,
+		ProtocolProvider,
+		discovery::{announce::Announce, worker::WorkerCommand},
+	},
+	iroh::{
+		endpoint::Connection,
+		protocol::{AcceptError, ProtocolHandler, RouterBuilder},
+	},
 	std::sync::Arc,
 	sync::CatalogSync,
-	tokio::sync::{broadcast, watch},
+	tokio::sync::{broadcast, mpsc::UnboundedSender, watch},
 	worker::{Handle, WorkerLoop},
 };
 
@@ -18,22 +26,24 @@ mod worker;
 
 /// Public Discovery API exports
 pub use {
+	announce::Event as AnnounceEvent,
 	catalog::Catalog,
 	config::{Config, ConfigBuilder},
-	entry::{PeerEntry, SignedPeerEntry},
+	entry::{PeerEntry, PeerEntryVersion, SignedPeerEntry},
 	error::Error,
 	event::Event,
+	sync::Event as SyncEvent,
 };
 
 /// The discovery system for a Mosaik network.
 ///
 /// The discovery system is composed of two main protocols:
 ///
-/// - A gossip announcement protocol that peers use to broadcast their presence
-///   and changes to their own state and metadata.
+/// - The announcement protocol that peers use to broadcast their presence and
+///   changes to their own state and metadata in real time as they happen.
 ///
-/// - A catalog synchronization protocol that peers use to exchange and
-///   synchronize their catalogs of known peers and their associated metadata.
+/// - The synchronization protocol that peers use to exchange and synchronize
+///   their catalogs of known peers and their associated metadata.
 ///
 /// - The discovery system maintains a local catalog of known peers and their
 ///   metadata, which is updated through gossip messages and catalog syncs.
@@ -45,17 +55,12 @@ pub struct Discovery(Arc<Handle>);
 
 /// Public API
 impl Discovery {
-	/// ALPN protocol identifier for the gossip protocol.
-	///
-	/// We're overriding `iroh_gossip`'s default ALPN to use our own namespace.
-	const ALPN_GOSSIP: &[u8] = b"/mosaik/gossip/1";
-
-	/// Dials the given peer to initiate a connection and discovery process.
+	/// Dials the given peers to initiate connections and discovery processes.
 	///
 	/// This is an async and best-effort operation; there is no guarantee that the
-	/// dial will succeed or that the peer is online.
-	pub async fn dial(&self, peer: PeerId) {
-		self.0.dial(peer).await;
+	/// dial will succeed or that the peers are online.
+	pub async fn dial(&self, peers: impl IntoIterator<Item = PeerId>) {
+		self.0.dial(peers).await;
 	}
 
 	/// Returns a snapshot of the current peers catalog.
@@ -107,8 +112,43 @@ impl Discovery {
 // Add all gossip ALPNs to the protocol router
 impl ProtocolProvider for Discovery {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
+		let announce = Acceptor {
+			name: Announce::ALPN,
+			variant_fn: WorkerCommand::AcceptAnnounce,
+			tx: self.0.commands.clone(),
+		};
+
+		let catalog_sync = Acceptor {
+			name: CatalogSync::ALPN,
+			variant_fn: WorkerCommand::AcceptCatalogSync,
+			tx: self.0.commands.clone(),
+		};
+
 		protocols
-			.accept(Self::ALPN_GOSSIP, self.0.gossip.clone())
-			.accept(CatalogSync::ALPN, self.0.sync.clone())
+			.accept(announce.name, announce)
+			.accept(catalog_sync.name, catalog_sync)
+	}
+}
+
+struct Acceptor {
+	name: &'static [u8],
+	variant_fn: fn(Connection) -> WorkerCommand,
+	tx: UnboundedSender<WorkerCommand>,
+}
+
+impl core::fmt::Debug for Acceptor {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		// SAFETY: ALPNs are always valid UTF-8 hardcoded at compile time
+		write!(f, "Discovery({})", unsafe {
+			str::from_utf8_unchecked(self.name)
+		})
+	}
+}
+
+impl ProtocolHandler for Acceptor {
+	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+		let command = (self.variant_fn)(connection);
+		let _ = self.tx.send(command);
+		Ok(())
 	}
 }

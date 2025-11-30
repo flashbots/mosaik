@@ -1,6 +1,6 @@
 use {
 	super::{PeerEntry, SignedPeerEntry},
-	crate::PeerId,
+	crate::{LocalNode, PeerId},
 };
 
 /// A catalog of discovered nodes and their associated peer info.
@@ -36,21 +36,70 @@ use {
 ///
 /// - The catalog does not provide a public API for constructing new instances;
 ///   they are created and owned by the discovery system internally.
+///
+/// - The catalog is the source of truth about the local node's own peer entry.
+///   The local node's peer entry is always present in the catalog and can be
+///   accessed via the public API.
+///
+/// - The local node's peer entry is always signed. Inserting an unsigned local
+///   peer entry is not allowed.
+///
+/// - Signed entries have precedence over unsigned entries when a signed entry
+///   is inserted into the catalog for a peer that already has an unsigned entry
+///   with the same peer ID then the unsigned entry is removed.
 #[derive(Debug, Clone)]
 pub struct Catalog {
+	/// The local node's peer ID.
+	///
+	/// This is used to exclude the local node from queries.
+	local_id: PeerId,
+
 	/// Entries with valid signatures by their authors.
 	///
 	/// Those entries are synced with other peers.
-	pub(super) signed: im::OrdMap<PeerId, SignedPeerEntry>,
+	signed: im::OrdMap<PeerId, SignedPeerEntry>,
 
 	/// Entries without signatures.
 	///
 	/// Those entries are local only and not synced with other peers.
-	pub(super) unsigned: im::OrdMap<PeerId, PeerEntry>,
+	unsigned: im::OrdMap<PeerId, PeerEntry>,
 }
 
 /// Public Read API
 impl Catalog {
+	/// Returns an iterator over all peer entries in the catalog excluding the
+	/// local peer entry.
+	///
+	/// The iterator yields both signed and unsigned entries, with signed entries
+	/// being the first to be returned.
+	pub fn peers(&self) -> impl DoubleEndedIterator<Item = &PeerEntry> {
+		self
+			.signed
+			.values()
+			.map(|signed| signed.as_ref())
+			.chain(self.unsigned.values())
+			.filter(|p| *p.id() != self.local_id)
+	}
+
+	/// Returns an iterator over all peer entries that carry a valid signature in
+	/// the catalog excluding the local peer entry.
+	pub fn signed_peers(&self) -> impl DoubleEndedIterator<Item = &PeerEntry> {
+		self
+			.signed
+			.values()
+			.map(|signed| signed.as_ref())
+			.filter(|p: &&PeerEntry| *p.id() != self.local_id)
+	}
+
+	/// Returns an iterator over all peer entries that do not carry a signature in
+	/// the catalog excluding the local peer entry.
+	pub fn unsigned_peers(&self) -> impl DoubleEndedIterator<Item = &PeerEntry> {
+		self
+			.unsigned
+			.values()
+			.filter(|p: &&PeerEntry| *p.id() != self.local_id)
+	}
+
 	/// Returns an iterator over all peer entries in the catalog.
 	///
 	/// The iterator yields both signed and unsigned entries, with signed entries
@@ -74,22 +123,149 @@ impl Catalog {
 			.or_else(|| self.unsigned.get(peer_id))
 	}
 
-	/// Returns the number of peer entries in the catalog.
-	pub fn len(&self) -> usize {
-		self.signed.len() + self.unsigned.len()
+	/// Returns a reference to the signed peer entry for the given peer ID, if it
+	/// exists.
+	pub fn get_signed(&self, peer_id: &PeerId) -> Option<&SignedPeerEntry> {
+		self.signed.get(peer_id)
 	}
 
-	/// Returns true if the catalog is empty.
-	pub fn is_empty(&self) -> bool {
-		self.signed.is_empty() && self.unsigned.is_empty()
+	/// Returns a reference to the local peer entry, if it exists.
+	pub fn local(&self) -> &SignedPeerEntry {
+		self
+			.get_signed(&self.local_id)
+			.expect("local peer entry always exists")
+	}
+
+	/// Returns the number of peer entries in the catalog, i.e. all entries - the
+	/// local peer entry.
+	pub fn peers_count(&self) -> usize {
+		self.signed.len() + self.unsigned.len() - 1
 	}
 }
 
+/// Internal mutation API
 impl Catalog {
-	pub(super) fn new() -> Self {
+	/// Creates a new catalog instance with the local node's peer entry as the
+	/// first and only entry.
+	pub(super) fn new(local: &LocalNode) -> Self {
+		let local_entry = PeerEntry::new(local.addr().clone())
+			.sign(local.secret_key())
+			.expect("signing local peer entry failed.");
+
+		let mut signed = im::OrdMap::new();
+		signed.insert(local.id(), local_entry);
+
 		Self {
-			signed: im::OrdMap::new(),
+			local_id: local.id(),
+			signed,
 			unsigned: im::OrdMap::new(),
 		}
+	}
+
+	/// Inserts or updates a signed peer entry in the catalog.
+	///
+	/// If the catalog already contains a signed entry for this peer with a higher
+	/// version number, then the insertion is rejected and a reference to the
+	/// existing entry is returned as an error.
+	///
+	/// This method also removes any existing unsigned entry for the same peer ID.
+	pub(super) fn upsert_signed(
+		&mut self,
+		entry: SignedPeerEntry,
+	) -> Result<(), &SignedPeerEntry> {
+		self.unsigned.remove(entry.id());
+		match self.signed.entry(*entry.id()) {
+			im::ordmap::Entry::Occupied(mut existing) => {
+				let existing_version = existing.get().version();
+				if entry.version() > existing_version {
+					existing.insert(entry);
+					Ok(())
+				} else {
+					Err(self.signed.get(entry.id()).expect("entry exists"))
+				}
+			}
+			im::ordmap::Entry::Vacant(vacant) => {
+				vacant.insert(entry);
+				Ok(())
+			}
+		}
+	}
+
+	/// Inserts an unsigned peer entry in the catalog.
+	///
+	/// This method does not follow versioning semantics since unsigned entries
+	/// are not authoritative.
+	///
+	/// This method does nothing if there is already a signed entry for the same
+	/// peer ID.
+	///
+	/// Inserting the local peer entry is not allowed and always returns `false`.
+	pub(super) fn insert_unsigned(&mut self, entry: PeerEntry) -> bool {
+		if entry.id() == &self.local_id {
+			return false;
+		}
+
+		if !self.signed.contains_key(entry.id()) {
+			self.unsigned.insert(*entry.id(), entry);
+			return true;
+		}
+
+		false
+	}
+
+	/// Removes all entries (signed and unsigned) for the given peer ID.
+	/// Returns the removed unsigned entry if it existed.
+	///
+	/// Removing the local peer entry is not allowed and always returns `None`.
+	pub(super) fn remove(&mut self, peer_id: &PeerId) -> Option<PeerEntry> {
+		if peer_id == &self.local_id {
+			return None;
+		}
+
+		if let Some(existing) = self.signed.remove(peer_id) {
+			return Some(existing.into());
+		}
+
+		self.unsigned.remove(peer_id)
+	}
+
+	/// Removes the signed entry for the given peer ID.
+	/// Returns the removed signed entry if it existed.
+	/// Removing the local peer entry is not allowed and always returns `None`.
+	pub(super) fn remove_signed(
+		&mut self,
+		peer_id: &PeerId,
+	) -> Option<SignedPeerEntry> {
+		if peer_id == &self.local_id {
+			return None;
+		}
+		self.signed.remove(peer_id)
+	}
+
+	/// Removes the unsigned entry for the given peer ID.
+	/// Returns the removed unsigned entry if it existed.
+	pub(super) fn remove_unsigned(
+		&mut self,
+		peer_id: &PeerId,
+	) -> Option<PeerEntry> {
+		self.unsigned.remove(peer_id)
+	}
+
+	/// Clears all entries from the catalog except for the local peer entry.
+	pub(super) fn clear(&mut self) {
+		let local_entry = self
+			.signed
+			.get(&self.local_id)
+			.expect("local peer entry always exists")
+			.clone();
+
+		self.signed.clear();
+		self.signed.insert(self.local_id, local_entry);
+		self.unsigned.clear();
+	}
+
+	/// Clears all unsigned entries from the catalog.
+	pub(super) fn clear_unsigned(&mut self) {
+		self.unsigned.clear();
 	}
 }

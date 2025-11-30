@@ -3,6 +3,7 @@ use {
 	iroh::{Endpoint, EndpointAddr},
 	std::{fmt, sync::Arc},
 	tokio::sync::SetOnce,
+	tokio_util::sync::CancellationToken,
 };
 
 /// This type represents the local node in the Mosaik network.
@@ -72,6 +73,7 @@ impl LocalNode {
 			network_id,
 			endpoint,
 			ready_signal: SetOnce::new(),
+			termination: CancellationToken::new(),
 		}))
 	}
 
@@ -80,6 +82,16 @@ impl LocalNode {
 	/// operating and have been installed in the protocol router.
 	pub(crate) fn mark_ready(&self) {
 		let _ = self.0.ready_signal.set(());
+	}
+
+	/// Returns a reference to the cancellation token that is triggered when
+	/// the running network instance is being shut down or has unrecoverable
+	/// failure.
+	///
+	/// Anything with access to this token can use it to shut down the network
+	/// instance gracefully and all its associated protocols.
+	pub(crate) fn termination(&self) -> &CancellationToken {
+		&self.0.termination
 	}
 }
 
@@ -118,4 +130,8 @@ struct Inner {
 	/// A signal that is set when the local node is done initializing all its
 	/// protocols and is ready to accept connections from remote peers.
 	ready_signal: SetOnce<()>,
+
+	/// Cancellation token that is triggered when the running network instance is
+	/// being shut down or has unrecoverable failure.
+	termination: CancellationToken,
 }

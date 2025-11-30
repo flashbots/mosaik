@@ -7,6 +7,8 @@ use {
 	std::collections::BTreeSet,
 };
 
+pub type PeerEntryVersion = u64;
+
 /// Stores information about a peer in the network.
 ///
 /// Notes:
@@ -28,7 +30,7 @@ use {
 ///   received from other peers during discovery and catalog sync.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PeerEntry {
-	version: u64,
+	version: PeerEntryVersion,
 	address: EndpointAddr,
 	tags: BTreeSet<Tag>,
 	streams: BTreeSet<StreamId>,
@@ -89,7 +91,7 @@ impl PeerEntry {
 			address,
 			tags: BTreeSet::new(),
 			streams: BTreeSet::new(),
-			version: 1,
+			version: 0,
 		}
 	}
 
@@ -202,6 +204,13 @@ impl PeerEntry {
 ///   `PeerEntry`.
 #[derive(Debug, Clone, Serialize, Deref, AsRef, Into, PartialEq)]
 pub struct SignedPeerEntry(#[deref] PeerEntry, Signature);
+
+impl SignedPeerEntry {
+	/// Consumes the `SignedPeerEntry`, returning the inner `PeerEntry`.
+	pub fn unsigned(self) -> PeerEntry {
+		self.0
+	}
+}
 
 impl SignedPeerEntry {
 	/// Verifies the signature of the `SignedPeerEntry`, returning true if

@@ -26,7 +26,7 @@ exclude = [".github/"]
 
 [workspace.lints.rust]
 type_alias_bounds = "allow"
-unreachable_pub = "deny"
+#unreachable_pub = "deny"
 
 [workspace.lints.clippy]
 tabs_in_doc_comments = "allow"

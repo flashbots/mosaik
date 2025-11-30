@@ -1,15 +1,15 @@
 use {
-	super::{Catalog, CatalogSync, Config, Discovery, Error, Event},
-	crate::{LocalNode, PeerEntry},
-	bincode::{config::standard, serde::encode_to_vec},
-	futures::StreamExt,
-	im::ordmap,
-	iroh::endpoint::Connection,
-	iroh_gossip::{
-		Gossip,
-		TopicId,
-		api::{ApiError as GossipError, Event as GossipEvent, GossipTopic},
+	super::{
+		Catalog,
+		Config,
+		Error,
+		Event,
+		announce::Announce,
+		sync::CatalogSync,
 	},
+	crate::{LocalNode, PeerEntry, PeerId},
+	futures::StreamExt,
+	iroh::{Watcher, endpoint::Connection, protocol::DynProtocolHandler},
 	tokio::{
 		sync::{
 			broadcast,
@@ -33,16 +33,17 @@ pub(super) struct Handle {
 	pub catalog: watch::Receiver<Catalog>,
 	pub events: broadcast::Receiver<Event>,
 	pub commands: UnboundedSender<WorkerCommand>,
-	pub gossip: Gossip,
-	pub sync: CatalogSync,
 	pub task: JoinHandle<Result<(), Error>>,
 }
 
 impl Handle {
 	/// Sends a command to dial a peer with the given `PeerId`
-	pub(super) async fn dial(&self, peer: crate::PeerId) {
+	pub(super) async fn dial(&self, peers: impl IntoIterator<Item = PeerId>) {
 		let (tx, rx) = oneshot::channel();
-		self.commands.send(WorkerCommand::DialPeer(peer, tx)).ok();
+		self
+			.commands
+			.send(WorkerCommand::DialPeers(peers.into_iter().collect(), tx))
+			.ok();
 		let _ = rx.await;
 	}
 
@@ -69,10 +70,9 @@ impl Handle {
 ///
 /// Interactions with the worker loop are done through the [`Handle`] struct.
 pub(super) struct WorkerLoop {
-	config: Config,
 	local: LocalNode,
-	gossip: Gossip,
 	sync: CatalogSync,
+	announce: Announce,
 	catalog: watch::Sender<Catalog>,
 	events: broadcast::Sender<Event>,
 	commands: UnboundedReceiver<WorkerCommand>,
@@ -83,21 +83,17 @@ impl WorkerLoop {
 	/// Returns a handle to interact with the worker loop. This is called from
 	/// the `Discovery::new` method.
 	pub(super) fn spawn(local: LocalNode, config: Config) -> Handle {
-		let (events_tx, events_rx) = broadcast::channel(config.events_backlog);
-		let (catalog_tx, catalog_rx) = watch::channel(Catalog::new());
+		let (catalog_tx, catalog_rx) = watch::channel(Catalog::new(&local));
 		let (commands_tx, commands_rx) = unbounded_channel();
+		let (events_tx, events_rx) = broadcast::channel(config.events_backlog);
 
-		let gossip = Gossip::builder()
-			.alpn(Discovery::ALPN_GOSSIP)
-			.spawn(local.endpoint().clone());
-
-		let sync = CatalogSync::new(local.clone(), catalog_tx.subscribe());
+		let sync = CatalogSync::new(local.clone(), catalog_rx.clone());
+		let announce = Announce::new(local.clone(), &config, catalog_rx.clone());
 
 		let worker = Self {
-			config,
 			local,
-			gossip: gossip.clone(),
-			sync: sync.clone(),
+			sync,
+			announce,
 			catalog: catalog_tx,
 			events: events_tx,
 			commands: commands_rx,
@@ -111,8 +107,6 @@ impl WorkerLoop {
 			catalog: catalog_rx,
 			events: events_rx,
 			commands: commands_tx,
-			gossip,
-			sync,
 			task,
 		}
 	}
@@ -124,177 +118,114 @@ impl WorkerLoop {
 		// and addresses resolved
 		self.local.online().await;
 
-		// join the gossip topic
-		let mut topic = self.join_gossip_topic().await?;
-
-		// initialize the local peer entry in the catalog
-		let initial_local_entry =
-			PeerEntry::new(self.local.addr()).add_tags(self.config.tags.clone());
-
-		self
-			.update_local_peer_entry(|_| initial_local_entry, &mut topic)
-			.await?;
+		// watch for local address changes, this will also trigger the first
+		// local peer entry update
+		let mut addr_change = self.local.endpoint().watch_addr().stream();
 
 		loop {
 			tokio::select! {
-				// Gossip events
-				event = topic.next() => {
-					match event {
-						None | Some(Err(GossipError::Closed { .. })) => {
-							// topic connection dropped, re-join
-							tracing::warn!(
-								network = %self.local.network_id(),
-								"Gossip topic connection closed, re-joining"
-							);
+				// Network graceful termination signal
+				_ = self.local.termination().cancelled() => {
+					info!("Discovery worker loop terminating");
+					return Ok(());
+				}
 
-							topic = self.join_gossip_topic().await?;
-						},
-						Some(Err(e)) => {
-							tracing::warn!(
-								network = %self.local.network_id(),
-								"Gossip topic error: {e}"
-							);
-						},
-						Some(Ok(event)) => {
-							self.on_gossip_event(event, &mut topic).await?;
-						}
-					}
+				// Announcement protocol events
+				Some(event) = self.announce.events().recv() => {
+					tracing::info!("Discovery announce event: {event:?}");
+					self.events.send(Event::Announcement(event)).ok();
+				}
+
+				// Catalog sync protocol events
+				Some(event) = self.sync.events().recv() => {
+					tracing::info!("Discovery catalog sync event: {event:?}");
+					self.events.send(Event::CatalogSync(event)).ok();
 				}
 
 				// External commands from the handle
 				Some(command) = self.commands.recv() => {
-					tracing::info!("Discovery worker received command");
-					self.on_external_command(command, &mut topic).await?;
+					self.on_external_command(command).await?;
+				}
+
+				// observe local transport-level address changes
+				Some(addr) = addr_change.next() => {
+					tracing::info!("Local node address updated to {addr:?}");
+					self.update_local_peer_entry(|entry| {
+						entry.update_address(addr.clone())
+							.expect("peer id changed for local node.")
+					});
 				}
 			}
 		}
-	}
-
-	/// Initializes the gossip topic for discovery.
-	///
-	/// This joins an iroh-gossip topic based on the network ID.
-	async fn join_gossip_topic(&self) -> Result<GossipTopic, Error> {
-		let topic_id: TopicId = self.local.network_id().into();
-		let bootstrap = self.config.bootstrap_peers.clone();
-		let topic = self.gossip.subscribe(topic_id, bootstrap).await?;
-		Ok(topic)
-	}
-
-	/// Handle gossip-level events
-	async fn on_gossip_event(
-		&mut self,
-		event: GossipEvent,
-		topic: &mut GossipTopic,
-	) -> Result<(), Error> {
-		tracing::info!("Received gossip event: {event:?}");
-		match event {
-			GossipEvent::NeighborUp(_) => {
-				self.broadcast_self_info(topic).await?;
-			}
-			e => info!(
-				event = ?e,
-				network = %self.local.network_id(),
-				"Gossip Event"
-			),
-		};
-		Ok(())
 	}
 
 	/// Handle commands sent from the discovery handle
 	async fn on_external_command(
 		&mut self,
 		command: WorkerCommand,
-		topic: &mut GossipTopic,
 	) -> Result<(), Error> {
 		match command {
-			WorkerCommand::DialPeer(peer_id, resp) => {
-				tracing::info!("Dialing peer {peer_id}");
+			WorkerCommand::DialPeers(peers, resp) => {
+				tracing::info!("Dialing peers {peers:?}");
+				self.announce.dial(peers);
 				let _ = resp.send(());
 			}
 			WorkerCommand::UpdateLocalPeerEntry(update_fn, resp) => {
-				self.update_local_peer_entry(update_fn, topic).await?;
+				self.update_local_peer_entry(update_fn);
 				let _ = resp.send(());
 			}
 			WorkerCommand::AcceptCatalogSync(_) => {
 				tracing::info!("Accepting catalog sync connection");
+			}
+			WorkerCommand::AcceptAnnounce(connection) => {
+				tracing::info!(
+					"Accepting announce connection from {}",
+					connection.remote_id()
+				);
+
+				if let Err(e) = self.announce.protocol().accept(connection).await {
+					tracing::warn!("{e}");
+				}
 			}
 		}
 		Ok(())
 	}
 
 	/// Updates the local peer entry using the provided update function.
-	/// And updates the catalog watch with the latest version of the catalog.
-	async fn update_local_peer_entry(
+	///
+	/// The effects of this update are:
+	/// - The local peer entry in the catalog is updated.
+	/// - The catalog watch channel is notified of the change.
+	/// - The announcement protocol will pick up the change and broadcast the
+	///   updated entry immediately to all peers.
+	fn update_local_peer_entry(
 		&mut self,
 		update: impl FnOnce(PeerEntry) -> PeerEntry,
-		topic: &mut GossipTopic,
-	) -> Result<(), Error> {
-		let mut catalog = self.catalog.borrow().clone();
-		let updated = match catalog.signed.entry(self.local.id()) {
-			ordmap::Entry::Occupied(mut entry) => {
-				let current: PeerEntry = (**entry.get()).clone();
-				let current_version = current.version();
-				let next = update(current);
-				if next.version() > current_version {
-					entry.insert(next.sign(self.local.secret_key())?);
-					true
-				} else {
-					false
-				}
-			}
-			ordmap::Entry::Vacant(entry) => {
-				let new = PeerEntry::new(self.local.endpoint().addr().clone());
-				let next = update(new);
-				entry.insert(next.sign(self.local.secret_key())?);
-				true
-			}
-		};
+	) {
+		self.catalog.send_modify(|catalog| {
+			let local_entry = catalog.local().clone();
+			let updated_entry = update(local_entry.into());
+			let signed_updated_entry = updated_entry
+				.sign(self.local.secret_key())
+				.expect("signing updated local peer entry failed.");
 
-		if updated {
-			// The new local entry has been updated, broadcast it to the network
-			// and update the catalog watch
-			self.broadcast_self_info(topic).await?;
-			self
-				.catalog
-				.send(catalog)
-				.expect("Catalog watch receiver dropped");
-		}
-
-		Ok(())
-	}
-
-	/// Broadcasts the local peer entry to the gossip topic.
-	async fn broadcast_self_info(
-		&self,
-		topic: &mut GossipTopic,
-	) -> Result<(), Error> {
-		if !topic.is_joined() {
-			return Ok(());
-		}
-
-		let catalog = self.catalog.borrow().clone();
-		if let Some(my_info) = catalog.signed.get(&self.local.id()) {
-			topic
-				.broadcast(
-					encode_to_vec(my_info, standard())
-						.expect("Encoding failed")
-						.into(),
-				)
-				.await?;
-
-			info!(
-				info = ?my_info,
+			tracing::info!(
+				info = ?signed_updated_entry,
 				network = %self.local.network_id(),
-				"Broadcasted local peer entry"
+				"Updating local peer entry in catalog"
 			);
-		}
-		Ok(())
+
+			assert!(
+				catalog.upsert_signed(signed_updated_entry).is_ok(),
+				"local peer info versioning error. this is a bug."
+			);
+		});
 	}
 }
 
 pub(super) enum WorkerCommand {
 	/// Dial a peer with the given PeerId
-	DialPeer(crate::PeerId, oneshot::Sender<()>),
+	DialPeers(Vec<crate::PeerId>, oneshot::Sender<()>),
 
 	/// Update the local peer entry using the provided PeerEntry
 	UpdateLocalPeerEntry(
@@ -302,6 +233,9 @@ pub(super) enum WorkerCommand {
 		oneshot::Sender<()>,
 	),
 
-	/// Accept an incoming CatalogSync connection from a remote peer
+	/// Accept an incoming CatalogSync protocol connection from a remote peer
 	AcceptCatalogSync(Connection),
+
+	/// Accept an incoming Announce protocol connection from a remote peer
+	AcceptAnnounce(Connection),
 }

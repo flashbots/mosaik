@@ -6,23 +6,41 @@ use {
 		endpoint::Connection,
 		protocol::{AcceptError, ProtocolHandler},
 	},
-	tokio::sync::watch,
+	tokio::sync::{mpsc::UnboundedReceiver, watch},
 };
 
-#[derive(Clone)]
+mod driver;
+mod event;
+
+pub use event::Event;
+
 pub(super) struct CatalogSync {
 	local: LocalNode,
 	catalog: watch::Receiver<Catalog>,
+	events: UnboundedReceiver<Event>,
 }
 
 impl CatalogSync {
-	pub(super) const ALPN: &'static [u8] = b"/mosaik/discovery/1";
+	pub(super) const ALPN: &'static [u8] = b"/mosaik/discovery/sync/1";
 
 	pub(super) fn new(
 		local: LocalNode,
 		catalog: watch::Receiver<Catalog>,
 	) -> Self {
-		Self { local, catalog }
+		let (_, events) = tokio::sync::mpsc::unbounded_channel();
+		Self {
+			local,
+			catalog,
+			events,
+		}
+	}
+
+	/// Returns a mutable reference to the events receiver.
+	///
+	/// This is polled by the discovery worker to process incoming events from the
+	/// announcement protocol.
+	pub(super) const fn events(&mut self) -> &mut UnboundedReceiver<Event> {
+		&mut self.events
 	}
 }
 
