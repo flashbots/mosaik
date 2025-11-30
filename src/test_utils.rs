@@ -12,7 +12,8 @@ fn init_test_logging() {
 			_ => return,
 		};
 
-		let prefix_blacklist: &[&'static str] = &[];
+		let prefix_blacklist: &[&'static str] =
+			&["iroh::magicsock", "iroh::net_report"];
 
 		let _ = tracing_subscriber::registry()
 			.with(tracing_subscriber::fmt::layer())
@@ -23,5 +24,13 @@ fn init_test_logging() {
 						.any(|prefix| metadata.target().starts_with(prefix))
 			}))
 			.try_init();
+
+		// Set a custom panic hook that prints and aborts
+		let default_hook = std::panic::take_hook();
+		std::panic::set_hook(Box::new(move |panic_info| {
+			default_hook(panic_info);
+			tracing::error!("panic: {panic_info:?}");
+			std::process::abort();
+		}));
 	}
 }

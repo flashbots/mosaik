@@ -8,6 +8,7 @@ use {
 		SecretKey,
 		Streams,
 		discovery,
+		groups,
 		streams,
 	},
 	core::net::SocketAddr,
@@ -55,6 +56,12 @@ pub struct NetworkConfig {
 	/// See [`streams::Config`] for details.
 	#[builder(default = "streams::Config::builder().build().unwrap()")]
 	streams: streams::Config,
+
+	/// Configuration options for the groups subsystem.
+	///
+	/// See [`groups::Config`] for details.
+	#[builder(default = "groups::Config::builder().build().unwrap()")]
+	groups: groups::Config,
 }
 
 impl NetworkBuilder {
@@ -80,7 +87,8 @@ impl NetworkBuilder {
 		protocols = streams.install(protocols);
 
 		// groups
-		let groups = Groups::new(local.clone(), discovery.clone());
+		let config = compiled.groups;
+		let groups = Groups::new(local.clone(), discovery.clone(), config);
 		protocols = groups.install(protocols);
 
 		// finalize router it will route incoming connections to protocols

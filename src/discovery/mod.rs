@@ -70,7 +70,7 @@ impl Discovery {
 
 	/// Returns a watch receiver that can be used to monitor changes to the
 	/// peers catalog.
-	pub fn catalog_watcher(&self) -> watch::Receiver<Catalog> {
+	pub fn catalog_watch(&self) -> watch::Receiver<Catalog> {
 		self.0.catalog.clone()
 	}
 
@@ -105,7 +105,7 @@ impl Discovery {
 		&self,
 		update: impl FnOnce(PeerEntry) -> PeerEntry + Send + 'static,
 	) {
-		self.0.update_local_peer_entry(Box::new(update)).await;
+		self.0.update_local_peer_entry(update).await;
 	}
 }
 

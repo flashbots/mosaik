@@ -29,11 +29,19 @@ async fn peers_have_consistent_maps() -> anyhow::Result<()> {
 		nodes.push(node);
 	}
 
-	loop {
-		tokio::time::sleep(Duration::from_secs(10)).await;
+	for _ in 0..10 {
+		tokio::time::sleep(Duration::from_secs(3)).await;
 
 		for node in &nodes {
-			info!("Peer {} knows about - peers", node.local().id(),);
+			let catalog = node.discovery().catalog();
+			info!(
+				"Peer {} knows about {} peers",
+				node.local().id(),
+				catalog.peers_count()
+			);
 		}
+		info!("---");
 	}
+
+	Ok(())
 }

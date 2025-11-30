@@ -4,7 +4,8 @@ use {
 		Config,
 		Error,
 		Event,
-		announce::Announce,
+		announce::{self, Announce},
+		catalog::UpsertResult,
 		sync::CatalogSync,
 	},
 	crate::{LocalNode, PeerEntry, PeerId},
@@ -19,7 +20,6 @@ use {
 		},
 		task::JoinHandle,
 	},
-	tracing::info,
 };
 
 /// Discovery worker handle
@@ -125,20 +125,20 @@ impl WorkerLoop {
 		loop {
 			tokio::select! {
 				// Network graceful termination signal
-				_ = self.local.termination().cancelled() => {
-					info!("Discovery worker loop terminating");
+				() = self.local.termination().cancelled() => {
+					tracing::info!("Discovery worker loop terminating");
 					return Ok(());
 				}
 
 				// Announcement protocol events
 				Some(event) = self.announce.events().recv() => {
-					tracing::info!("Discovery announce event: {event:?}");
-					self.events.send(Event::Announcement(event)).ok();
+					tracing::debug!(event = ?event, "Discovery announce event");
+					self.on_announce_event(event);
 				}
 
 				// Catalog sync protocol events
 				Some(event) = self.sync.events().recv() => {
-					tracing::info!("Discovery catalog sync event: {event:?}");
+					tracing::debug!(event = ?event, "Discovery catalog sync event");
 					self.events.send(Event::CatalogSync(event)).ok();
 				}
 
@@ -149,7 +149,7 @@ impl WorkerLoop {
 
 				// observe local transport-level address changes
 				Some(addr) = addr_change.next() => {
-					tracing::info!("Local node address updated to {addr:?}");
+					tracing::debug!(addr = ?addr, "Local node address updated");
 					self.update_local_peer_entry(|entry| {
 						entry.update_address(addr.clone())
 							.expect("peer id changed for local node.")
@@ -178,17 +178,74 @@ impl WorkerLoop {
 				tracing::info!("Accepting catalog sync connection");
 			}
 			WorkerCommand::AcceptAnnounce(connection) => {
-				tracing::info!(
-					"Accepting announce connection from {}",
-					connection.remote_id()
+				let peer_id = connection.remote_id();
+
+				tracing::trace!(
+					peer_id = %peer_id,
+					network = %self.local.network_id(),
+					"Accepting announce connection",
 				);
 
 				if let Err(e) = self.announce.protocol().accept(connection).await {
-					tracing::warn!("{e}");
+					tracing::warn!(
+						error = %e,
+						peer_id = %peer_id,
+						network = %self.local.network_id(),
+						"Failed to accept announce connection"
+					);
 				}
 			}
 		}
 		Ok(())
+	}
+
+	/// Handles events emitted by the announce protocol when receiving peer
+	/// entries over gossip
+	fn on_announce_event(&mut self, event: announce::Event) {
+		match event {
+			announce::Event::PeerEntryReceived(signed_peer_entry) => {
+				tracing::info!(
+					info = ?signed_peer_entry,
+					network = %self.local.network_id(),
+					"Received peer entry via discovery announcement"
+				);
+
+				// Update the catalog with the received peer entry
+				self.catalog.send_modify(|catalog| {
+					match catalog.upsert_signed(signed_peer_entry) {
+						UpsertResult::New(signed_peer_entry) => {
+							tracing::info!(
+								info = ?signed_peer_entry,
+								network = %self.local.network_id(),
+								"New peer discovered"
+							);
+							self
+								.events
+								.send(Event::PeerDiscovered(signed_peer_entry.clone().into()))
+								.ok();
+						}
+						UpsertResult::Updated(signed_peer_entry) => {
+							tracing::info!(
+								info = ?signed_peer_entry,
+								network = %self.local.network_id(),
+								"Peer updated via discovery"
+							);
+							self
+								.events
+								.send(Event::PeerUpdated(signed_peer_entry.clone().into()))
+								.ok();
+						}
+						UpsertResult::Rejected(signed_peer_entry) => {
+							tracing::debug!(
+								current = ?signed_peer_entry,
+								network = %self.local.network_id(),
+								"Stale peer update rejected via discovery"
+							);
+						}
+					};
+				});
+			}
+		}
 	}
 
 	/// Updates the local peer entry using the provided update function.
@@ -224,10 +281,10 @@ impl WorkerLoop {
 }
 
 pub(super) enum WorkerCommand {
-	/// Dial a peer with the given PeerId
+	/// Dial a peer with the given `PeerId`s
 	DialPeers(Vec<crate::PeerId>, oneshot::Sender<()>),
 
-	/// Update the local peer entry using the provided PeerEntry
+	/// Update the local peer entry using the provided `PeerEntry` update function
 	UpdateLocalPeerEntry(
 		Box<dyn FnOnce(PeerEntry) -> PeerEntry + Send>,
 		oneshot::Sender<()>,

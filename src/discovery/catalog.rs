@@ -130,6 +130,7 @@ impl Catalog {
 	}
 
 	/// Returns a reference to the local peer entry, if it exists.
+	#[allow(clippy::missing_panics_doc)]
 	pub fn local(&self) -> &SignedPeerEntry {
 		self
 			.get_signed(&self.local_id)
@@ -140,6 +141,42 @@ impl Catalog {
 	/// local peer entry.
 	pub fn peers_count(&self) -> usize {
 		self.signed.len() + self.unsigned.len() - 1
+	}
+}
+
+/// The result of an attempt to insert or update a signed peer entry in the
+/// catalog.
+pub enum UpsertResult<'a> {
+	/// A new entry was inserted.
+	///
+	/// This peer did not previously exist in the catalog.
+	New(&'a SignedPeerEntry),
+
+	/// An existing entry was updated with a newer version.
+	/// This peer already existed in the catalog and the new
+	/// entry had a higher version number.
+	Updated(&'a SignedPeerEntry),
+
+	/// The insertion was rejected because the existing entry had an equal or
+	/// higher version number.
+	Rejected(&'a SignedPeerEntry),
+}
+
+impl UpsertResult<'_> {
+	/// Returns true if the upsert resulted in a new entry being added.
+	pub fn is_new(&self) -> bool {
+		matches!(self, UpsertResult::New(_))
+	}
+
+	/// Returns true if the upsert resulted in an existing entry being updated.
+	pub fn is_updated(&self) -> bool {
+		matches!(self, UpsertResult::Updated(_))
+	}
+
+	/// Returns true if the upsert resulted in a change to the catalog,
+	/// i.e., either a new entry was added or an existing entry was updated.
+	pub fn is_ok(&self) -> bool {
+		self.is_new() || self.is_updated()
 	}
 }
 
@@ -172,21 +209,27 @@ impl Catalog {
 	pub(super) fn upsert_signed(
 		&mut self,
 		entry: SignedPeerEntry,
-	) -> Result<(), &SignedPeerEntry> {
+	) -> UpsertResult<'_> {
+		let peer_id = *entry.id();
 		self.unsigned.remove(entry.id());
-		match self.signed.entry(*entry.id()) {
+		match self.signed.entry(peer_id) {
 			im::ordmap::Entry::Occupied(mut existing) => {
 				let existing_version = existing.get().version();
 				if entry.version() > existing_version {
 					existing.insert(entry);
-					Ok(())
+					UpsertResult::Updated(
+						self.signed.get(&peer_id).expect("entry exists"),
+					)
 				} else {
-					Err(self.signed.get(entry.id()).expect("entry exists"))
+					UpsertResult::Rejected(
+						self.signed.get(&peer_id).expect("entry exists"),
+					)
 				}
 			}
 			im::ordmap::Entry::Vacant(vacant) => {
+				let id = *entry.id();
 				vacant.insert(entry);
-				Ok(())
+				UpsertResult::New(self.signed.get(&id).expect("entry exists"))
 			}
 		}
 	}

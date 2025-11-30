@@ -22,7 +22,7 @@ pub struct Streams {
 impl Streams {
 	const ALPN: &'static [u8] = b"/mosaik/streams/1";
 
-	pub fn new(local: LocalNode, discovery: Discovery, config: Config) -> Self {
+	pub fn new(local: LocalNode, discovery: Discovery, _config: Config) -> Self {
 		Self { local, discovery }
 	}
 }

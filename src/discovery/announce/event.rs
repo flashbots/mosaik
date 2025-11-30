@@ -1,13 +1,7 @@
-use crate::PeerEntry;
+use crate::SignedPeerEntry;
 
 #[derive(Debug, Clone)]
 pub enum Event {
-	/// A new peer has been discovered.
-	PeerDiscovered(PeerEntry),
-
-	/// An existing peer has been updated.
-	PeerUpdated(PeerEntry),
-
-	/// A peer has been lost.
-	PeerLost(PeerEntry),
+	/// A valid and signed peer entry has been updated.
+	PeerEntryReceived(SignedPeerEntry),
 }

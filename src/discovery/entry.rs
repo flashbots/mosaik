@@ -2,12 +2,44 @@ use {
 	super::Error,
 	crate::{EndpointAddr, PeerId, SecretKey, Signature, StreamId, Tag},
 	bincode::{config::standard, serde::encode_into_std_write},
-	derive_more::{AsRef, Deref, Into},
+	derive_more::{AsRef, Debug, Deref, Into},
 	serde::{Deserialize, Deserializer, Serialize, de},
 	std::collections::BTreeSet,
 };
 
-pub type PeerEntryVersion = u64;
+/// Version information for a `PeerEntry`.
+///
+/// The version is composed of a timestamp (in milliseconds since epoch)
+/// and a counter. The timestamp represents the time when the process was
+/// started and can be thought of as run-id and the counter is the update number
+/// withing that particular run.
+#[derive(
+	Debug,
+	Clone,
+	Copy,
+	Serialize,
+	Deserialize,
+	PartialEq,
+	Eq,
+	PartialOrd,
+	Ord,
+	Hash,
+)]
+pub struct PeerEntryVersion(i64, u64);
+
+impl Default for PeerEntryVersion {
+	fn default() -> Self {
+		Self(chrono::Utc::now().timestamp_millis(), 0)
+	}
+}
+
+impl PeerEntryVersion {
+	/// Increments the version's counter.
+	#[must_use]
+	pub fn increment(self) -> Self {
+		Self(self.0, self.1.saturating_add(1))
+	}
+}
 
 /// Stores information about a peer in the network.
 ///
@@ -65,7 +97,7 @@ impl PeerEntry {
 	/// The version of the peer entry.
 	///
 	/// This is incremented each time the peer entry is updated.
-	pub const fn version(&self) -> u64 {
+	pub const fn version(&self) -> PeerEntryVersion {
 		self.version
 	}
 
@@ -91,7 +123,7 @@ impl PeerEntry {
 			address,
 			tags: BTreeSet::new(),
 			streams: BTreeSet::new(),
-			version: 0,
+			version: PeerEntryVersion::default(),
 		}
 	}
 
@@ -105,7 +137,7 @@ impl PeerEntry {
 		}
 
 		self.address = address;
-		self.version = self.version.saturating_add(1);
+		self.version = self.version.increment();
 		Ok(self)
 	}
 
@@ -113,7 +145,7 @@ impl PeerEntry {
 	#[must_use]
 	pub fn add_stream(mut self, stream: impl Into<StreamId>) -> Self {
 		self.streams.insert(stream.into());
-		self.version = self.version.saturating_add(1);
+		self.version = self.version.increment();
 		self
 	}
 
@@ -121,7 +153,7 @@ impl PeerEntry {
 	#[must_use]
 	pub fn remove_stream(mut self, stream: impl Into<StreamId>) -> Self {
 		self.streams.remove(&stream.into());
-		self.version = self.version.saturating_add(1);
+		self.version = self.version.increment();
 		self
 	}
 
@@ -129,7 +161,7 @@ impl PeerEntry {
 	#[must_use]
 	pub fn add_tag(mut self, tag: impl Into<Tag>) -> Self {
 		self.tags.insert(tag.into());
-		self.version = self.version.saturating_add(1);
+		self.version = self.version.increment();
 		self
 	}
 
@@ -140,7 +172,7 @@ impl PeerEntry {
 		tags: impl IntoIterator<Item = impl Into<Tag>>,
 	) -> Self {
 		self.tags.extend(tags.into_iter().map(Into::into));
-		self.version = self.version.saturating_add(1);
+		self.version = self.version.increment();
 		self
 	}
 
@@ -148,7 +180,7 @@ impl PeerEntry {
 	#[must_use]
 	pub fn remove_tag(mut self, tag: impl Into<Tag>) -> Self {
 		self.tags.remove(&tag.into());
-		self.version = self.version.saturating_add(1);
+		self.version = self.version.increment();
 		self
 	}
 
@@ -161,7 +193,7 @@ impl PeerEntry {
 		for tag in tags {
 			self.tags.remove(&tag.into());
 		}
-		self.version = self.version.saturating_add(1);
+		self.version = self.version.increment();
 		self
 	}
 
@@ -203,7 +235,10 @@ impl PeerEntry {
 ///   api only allows creating signed entries through the `sign` method of
 ///   `PeerEntry`.
 #[derive(Debug, Clone, Serialize, Deref, AsRef, Into, PartialEq)]
-pub struct SignedPeerEntry(#[deref] PeerEntry, Signature);
+pub struct SignedPeerEntry(
+	#[deref] PeerEntry,
+	#[debug("signature: {}", hex::encode(_1.to_bytes()))] Signature,
+);
 
 impl SignedPeerEntry {
 	/// Consumes the `SignedPeerEntry`, returning the inner `PeerEntry`.

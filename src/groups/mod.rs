@@ -59,7 +59,10 @@ use {
 	listen::Listener,
 };
 
+mod config;
 mod listen;
+
+pub use config::{Config, ConfigBuilder, ConfigBuilderError};
 
 pub struct Groups {
 	local: LocalNode,
@@ -69,7 +72,7 @@ pub struct Groups {
 impl Groups {
 	const ALPN: &'static [u8] = b"/mosaik/groups/1";
 
-	pub fn new(local: LocalNode, discovery: Discovery) -> Self {
+	pub fn new(local: LocalNode, discovery: Discovery, _config: Config) -> Self {
 		Self { local, discovery }
 	}
 }

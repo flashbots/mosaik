@@ -1,7 +1,11 @@
 use {
 	super::{Catalog, Config, Error, PeerEntryVersion, SignedPeerEntry},
 	crate::{LocalNode, PeerId, channel::UnboundedChannel},
-	bincode::{config::standard, serde::encode_to_vec},
+	bincode::{
+		config::standard,
+		serde::{decode_from_std_read, encode_to_vec},
+	},
+	bytes::Buf,
 	futures::StreamExt,
 	iroh::protocol::ProtocolHandler,
 	iroh_gossip::{
@@ -157,6 +161,10 @@ struct WorkerLoop {
 
 impl WorkerLoop {
 	async fn spawn(mut self) -> Result<(), Error> {
+		// Ensure that the local node is online and has all protocols installed
+		// and addresses resolved.
+		self.local.online().await;
+
 		let topic_id = self.local.network_id().into();
 		let (mut topic_tx, mut topic_rx) = self
 			.gossip
@@ -167,7 +175,7 @@ impl WorkerLoop {
 		loop {
 			tokio::select! {
 				// Network is terminating, exit the loop
-				_ = self.cancel.cancelled() => {
+				() = self.cancel.cancelled() => {
 					tracing::info!(
 						network = %self.local.network_id(),
 						"Discovery announcement protocol terminating"
@@ -195,7 +203,7 @@ impl WorkerLoop {
 				}
 
 				// The local peer entry has been updated
-				_ = self.catalog.changed() => {
+				Ok(()) = self.catalog.changed() => {
 					self.on_catalog_update();
 				}
 
@@ -257,32 +265,47 @@ impl WorkerLoop {
 	/// This method handles the happy-path gossip events, such as new neighbors
 	/// joining and messages being received.
 	fn on_gossip_event(&mut self, event: GossipEvent) {
-		tracing::info!("Received gossip event: {event:?}");
+		tracing::trace!(
+			network = %self.local.network_id(),
+			peer_id = %self.local.id(),
+			event = ?event,
+			"Received gossip event"
+		);
+
 		match event {
 			GossipEvent::NeighborUp(_) => {
 				self.broadcast_self_info();
 			}
 			GossipEvent::Received(message) => {
-				tracing::info!(">--> received announcement message {message:?}");
+				let Ok(decoded) =
+					decode_from_std_read(&mut message.content.reader(), standard())
+				else {
+					tracing::warn!(
+						network = %self.local.network_id(),
+						"Failed to decode announcement message"
+					);
+					// todo: Ban peer due to protocol violation
+					return;
+				};
+
+				self.on_message_received(decoded);
 			}
-			e => tracing::info!(
-				event = ?e,
-				network = %self.local.network_id(),
-				"Gossip Event"
-			),
-		};
+			_ => {}
+		}
 	}
 
 	/// A message has been received from the gossip topic.
 	fn on_message_received(&mut self, message: AnnouncementMessage) {
 		match message {
 			AnnouncementMessage::OwnEntryUpdate(entry) => {
-				tracing::info!(
+				tracing::debug!(
 						info = ?entry,
 						network = %self.local.network_id(),
-						"Received own entry update announcement"
+						"Received peer entry update announcement"
 				);
+
 				// Update local state or catalog as needed
+				let _ = self.events.send(Event::PeerEntryReceived(entry));
 			}
 		}
 	}
@@ -303,7 +326,7 @@ impl WorkerLoop {
 	fn broadcast_self_info(&self) {
 		let entry = self.catalog.borrow().local().clone();
 
-		tracing::info!(
+		tracing::debug!(
 			info = ?entry,
 			network = %self.local.network_id(),
 			"Broadcasting local peer entry"
@@ -333,7 +356,7 @@ impl WorkerLoop {
 				"Not connected to any gossip neighbors, deferring announcement broadcast"
 			);
 
-			// Re-queue the message for later sending
+			// Re-queue the message for later retry
 			self.messages_out.send(message);
 			return Ok(());
 		}
