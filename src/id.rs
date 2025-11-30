@@ -13,9 +13,9 @@ use {
 /// the `From` trait implementations provided.
 ///
 /// Notes:
-///  - when serialized to human readable formats (e.g., JSON), UniqueIds are
+///  - when serialized to human readable formats (e.g., JSON), `UniqueId`s are
 ///    represented as hex-encoded strings.
-///  - when serialized to binary formats (e.g., bincode), UniqueIds are
+///  - when serialized to binary formats (e.g., bincode), `UniqueId`s are
 ///    represented as raw 32-byte arrays.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deref)]
 pub struct UniqueId([u8; 32]);
@@ -28,6 +28,18 @@ impl<T: AsRef<str>> From<T> for UniqueId {
 	fn from(s: T) -> Self {
 		let hash = Sha3_256::digest(s.as_ref());
 		UniqueId(hash.into())
+	}
+}
+
+impl From<UniqueId> for [u8; 32] {
+	fn from(id: UniqueId) -> Self {
+		id.0
+	}
+}
+
+impl From<&UniqueId> for [u8; 32] {
+	fn from(id: &UniqueId) -> Self {
+		id.0
 	}
 }
 

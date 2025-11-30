@@ -1,5 +1,5 @@
 use {
-	crate::NetworkId,
+	crate::{NetworkId, SecretKey},
 	iroh::{Endpoint, EndpointAddr},
 	std::{fmt, sync::Arc},
 	tokio::sync::SetOnce,
@@ -44,6 +44,15 @@ impl LocalNode {
 		self.0.endpoint.id()
 	}
 
+	/// Returns the secret key of the local node.
+	///
+	/// This key is the private key corresponding to the node's public identity
+	/// and is used for signing and authenticating the node in the network. It is
+	/// also used to sign [`PeerEntry`]s advertised by the node.
+	pub fn secret_key(&self) -> &SecretKey {
+		self.0.endpoint.secret_key()
+	}
+
 	/// Returns a future that resolves when the local node is considered to be
 	/// online and ready to interact with other peers.
 	pub async fn online(&self) {
@@ -58,16 +67,19 @@ impl LocalNode {
 	///
 	/// This is used by the [`NetworkBuilder`] to construct the local node as part
 	/// of building the overall network instance.
-	pub(crate) fn new(
-		network_id: NetworkId,
-		endpoint: Endpoint,
-		ready_signal: SetOnce<()>,
-	) -> Self {
+	pub(crate) fn new(network_id: NetworkId, endpoint: Endpoint) -> Self {
 		Self(Arc::new(Inner {
 			network_id,
 			endpoint,
-			ready_signal,
+			ready_signal: SetOnce::new(),
 		}))
+	}
+
+	/// Marks the local node as ready to accept connections connections from
+	/// remote peers. All protocols use this signal to know when they can start
+	/// operating and have been installed in the protocol router.
+	pub(crate) fn mark_ready(&self) {
+		let _ = self.0.ready_signal.set(());
 	}
 }
 

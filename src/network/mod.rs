@@ -3,12 +3,12 @@ use {
 	iroh::protocol::{Router, RouterBuilder},
 };
 
-mod builder;
+mod config;
 mod error;
 mod local;
 
 pub use {
-	builder::NetworkBuilder,
+	config::{NetworkBuilder, NetworkConfig},
 	error::Error as NetworkError,
 	local::LocalNode,
 };
@@ -77,13 +77,16 @@ pub type PeerId = iroh::EndpointId;
 impl Network {
 	/// Creates a new network builder with a given network id.
 	pub fn builder(network_id: NetworkId) -> NetworkBuilder {
-		NetworkBuilder::new(network_id)
+		NetworkBuilder::default().with_network_id(network_id)
 	}
 
 	/// Creates and returns a new `Network` instance with the given network ID and
 	/// default settings.
 	pub async fn new(network_id: NetworkId) -> Result<Self, NetworkError> {
-		NetworkBuilder::new(network_id).build().await
+		NetworkBuilder::default()
+			.with_network_id(network_id)
+			.build()
+			.await
 	}
 }
 

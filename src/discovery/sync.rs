@@ -6,19 +6,23 @@ use {
 		endpoint::Connection,
 		protocol::{AcceptError, ProtocolHandler},
 	},
+	tokio::sync::watch,
 };
 
 #[derive(Clone)]
 pub(super) struct CatalogSync {
-	catalog: Catalog,
 	local: LocalNode,
+	catalog: watch::Receiver<Catalog>,
 }
 
 impl CatalogSync {
 	pub(super) const ALPN: &'static [u8] = b"/mosaik/discovery/1";
 
-	pub(super) fn new(local: LocalNode, catalog: Catalog) -> Self {
-		Self { catalog, local }
+	pub(super) fn new(
+		local: LocalNode,
+		catalog: watch::Receiver<Catalog>,
+	) -> Self {
+		Self { local, catalog }
 	}
 }
 
@@ -29,7 +33,12 @@ impl fmt::Debug for CatalogSync {
 }
 
 impl ProtocolHandler for CatalogSync {
-	async fn accept(&self, _connection: Connection) -> Result<(), AcceptError> {
-		todo!()
+	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+		tracing::info!(
+			"Accepting incoming CatalogSync connection from {}",
+			connection.remote_id()
+		);
+
+		Ok(())
 	}
 }

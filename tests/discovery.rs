@@ -11,17 +11,26 @@ async fn peers_have_consistent_maps() -> anyhow::Result<()> {
 		n0.network_id()
 	);
 
+	n0.online().await;
+
 	info!("Bootstrap addresses: {:?}", n0.local().addr());
 
 	let mut nodes = vec![];
 
 	for _ in 0..10 {
-		let node = Network::new(network_id).await?;
+		let node = Network::builder(network_id)
+			.with_discovery(
+				DiscoveryConfig::builder()
+					.with_bootstrap_peer(n0.local().id())
+					.build()?,
+			)
+			.build()
+			.await?;
 		nodes.push(node);
 	}
 
 	loop {
-		tokio::time::sleep(Duration::from_secs(3)).await;
+		tokio::time::sleep(Duration::from_secs(10)).await;
 
 		for node in &nodes {
 			info!("Peer {} knows about - peers", node.local().id(),);

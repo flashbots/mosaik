@@ -55,24 +55,27 @@
 
 use {
 	crate::{Discovery, LocalNode, ProtocolProvider},
-	accept::Acceptor,
 	iroh::protocol::RouterBuilder,
+	listen::Listener,
 };
 
-mod accept;
+mod listen;
 
-pub struct Groups {}
+pub struct Groups {
+	local: LocalNode,
+	discovery: Discovery,
+}
 
 impl Groups {
 	const ALPN: &'static [u8] = b"/mosaik/groups/1";
 
-	pub fn new(_local: LocalNode, _discovery: &Discovery) -> Self {
-		Self {}
+	pub fn new(local: LocalNode, discovery: Discovery) -> Self {
+		Self { local, discovery }
 	}
 }
 
 impl ProtocolProvider for Groups {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
-		protocols.accept(Self::ALPN, Acceptor)
+		protocols.accept(Self::ALPN, Listener)
 	}
 }

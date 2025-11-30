@@ -1,5 +1,5 @@
 use {
-	super::Streams,
+	super::Groups,
 	core::fmt,
 	iroh::{
 		endpoint::Connection,
@@ -8,16 +8,16 @@ use {
 };
 
 /// Protocol Acceptor
-pub(super) struct Acceptor;
+pub(super) struct Listener;
 
-impl fmt::Debug for Acceptor {
+impl fmt::Debug for Listener {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		// Safety: ALPN is valid UTF-8 hardcoded at compile time
-		unsafe { write!(f, "{}", str::from_utf8_unchecked(Streams::ALPN)) }
+		unsafe { write!(f, "{}", str::from_utf8_unchecked(Groups::ALPN)) }
 	}
 }
 
-impl ProtocolHandler for Acceptor {
+impl ProtocolHandler for Listener {
 	async fn accept(&self, _connection: Connection) -> Result<(), AcceptError> {
 		todo!()
 	}

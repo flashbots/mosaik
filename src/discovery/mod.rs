@@ -1,71 +1,114 @@
 use {
 	crate::{LocalNode, PeerId, ProtocolProvider},
 	iroh::protocol::RouterBuilder,
-	iroh_gossip::Gossip,
+	std::sync::Arc,
 	sync::CatalogSync,
+	tokio::sync::{broadcast, watch},
+	worker::{Handle, WorkerLoop},
 };
 
+mod announce;
 mod catalog;
+mod config;
+mod entry;
+mod error;
+mod event;
 mod sync;
+mod worker;
 
-pub use catalog::Catalog;
+/// Public Discovery API exports
+pub use {
+	catalog::Catalog,
+	config::{Config, ConfigBuilder},
+	entry::{PeerEntry, SignedPeerEntry},
+	error::Error,
+	event::Event,
+};
 
 /// The discovery system for a Mosaik network.
 ///
 /// The discovery system is composed of two main protocols:
 ///
-/// - A gossip protocol that peers use to broadcast their presence and changes
-///   to their own state and metadata.
+/// - A gossip announcement protocol that peers use to broadcast their presence
+///   and changes to their own state and metadata.
 ///
 /// - A catalog synchronization protocol that peers use to exchange and
 ///   synchronize their catalogs of known peers and their associated metadata.
-pub struct Discovery {
-	local: LocalNode,
-	gossip: Gossip,
-	catalog: Catalog,
-	sync: CatalogSync,
-}
+///
+/// - The discovery system maintains a local catalog of known peers and their
+///   metadata, which is updated through gossip messages and catalog syncs.
+///
+/// - This type is cloneable and can be shared across different components of
+///   the network stack that need access to discovery functionality.
+#[derive(Clone)]
+pub struct Discovery(Arc<Handle>);
 
 /// Public API
 impl Discovery {
-	pub fn dial(&self, peer: PeerId) {
-		todo!()
+	/// ALPN protocol identifier for the gossip protocol.
+	///
+	/// We're overriding `iroh_gossip`'s default ALPN to use our own namespace.
+	const ALPN_GOSSIP: &[u8] = b"/mosaik/gossip/1";
+
+	/// Dials the given peer to initiate a connection and discovery process.
+	///
+	/// This is an async and best-effort operation; there is no guarantee that the
+	/// dial will succeed or that the peer is online.
+	pub async fn dial(&self, peer: PeerId) {
+		self.0.dial(peer).await;
+	}
+
+	/// Returns a snapshot of the current peers catalog.
+	pub fn catalog(&self) -> Catalog {
+		self.0.catalog.borrow().clone()
+	}
+
+	/// Returns a watch receiver that can be used to monitor changes to the
+	/// peers catalog.
+	pub fn catalog_watcher(&self) -> watch::Receiver<Catalog> {
+		self.0.catalog.clone()
+	}
+
+	/// Returns a receiver for discovery events.
+	///
+	/// This receiver will receive all events broadcasted by the discovery system
+	/// from this point onward.
+	pub fn events(&self) -> broadcast::Receiver<Event> {
+		self.0.events.resubscribe()
 	}
 }
 
-/// Internal API
+/// Internal construction API
 impl Discovery {
-	const ALPN_GOSSIP: &'static [u8] = b"/mosaik/gossip/1";
-
-	pub(crate) fn new(
-		local: LocalNode,
-		bootstrap: impl IntoIterator<Item = PeerId>,
-	) -> Self {
-		let gossip = Gossip::builder()
-			.alpn(Self::ALPN_GOSSIP)
-			.spawn(local.endpoint().clone());
-
-		let catalog = Catalog;
-		let sync = CatalogSync::new(local.clone(), catalog.clone());
-
-		let instance = Self {
-			local,
-			gossip,
-			catalog,
-			sync,
-		};
-
-		for peer in bootstrap {
-			instance.dial(peer);
-		}
-		instance
+	pub(crate) fn new(local: LocalNode, config: Config) -> Self {
+		Self(Arc::new(WorkerLoop::spawn(local, config)))
 	}
 }
 
+/// Internal mutation API
+impl Discovery {
+	/// Updates the local peer entry using the provided update function.
+	///
+	/// If the update results in a change to the local entry contents, it is
+	/// re-signed and broadcasted to the network which respectively updates their
+	/// catalogues.
+	///
+	/// This api is not intended to be used directly by users of the discovery
+	/// system, but rather by higher-level abstractions that manage the local
+	/// peer's state.
+	pub(crate) async fn update_local_entry(
+		&self,
+		update: impl FnOnce(PeerEntry) -> PeerEntry + Send + 'static,
+	) {
+		self.0.update_local_peer_entry(Box::new(update)).await;
+	}
+}
+
+// Add all gossip ALPNs to the protocol router
 impl ProtocolProvider for Discovery {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
 		protocols
-			.accept(Self::ALPN_GOSSIP, self.gossip.clone())
-			.accept(CatalogSync::ALPN, self.sync.clone())
+			.accept(Self::ALPN_GOSSIP, self.0.gossip.clone())
+			.accept(CatalogSync::ALPN, self.0.sync.clone())
 	}
 }
