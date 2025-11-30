@@ -9,7 +9,11 @@ use {
 		sync::CatalogSync,
 	},
 	crate::{LocalNode, PeerEntry, PeerId},
-	futures::StreamExt,
+	core::{
+		pin::Pin,
+		task::{Context, Poll},
+	},
+	futures::{FutureExt, StreamExt},
 	iroh::{Watcher, endpoint::Connection, protocol::DynProtocolHandler},
 	tokio::{
 		sync::{
@@ -18,7 +22,7 @@ use {
 			oneshot,
 			watch,
 		},
-		task::JoinHandle,
+		task::{JoinError, JoinHandle},
 	},
 };
 
@@ -62,6 +66,14 @@ impl Handle {
 	}
 }
 
+impl Future for Handle {
+	type Output = Result<Result<(), Error>, JoinError>;
+
+	fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+		self.get_mut().task.poll_unpin(cx)
+	}
+}
+
 /// Discovery background worker loop
 ///
 /// This is a long-running task that is owned by the [`Discovery`] struct that
@@ -87,7 +99,7 @@ impl WorkerLoop {
 		let (commands_tx, commands_rx) = unbounded_channel();
 		let (events_tx, events_rx) = broadcast::channel(config.events_backlog);
 
-		let sync = CatalogSync::new(local.clone(), catalog_rx.clone());
+		let sync = CatalogSync::new(local.clone(), catalog_tx.clone());
 		let announce = Announce::new(local.clone(), &config, catalog_rx.clone());
 
 		let worker = Self {
@@ -100,7 +112,23 @@ impl WorkerLoop {
 		};
 
 		// spawn the worker loop
-		let task = tokio::spawn(worker.run());
+		let task = tokio::spawn(async move {
+			let local = worker.local.clone();
+			let result = worker.run().await;
+
+			if let Err(ref e) = result {
+				tracing::error!(
+					error = %e,
+					network = %local.network_id(),
+					"Discovery worker loop terminated with error"
+				);
+			}
+
+			// initiate network shutdown
+			local.termination().cancel();
+
+			result
+		});
 
 		// Return the handle to interact with the worker loop
 		Handle {
@@ -174,18 +202,19 @@ impl WorkerLoop {
 				self.update_local_peer_entry(update_fn);
 				let _ = resp.send(());
 			}
-			WorkerCommand::AcceptCatalogSync(_) => {
-				tracing::info!("Accepting catalog sync connection");
+			WorkerCommand::AcceptCatalogSync(connection) => {
+				let peer_id = connection.remote_id();
+				if let Err(e) = self.sync.protocol().accept(connection).await {
+					tracing::warn!(
+						error = %e,
+						peer_id = %peer_id,
+						network = %self.local.network_id(),
+						"Failed to accept catalog sync connection"
+					);
+				}
 			}
 			WorkerCommand::AcceptAnnounce(connection) => {
 				let peer_id = connection.remote_id();
-
-				tracing::trace!(
-					peer_id = %peer_id,
-					network = %self.local.network_id(),
-					"Accepting announce connection",
-				);
-
 				if let Err(e) = self.announce.protocol().accept(connection).await {
 					tracing::warn!(
 						error = %e,
@@ -204,7 +233,7 @@ impl WorkerLoop {
 	fn on_announce_event(&mut self, event: announce::Event) {
 		match event {
 			announce::Event::PeerEntryReceived(signed_peer_entry) => {
-				tracing::info!(
+				tracing::debug!(
 					info = ?signed_peer_entry,
 					network = %self.local.network_id(),
 					"Received peer entry via discovery announcement"
@@ -225,7 +254,7 @@ impl WorkerLoop {
 								.ok();
 						}
 						UpsertResult::Updated(signed_peer_entry) => {
-							tracing::info!(
+							tracing::debug!(
 								info = ?signed_peer_entry,
 								network = %self.local.network_id(),
 								"Peer updated via discovery"

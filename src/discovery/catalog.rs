@@ -102,14 +102,24 @@ impl Catalog {
 
 	/// Returns an iterator over all peer entries in the catalog.
 	///
-	/// The iterator yields both signed and unsigned entries, with signed entries
-	/// being the first to be returned.
+	/// The iterator yields both signed and unsigned entries including the local
+	/// peer entry, with signed entries being the first to be returned.
 	pub fn iter(&self) -> impl DoubleEndedIterator<Item = &PeerEntry> {
 		self
 			.signed
 			.values()
 			.map(|signed| signed.as_ref())
 			.chain(self.unsigned.values())
+	}
+
+	/// Returns an iterator over all signed peer entries in the catalog.
+	///
+	/// The iterator yields entries with their signature, including the local peer
+	/// entry. This is used when syncing the catalog with other peers.
+	pub fn iter_signed(
+		&self,
+	) -> impl DoubleEndedIterator<Item = &SignedPeerEntry> {
+		self.signed.values()
 	}
 
 	/// Returns a reference to the peer entry for the given peer ID, if it exists.

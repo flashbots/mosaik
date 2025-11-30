@@ -1,4 +1,11 @@
-use {core::time::Duration, mosaik::*, tracing::info};
+use {
+	core::time::Duration,
+	futures::{StreamExt, stream::SelectAll},
+	mosaik::*,
+	tokio::time::interval,
+	tokio_stream::wrappers::BroadcastStream,
+	tracing::info,
+};
 
 #[tokio::test]
 async fn peers_have_consistent_maps() -> anyhow::Result<()> {
@@ -29,19 +36,30 @@ async fn peers_have_consistent_maps() -> anyhow::Result<()> {
 		nodes.push(node);
 	}
 
-	for _ in 0..10 {
-		tokio::time::sleep(Duration::from_secs(3)).await;
+	let mut updates: SelectAll<_> = nodes
+		.iter()
+		.map(|node| BroadcastStream::new(node.discovery().events()))
+		.collect();
 
-		for node in &nodes {
-			let catalog = node.discovery().catalog();
-			info!(
-				"Peer {} knows about {} peers",
-				node.local().id(),
-				catalog.peers_count()
-			);
+	let mut interval = interval(Duration::from_secs(3));
+
+	loop {
+		tokio::select! {
+			Some(Ok(event)) = updates.next() => {
+				info!("Discovery event: {:?}", event);
+			}
+
+			_ = interval.tick() => {
+				for node in &nodes {
+					let catalog = node.discovery().catalog();
+					info!(
+						"Peer {} knows about {} peers",
+						node.local().id(),
+						catalog.peers_count()
+					);
+				}
+				info!("---");
+			}
 		}
-		info!("---");
 	}
-
-	Ok(())
 }
