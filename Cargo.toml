@@ -1,14 +1,14 @@
 [workspace]
 members = [
   ".",
-  #"actors/builder",
-  #"actors/canon",
-  #"actors/gc",
-  #"actors/pending",
-  #"actors/rpc",
-  #"actors/reputation",
-  #"actors/sim",
-  #"actors/engine-api",
+  "actors/builder",
+  "actors/canon",
+  "actors/gc",
+  "actors/pending",
+  "actors/rpc",
+  "actors/reputation",
+  "actors/sim",
+  "actors/engine-api",
 ]
 resolver = "2"
 
@@ -42,7 +42,8 @@ lint = "cargo clippy --all-targets -- -D warnings"
 
 [workspace.dependencies]
 mosaik = { path = "." }
-#rblib = { git = "https://github.com/flashbots/rblib.git", tag = "v0.4.0", features = [] }
+rblib = { git = "https://github.com/flashbots/rblib.git", tag = "v0.4.0", features = [
+] }
 engine-api = { path = "actors/engine-api" }
 
 rand = "0.9"
