@@ -18,17 +18,17 @@ async fn api_design_auto_disc() {
 	let network_id = NetworkId::random();
 
 	let n0 = Network::new(network_id).await.unwrap();
-	let mut p0 = n0.produce::<Data1>();
-	let p1 = n0.produce::<Data2>();
+	let mut p0 = n0.streams().produce::<Data1>();
+	let p1 = n0.streams().produce::<Data2>();
 
 	let n1 = Network::new(network_id).await.unwrap();
-	let c1 = n1.consume::<Data1>();
-	let p1 = n1.produce::<Data3>();
+	let c1 = n1.streams().consume::<Data1>();
+	let p1 = n1.streams().produce::<Data3>();
 
 	let n2 = Network::new(network_id).await.unwrap();
-	let mut c2a = n2.consume::<Data1>();
-	let c2b = n2.consume::<Data2>();
-	let c2c = n2.consume::<Data3>();
+	let mut c2a = n2.streams().consume::<Data1>();
+	let c2b = n2.streams().consume::<Data2>();
+	let c2c = n2.streams().consume::<Data3>();
 
 	n1.discovery().dial(n0.local().id());
 	n2.discovery().dial(n0.local().id());

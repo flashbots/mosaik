@@ -1,5 +1,6 @@
 use {
 	crate::{
+		IntoIterOrSingle,
 		LocalNode,
 		PeerId,
 		ProtocolProvider,
@@ -59,8 +60,8 @@ impl Discovery {
 	///
 	/// This is an async and best-effort operation; there is no guarantee that the
 	/// dial will succeed or that the peers are online.
-	pub async fn dial(&self, peers: impl IntoIterator<Item = PeerId>) {
-		self.0.dial(peers).await;
+	pub async fn dial<V>(&self, peers: impl IntoIterOrSingle<PeerId, V>) {
+		self.0.dial(peers.iterator().into_iter()).await;
 	}
 
 	/// Returns a snapshot of the current peers catalog.

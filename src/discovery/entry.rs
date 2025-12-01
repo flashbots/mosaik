@@ -1,6 +1,14 @@
 use {
 	super::Error,
-	crate::{EndpointAddr, PeerId, SecretKey, Signature, StreamId, Tag},
+	crate::{
+		EndpointAddr,
+		IntoIterOrSingle,
+		PeerId,
+		SecretKey,
+		Signature,
+		StreamId,
+		Tag,
+	},
 	bincode::{config::standard, serde::encode_into_std_write},
 	derive_more::{AsRef, Debug, Deref, Into},
 	serde::{Deserialize, Deserializer, Serialize, de},
@@ -141,56 +149,45 @@ impl PeerEntry {
 		Ok(self)
 	}
 
-	/// Adds a stream id to the list of streams produced by the peer.
+	/// Adds stream id(s) to the list of streams produced by the peer.
 	#[must_use]
-	pub fn add_stream(mut self, stream: impl Into<StreamId>) -> Self {
-		self.streams.insert(stream.into());
-		self.version = self.version.increment();
-		self
-	}
-
-	/// Removes a stream id from the list of streams produced by the peer.
-	#[must_use]
-	pub fn remove_stream(mut self, stream: impl Into<StreamId>) -> Self {
-		self.streams.remove(&stream.into());
-		self.version = self.version.increment();
-		self
-	}
-
-	/// Adds a tag to the list of tags associated with the peer.
-	#[must_use]
-	pub fn add_tag(mut self, tag: impl Into<Tag>) -> Self {
-		self.tags.insert(tag.into());
-		self.version = self.version.increment();
-		self
-	}
-
-	/// Adds a set of tags to the list of tags associated with the peer.
-	#[must_use]
-	pub fn add_tags(
+	pub fn add_streams<V>(
 		mut self,
-		tags: impl IntoIterator<Item = impl Into<Tag>>,
+		streams: impl IntoIterOrSingle<StreamId, V>,
 	) -> Self {
-		self.tags.extend(tags.into_iter().map(Into::into));
+		self.streams.extend(streams.iterator());
 		self.version = self.version.increment();
 		self
 	}
 
-	/// Removes a tag from the list of tags associated with the peer.
+	/// Removes stream id(s) from the list of streams produced by the peer.
 	#[must_use]
-	pub fn remove_tag(mut self, tag: impl Into<Tag>) -> Self {
-		self.tags.remove(&tag.into());
-		self.version = self.version.increment();
-		self
-	}
-
-	/// Removes a set of tags from the list of tags associated with the peer.
-	#[must_use]
-	pub fn remove_tags(
+	pub fn remove_streams<T: Into<StreamId>, V>(
 		mut self,
-		tags: impl IntoIterator<Item = impl Into<Tag>>,
+		streams: impl IntoIterOrSingle<T, V>,
 	) -> Self {
-		for tag in tags {
+		for stream in streams.iterator() {
+			self.streams.remove(&stream.into());
+		}
+		self.version = self.version.increment();
+		self
+	}
+
+	/// Adds tag(s) to the list of tags associated with the peer.
+	#[must_use]
+	pub fn add_tags<V>(mut self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
+		self.tags.extend(tags.iterator());
+		self.version = self.version.increment();
+		self
+	}
+
+	/// Removes tag(s) from the list of tags associated with the peer.
+	#[must_use]
+	pub fn remove_tags<T: Into<Tag>, V>(
+		mut self,
+		tags: impl IntoIterOrSingle<T, V>,
+	) -> Self {
+		for tag in tags.iterator() {
 			self.tags.remove(&tag.into());
 		}
 		self.version = self.version.increment();

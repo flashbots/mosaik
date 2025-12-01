@@ -8,7 +8,7 @@ use {
 		catalog::UpsertResult,
 		sync::CatalogSync,
 	},
-	crate::{LocalNode, PeerEntry, PeerId},
+	crate::{IntoIterOrSingle, LocalNode, PeerEntry, PeerId},
 	core::{
 		pin::Pin,
 		task::{Context, Poll},
@@ -42,11 +42,14 @@ pub(super) struct Handle {
 
 impl Handle {
 	/// Sends a command to dial a peer with the given `PeerId`
-	pub(super) async fn dial(&self, peers: impl IntoIterator<Item = PeerId>) {
+	pub(super) async fn dial<V>(&self, peers: impl IntoIterOrSingle<PeerId, V>) {
 		let (tx, rx) = oneshot::channel();
 		self
 			.commands
-			.send(WorkerCommand::DialPeers(peers.into_iter().collect(), tx))
+			.send(WorkerCommand::DialPeers(
+				peers.iterator().into_iter().collect(),
+				tx,
+			))
 			.ok();
 		let _ = rx.await;
 	}
@@ -94,8 +97,10 @@ impl WorkerLoop {
 	/// Constructs a new discovery worker loop and spawns it as a background task.
 	/// Returns a handle to interact with the worker loop. This is called from
 	/// the `Discovery::new` method.
+	#[expect(clippy::needless_pass_by_value)]
 	pub(super) fn spawn(local: LocalNode, config: Config) -> Handle {
-		let (catalog_tx, catalog_rx) = watch::channel(Catalog::new(&local));
+		let (catalog_tx, catalog_rx) =
+			watch::channel(Catalog::new(&local, &config));
 		let (commands_tx, commands_rx) = unbounded_channel();
 		let (events_tx, events_rx) = broadcast::channel(config.events_backlog);
 

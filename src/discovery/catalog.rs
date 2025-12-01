@@ -1,5 +1,5 @@
 use {
-	super::{PeerEntry, SignedPeerEntry},
+	super::{Config, PeerEntry, SignedPeerEntry},
 	crate::{LocalNode, PeerId},
 };
 
@@ -194,8 +194,9 @@ impl UpsertResult<'_> {
 impl Catalog {
 	/// Creates a new catalog instance with the local node's peer entry as the
 	/// first and only entry.
-	pub(super) fn new(local: &LocalNode) -> Self {
+	pub(super) fn new(local: &LocalNode, config: &Config) -> Self {
 		let local_entry = PeerEntry::new(local.addr().clone())
+			.add_tags(config.tags.clone())
 			.sign(local.secret_key())
 			.expect("signing local peer entry failed.");
 

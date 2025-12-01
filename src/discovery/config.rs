@@ -1,5 +1,5 @@
 use {
-	crate::{PeerId, Tag},
+	crate::{IntoIterOrSingle, PeerId, Tag},
 	derive_builder::Builder,
 	serde::{Deserialize, Serialize},
 };
@@ -30,28 +30,33 @@ impl Config {
 }
 
 impl ConfigBuilder {
-	/// Adds a bootstrap peer to the configuration.
+	/// Adds bootstrap peer(s) to the discovery configuration.
 	#[must_use]
-	pub fn with_bootstrap_peer(mut self, peer: impl Into<PeerId>) -> Self {
-		if let Some(peers) = &mut self.bootstrap_peers {
-			peers.push(peer.into());
+	pub fn with_bootstrap<P: Into<PeerId>, V>(
+		mut self,
+		peers: impl IntoIterOrSingle<P, V>,
+	) -> Self {
+		let peers: Vec<PeerId> =
+			peers.iterator().into_iter().map(Into::into).collect();
+		if let Some(existing) = &mut self.bootstrap_peers {
+			existing.extend(peers);
 		} else {
-			self.bootstrap_peers = Some(vec![peer.into()]);
+			self.bootstrap_peers = Some(peers);
 		}
 		self
 	}
 
-	/// Adds a list of bootstrap peers to the configuration.
+	/// Adds tag(s) to advertise in the local peer entry.
 	#[must_use]
-	pub fn with_bootstrap_peers(
+	pub fn with_tags<T: Into<Tag>, V>(
 		mut self,
-		peers: impl IntoIterator<Item = impl Into<PeerId>>,
+		tags: impl IntoIterOrSingle<T, V>,
 	) -> Self {
-		if let Some(existing) = &mut self.bootstrap_peers {
-			existing.extend(peers.into_iter().map(|p| p.into()));
+		let tags: Vec<Tag> = tags.iterator().into_iter().map(Into::into).collect();
+		if let Some(existing) = &mut self.tags {
+			existing.extend(tags);
 		} else {
-			self.bootstrap_peers =
-				Some(peers.into_iter().map(|p| p.into()).collect());
+			self.tags = Some(tags);
 		}
 		self
 	}

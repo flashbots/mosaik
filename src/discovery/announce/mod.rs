@@ -1,6 +1,6 @@
 use {
 	super::{Catalog, Config, Error, PeerEntryVersion, SignedPeerEntry},
-	crate::{LocalNode, PeerId, channel::UnboundedChannel},
+	crate::{LocalNode, PeerId, UnboundedChannel},
 	bincode::{
 		config::standard,
 		serde::{decode_from_std_read, encode_to_vec},

@@ -10,7 +10,14 @@ use {
 #[tokio::test]
 async fn peers_have_consistent_maps() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
-	let n0 = Network::new(network_id).await?;
+	let n0 = Network::builder(network_id)
+		.with_discovery(
+			DiscoveryConfig::builder()
+				.with_tags("beacon-node")
+				.build()?,
+		)
+		.build()
+		.await?;
 
 	info!(
 		"Node0 is known as {:?} on network {}",
@@ -28,7 +35,7 @@ async fn peers_have_consistent_maps() -> anyhow::Result<()> {
 		let node = Network::builder(network_id)
 			.with_discovery(
 				DiscoveryConfig::builder()
-					.with_bootstrap_peer(n0.local().id())
+					.with_bootstrap(n0.local().id())
 					.build()?,
 			)
 			.build()

@@ -1,5 +1,5 @@
 use {
-	crate::{Discovery, Groups, Streams, id::UniqueId},
+	crate::{Discovery, Groups, Streams, UniqueId},
 	iroh::protocol::{Router, RouterBuilder},
 };
 
