@@ -4,6 +4,7 @@ use {
 	iroh::protocol::RouterBuilder,
 	listen::Listener,
 	producer::FanoutSink,
+	std::sync::Arc,
 };
 
 mod config;
@@ -32,6 +33,9 @@ pub type StreamId = UniqueId;
 /// asynchronous data channels that connect producers and consumers across a
 /// network.
 pub struct Streams {
+	/// Configuration for the streams subsystem.
+	config: Config,
+
 	/// The local node instance associated with this streams subsystem.
 	///
 	/// This gives us access to the transport layer socket and identity.
@@ -42,7 +46,7 @@ pub struct Streams {
 	discovery: Discovery,
 
 	/// Map of active fanout sinks by stream id.
-	sinks: DashMap<StreamId, FanoutSink>,
+	sinks: Arc<DashMap<StreamId, FanoutSink>>,
 }
 
 /// Public API
@@ -85,18 +89,19 @@ impl Streams {
 	pub(crate) fn new(
 		local: LocalNode,
 		discovery: Discovery,
-		_config: Config,
+		config: Config,
 	) -> Self {
 		Self {
+			config,
 			local,
 			discovery,
-			sinks: DashMap::new(),
+			sinks: Arc::new(DashMap::new()),
 		}
 	}
 }
 
 impl ProtocolProvider for Streams {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
-		protocols.accept(Self::ALPN, Listener)
+		protocols.accept(Self::ALPN, Listener::new(self))
 	}
 }

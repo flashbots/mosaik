@@ -154,6 +154,45 @@ impl Catalog {
 	}
 }
 
+/// Public Mutation API
+///
+/// Only unsigned entries are manually mutable through the public API, those
+/// are local-only and are not synced with other peers.
+impl Catalog {
+	/// Inserts an unsigned peer entry in the catalog.
+	///
+	/// This method does not follow versioning semantics since unsigned entries
+	/// are not authoritative.
+	///
+	/// This method does nothing if there is already a signed entry for the same
+	/// peer ID.
+	///
+	/// Inserting the local peer entry is not allowed and always returns `false`.
+	pub fn insert_unsigned(&mut self, entry: PeerEntry) -> bool {
+		if entry.id() == &self.local_id {
+			return false;
+		}
+
+		if !self.signed.contains_key(entry.id()) {
+			self.unsigned.insert(*entry.id(), entry);
+			return true;
+		}
+
+		false
+	}
+
+	/// Removes the unsigned entry for the given peer ID.
+	/// Returns the removed unsigned entry if it existed.
+	pub fn remove_unsigned(&mut self, peer_id: &PeerId) -> Option<PeerEntry> {
+		self.unsigned.remove(peer_id)
+	}
+
+	/// Clears all unsigned entries from the catalog.
+	pub fn clear_unsigned(&mut self) {
+		self.unsigned.clear();
+	}
+}
+
 /// The result of an attempt to insert or update a signed peer entry in the
 /// catalog.
 pub enum UpsertResult<'a> {
@@ -244,28 +283,6 @@ impl Catalog {
 		}
 	}
 
-	/// Inserts an unsigned peer entry in the catalog.
-	///
-	/// This method does not follow versioning semantics since unsigned entries
-	/// are not authoritative.
-	///
-	/// This method does nothing if there is already a signed entry for the same
-	/// peer ID.
-	///
-	/// Inserting the local peer entry is not allowed and always returns `false`.
-	pub(super) fn insert_unsigned(&mut self, entry: PeerEntry) -> bool {
-		if entry.id() == &self.local_id {
-			return false;
-		}
-
-		if !self.signed.contains_key(entry.id()) {
-			self.unsigned.insert(*entry.id(), entry);
-			return true;
-		}
-
-		false
-	}
-
 	/// Removes all entries (signed and unsigned) for the given peer ID.
 	/// Returns the removed unsigned entry if it existed.
 	///
@@ -295,15 +312,6 @@ impl Catalog {
 		self.signed.remove(peer_id)
 	}
 
-	/// Removes the unsigned entry for the given peer ID.
-	/// Returns the removed unsigned entry if it existed.
-	pub(super) fn remove_unsigned(
-		&mut self,
-		peer_id: &PeerId,
-	) -> Option<PeerEntry> {
-		self.unsigned.remove(peer_id)
-	}
-
 	/// Clears all entries from the catalog except for the local peer entry.
 	pub(super) fn clear(&mut self) {
 		let local_entry = self
@@ -314,11 +322,6 @@ impl Catalog {
 
 		self.signed.clear();
 		self.signed.insert(self.local_id, local_entry);
-		self.unsigned.clear();
-	}
-
-	/// Clears all unsigned entries from the catalog.
-	pub(super) fn clear_unsigned(&mut self) {
 		self.unsigned.clear();
 	}
 

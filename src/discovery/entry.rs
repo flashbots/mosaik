@@ -289,6 +289,12 @@ impl From<SignedPeerEntry> for PeerEntry {
 	}
 }
 
+impl From<&SignedPeerEntry> for PeerEntry {
+	fn from(signed: &SignedPeerEntry) -> Self {
+		signed.clone().0
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use {
