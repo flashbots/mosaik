@@ -1,30 +1,31 @@
-use {core::time::Duration, mosaik::prelude::*, tracing::info};
+use {core::time::Duration, mosaik::prelude::*};
 
 #[tokio::test]
-async fn peers_have_consistent_maps() -> anyhow::Result<()> {
+async fn peers_have_consistent_maps() {
 	let network_id = NetworkId::random();
-	let n0 = Network::new(network_id.clone()).await?;
-
-	info!(
-		"Node0 is known as {:?} on network {}",
-		n0.local().info(),
-		n0.network_id()
-	);
-
-	info!("Bootstrap addresses: {:?}", n0.local().addr());
+	let n0 = NetworkBuilder::new(network_id.clone())
+		.build_and_run()
+		.await
+		.unwrap();
 
 	let mut nodes = vec![];
 
 	for _ in 0..10 {
-		let node = Network::new(network_id.clone()).await?;
+		let node = NetworkBuilder::new(network_id.clone())
+			.with_bootstrap_peer(n0.local().addr())
+			.build_and_run()
+			.await
+			.unwrap();
 		nodes.push(node);
 	}
 
-	loop {
-		tokio::time::sleep(Duration::from_secs(3)).await;
+	tokio::time::sleep(Duration::from_secs(2)).await;
 
-		for node in &nodes {
-			info!("Peer {} knows about - peers", node.local().id(),);
-		}
+	for node in &nodes {
+		println!(
+			"Peer {} knows about {} peers",
+			node.local().id(),
+			node.discovery().catalog().len()
+		);
 	}
 }
