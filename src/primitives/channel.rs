@@ -17,12 +17,12 @@ impl<T> Default for UnboundedChannel<T> {
 
 impl<T> UnboundedChannel<T> {
 	#[allow(dead_code)]
-	pub(crate) fn sender(&self) -> &mpsc::UnboundedSender<T> {
+	pub(crate) const fn sender(&self) -> &mpsc::UnboundedSender<T> {
 		&self.sender
 	}
 
 	#[allow(dead_code)]
-	pub(crate) fn receiver(&mut self) -> &mut mpsc::UnboundedReceiver<T> {
+	pub(crate) const fn receiver(&mut self) -> &mut mpsc::UnboundedReceiver<T> {
 		&mut self.receiver
 	}
 

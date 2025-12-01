@@ -22,7 +22,7 @@ use {
 			oneshot,
 			watch,
 		},
-		task::{JoinError, JoinHandle},
+		task::{JoinError, JoinHandle, JoinSet},
 	},
 };
 
@@ -90,6 +90,7 @@ pub(super) struct WorkerLoop {
 	announce: Announce,
 	catalog: watch::Sender<Catalog>,
 	events: broadcast::Sender<Event>,
+	syncs: JoinSet<Result<(), Error>>,
 	commands: UnboundedReceiver<WorkerCommand>,
 }
 
@@ -113,6 +114,7 @@ impl WorkerLoop {
 			announce,
 			catalog: catalog_tx,
 			events: events_tx,
+			syncs: JoinSet::new(),
 			commands: commands_rx,
 		};
 
@@ -172,12 +174,23 @@ impl WorkerLoop {
 				// Catalog sync protocol events
 				Some(event) = self.sync.events().recv() => {
 					tracing::debug!(event = ?event, "Discovery catalog sync event");
-					self.events.send(Event::CatalogSync(event)).ok();
+					self.events.send(event).ok();
 				}
 
 				// External commands from the handle
 				Some(command) = self.commands.recv() => {
 					self.on_external_command(command).await?;
+				}
+
+				// Completed catalog sync tasks
+				Some(result) = self.syncs.join_next() => {
+					if let Err(e) = result {
+						tracing::warn!(
+							error = %e,
+							network = %self.local.network_id(),
+							"Catalog sync task failed"
+						);
+					}
 				}
 
 				// observe local transport-level address changes
@@ -245,7 +258,7 @@ impl WorkerLoop {
 				);
 
 				// Update the catalog with the received peer entry
-				self.catalog.send_modify(|catalog| {
+				self.catalog.send_if_modified(|catalog| {
 					match catalog.upsert_signed(signed_peer_entry) {
 						UpsertResult::New(signed_peer_entry) => {
 							tracing::info!(
@@ -253,10 +266,17 @@ impl WorkerLoop {
 								network = %self.local.network_id(),
 								"New peer discovered"
 							);
+
+							// Trigger a full catalog sync with the newly discovered peer
+							self
+								.syncs
+								.spawn(self.sync.sync_with(*signed_peer_entry.id()));
+
 							self
 								.events
 								.send(Event::PeerDiscovered(signed_peer_entry.clone().into()))
 								.ok();
+							true
 						}
 						UpsertResult::Updated(signed_peer_entry) => {
 							tracing::debug!(
@@ -268,6 +288,7 @@ impl WorkerLoop {
 								.events
 								.send(Event::PeerUpdated(signed_peer_entry.clone().into()))
 								.ok();
+							true
 						}
 						UpsertResult::Rejected(signed_peer_entry) => {
 							tracing::debug!(
@@ -275,8 +296,9 @@ impl WorkerLoop {
 								network = %self.local.network_id(),
 								"Stale peer update rejected via discovery"
 							);
+							false
 						}
-					};
+					}
 				});
 			}
 		}
@@ -324,9 +346,9 @@ pub(super) enum WorkerCommand {
 		oneshot::Sender<()>,
 	),
 
-	/// Accept an incoming CatalogSync protocol connection from a remote peer
+	/// Accept an incoming `CatalogSync` protocol connection from a remote peer
 	AcceptCatalogSync(Connection),
 
-	/// Accept an incoming Announce protocol connection from a remote peer
+	/// Accept an incoming `Announce` protocol connection from a remote peer
 	AcceptAnnounce(Connection),
 }

@@ -29,7 +29,7 @@ impl<D: Datum> Builder<'_, D> {
 
 /// Internal methods
 impl<D: Datum> Builder<'_, D> {
-	/// Opens or creates the shared sink for this producer.
+	/// Opens or creates the shared sink for this stream id.
 	///
 	/// All producers of the same stream type share a single sink instance
 	/// to fan out data to remote consumers. When a new sink is created, we

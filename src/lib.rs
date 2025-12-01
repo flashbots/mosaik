@@ -17,7 +17,6 @@ pub use {
 		PeerEntry,
 		PeerEntryVersion,
 		SignedPeerEntry,
-		SyncEvent,
 	},
 	groups::*,
 	iroh::{

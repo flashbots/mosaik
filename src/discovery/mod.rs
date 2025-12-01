@@ -33,7 +33,6 @@ pub use {
 	entry::{PeerEntry, PeerEntryVersion, SignedPeerEntry},
 	error::Error,
 	event::Event,
-	sync::Event as SyncEvent,
 };
 
 /// The discovery system for a Mosaik network.

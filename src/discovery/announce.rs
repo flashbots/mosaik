@@ -27,9 +27,11 @@ use {
 	tracing::error,
 };
 
-mod event;
-
-pub use event::Event;
+#[derive(Debug, Clone)]
+pub enum Event {
+	/// A valid and signed peer entry has been updated.
+	PeerEntryReceived(SignedPeerEntry),
+}
 
 /// The announcement protocol for broadcasting peer presence and metadata.
 ///

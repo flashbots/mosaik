@@ -11,7 +11,4 @@ pub enum Event {
 
 	/// A peer has broadcasted its departure.
 	PeerDeparted(PeerId),
-
-	/// An event from the catalog sync subsystem.
-	CatalogSync(super::sync::Event),
 }

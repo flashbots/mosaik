@@ -1,5 +1,5 @@
 use {
-	super::{Config, PeerEntry, SignedPeerEntry},
+	super::{Config, Event, PeerEntry, SignedPeerEntry},
 	crate::{LocalNode, PeerId},
 };
 
@@ -7,7 +7,7 @@ use {
 ///
 /// Notes:
 ///
-/// - All entries in the catalog are ordered by the `[PeerId`] to maintain
+/// - All entries in the catalog are ordered by the [`PeerId`] to maintain
 ///   consistency across different instances with the same entries.
 ///
 /// - The public API of the catalog allows only read access to the entries;
@@ -37,9 +37,9 @@ use {
 /// - The catalog does not provide a public API for constructing new instances;
 ///   they are created and owned by the discovery system internally.
 ///
-/// - The catalog is the source of truth about the local node's own peer entry.
-///   The local node's peer entry is always present in the catalog and can be
-///   accessed via the public API.
+/// - The catalog is the authoritative source of truth about the local node's
+///   own peer entry. The local node's peer entry is always present in the
+///   catalog and can be accessed via the public API.
 ///
 /// - The local node's peer entry is always signed. Inserting an unsigned local
 ///   peer entry is not allowed.
@@ -225,8 +225,7 @@ impl Catalog {
 		self.unsigned.remove(entry.id());
 		match self.signed.entry(peer_id) {
 			im::ordmap::Entry::Occupied(mut existing) => {
-				let existing_version = existing.get().version();
-				if entry.version() > existing_version {
+				if entry.is_newer_than(existing.get()) {
 					existing.insert(entry);
 					UpsertResult::Updated(
 						self.signed.get(&peer_id).expect("entry exists"),
@@ -321,5 +320,38 @@ impl Catalog {
 	/// Clears all unsigned entries from the catalog.
 	pub(super) fn clear_unsigned(&mut self) {
 		self.unsigned.clear();
+	}
+
+	/// Absorbs all signed entries from the given iterator into the catalog.
+	///
+	/// This is used when syncing catalogs between peers, it will upsert all
+	/// signed entries from the other catalog into this one.
+	///
+	/// The local peer entry is never affected and remains unchanged.
+	///
+	/// Returns an iterator over events corresponding to the changes made to the
+	/// catalog as a result of this operation. The events are analogous to those
+	/// that would be emitted if the entries were modified individually via the
+	/// announce protocol.
+	pub(super) fn extend_signed(
+		&mut self,
+		entries: impl Iterator<Item = SignedPeerEntry>,
+	) -> impl Iterator<Item = Event> {
+		let mut events = Vec::new();
+		for signed in entries {
+			if signed.id() != &self.local_id {
+				match self.upsert_signed(signed) {
+					UpsertResult::New(entry) => {
+						events.push(Event::PeerDiscovered(entry.clone().into_unsigned()));
+					}
+					UpsertResult::Updated(entry) => {
+						events.push(Event::PeerUpdated(entry.clone().into_unsigned()));
+					}
+					UpsertResult::Rejected(_) => {}
+				}
+			}
+		}
+
+		events.into_iter()
 	}
 }

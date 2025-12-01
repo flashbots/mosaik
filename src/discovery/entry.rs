@@ -115,8 +115,14 @@ impl PeerEntry {
 		let mut hasher = Sha3_256::new();
 		#[expect(clippy::missing_panics_doc)]
 		encode_into_std_write(self, &mut hasher, standard())
-			.expect("Failed to encode PeerEntry for digest");
+			.expect("Failed to encode PeerEntry for digest calculation");
 		hasher.finalize().into()
+	}
+
+	/// Returns true if this [`PeerEntry`] is newer than the other based on the
+	/// version.
+	pub fn is_newer_than(&self, other: &PeerEntry) -> bool {
+		self.version > other.version
 	}
 }
 
@@ -239,7 +245,7 @@ pub struct SignedPeerEntry(
 
 impl SignedPeerEntry {
 	/// Consumes the `SignedPeerEntry`, returning the inner `PeerEntry`.
-	pub fn unsigned(self) -> PeerEntry {
+	pub fn into_unsigned(self) -> PeerEntry {
 		self.0
 	}
 }
@@ -280,5 +286,206 @@ impl<'de> Deserialize<'de> for SignedPeerEntry {
 impl From<SignedPeerEntry> for PeerEntry {
 	fn from(signed: SignedPeerEntry) -> Self {
 		signed.0
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use {
+		super::*,
+		bincode::serde::{decode_from_std_read, encode_to_vec},
+	};
+
+	#[test]
+	fn signed_peer_entry_with_invalid_signature_fails_to_deserialize() {
+		let secret = SecretKey::generate(&mut rand::rng());
+		let address = EndpointAddr::from(secret.public());
+		let entry = PeerEntry::new(address);
+		let signed = entry.sign(&secret).unwrap();
+
+		// Serialize the valid signed entry
+		let serialized = encode_to_vec(&signed, standard())
+			.expect("Failed to serialize SignedPeerEntry");
+
+		// Tamper with the signature bytes (last 64 bytes are the signature)
+		let mut tampered = serialized.clone();
+		let len = tampered.len();
+		tampered[len - 1] ^= 0xFF; // Flip bits in signature
+
+		// Attempt to deserialize should fail
+		let result: Result<SignedPeerEntry, _> =
+			decode_from_std_read(&mut tampered.as_slice(), standard());
+
+		assert!(
+			result.is_err(),
+			"Expected deserialization to fail with invalid signature"
+		);
+	}
+
+	#[test]
+	fn signed_peer_entry_with_modified_entry_fails_to_deserialize() {
+		let secret = SecretKey::generate(&mut rand::rng());
+		let address = EndpointAddr::from(secret.public());
+		let entry = PeerEntry::new(address.clone()).add_tags(Tag::from("original"));
+		let signed = entry.sign(&secret).unwrap();
+
+		// Get the signature from valid signed entry
+		let signature = signed.1;
+
+		// Create modified entry with different tags
+		let modified_entry =
+			PeerEntry::new(address).add_tags(Tag::from("modified"));
+
+		// Manually construct modified entry but original signature
+		let invalid_signed = SignedPeerEntry(modified_entry, signature);
+		let serialized = encode_to_vec(&invalid_signed, standard())
+			.expect("Failed to serialize SignedPeerEntry");
+
+		// Attempt to deserialize should fail
+		let result: Result<SignedPeerEntry, _> =
+			decode_from_std_read(&mut serialized.as_slice(), standard());
+
+		assert!(
+			result.is_err(),
+			"Expected deserialization to fail with modified entry"
+		);
+	}
+
+	#[test]
+	fn valid_signed_peer_entry_deserializes_successfully() {
+		let secret = SecretKey::generate(&mut rand::rng());
+		let address = EndpointAddr::from(secret.public());
+		let entry = PeerEntry::new(address);
+		let signed = entry.sign(&secret).unwrap();
+
+		let serialized = encode_to_vec(&signed, standard())
+			.expect("Failed to serialize SignedPeerEntry");
+
+		let deserialized: SignedPeerEntry =
+			decode_from_std_read(&mut serialized.as_slice(), standard())
+				.expect("Failed to deserialize valid SignedPeerEntry");
+
+		assert_eq!(signed, deserialized);
+	}
+
+	#[test]
+	fn version_increments_on_add_tags() {
+		let secret = SecretKey::generate(&mut rand::rng());
+		let address = EndpointAddr::from(secret.public());
+		let entry = PeerEntry::new(address);
+		let initial_version = entry.version();
+
+		let updated = entry.add_tags(Tag::from("test"));
+
+		assert!(
+			updated.version() > initial_version,
+			"Version should increment after add_tags"
+		);
+	}
+
+	#[test]
+	fn version_increments_on_remove_tags() {
+		let secret = SecretKey::generate(&mut rand::rng());
+		let address = EndpointAddr::from(secret.public());
+		let entry = PeerEntry::new(address).add_tags(Tag::from("test"));
+		let initial_version = entry.version();
+
+		let updated = entry.remove_tags(Tag::from("test"));
+
+		assert!(
+			updated.version() > initial_version,
+			"Version should increment after remove_tags"
+		);
+	}
+
+	#[test]
+	fn version_increments_on_add_streams() {
+		let secret = SecretKey::generate(&mut rand::rng());
+		let address = EndpointAddr::from(secret.public());
+		let entry = PeerEntry::new(address);
+		let initial_version = entry.version();
+
+		let updated = entry.add_streams(StreamId::from("test-stream"));
+
+		assert!(
+			updated.version() > initial_version,
+			"Version should increment after add_streams"
+		);
+	}
+
+	#[test]
+	fn version_increments_on_remove_streams() {
+		let secret = SecretKey::generate(&mut rand::rng());
+		let address = EndpointAddr::from(secret.public());
+		let entry =
+			PeerEntry::new(address).add_streams(StreamId::from("test-stream"));
+		let initial_version = entry.version();
+
+		let updated = entry.remove_streams(StreamId::from("test-stream"));
+
+		assert!(
+			updated.version() > initial_version,
+			"Version should increment after remove_streams"
+		);
+	}
+
+	#[test]
+	fn version_increments_on_update_address() {
+		let secret = SecretKey::generate(&mut rand::rng());
+		let address = EndpointAddr::from(secret.public());
+		let entry = PeerEntry::new(address.clone());
+		let initial_version = entry.version();
+
+		let updated = entry.update_address(address).unwrap();
+
+		assert!(
+			updated.version() > initial_version,
+			"Version should increment after update_address"
+		);
+	}
+
+	#[test]
+	fn version_increments_monotonically_on_multiple_changes() {
+		let secret = SecretKey::generate(&mut rand::rng());
+		let address = EndpointAddr::from(secret.public());
+		let entry = PeerEntry::new(address.clone());
+		let v0 = entry.version();
+
+		let entry = entry.add_tags(Tag::from("tag1"));
+		let v1 = entry.version();
+		assert!(v1 > v0, "Version should increment after first change");
+
+		let entry = entry.add_streams(StreamId::from("stream1"));
+		let v2 = entry.version();
+		assert!(v2 > v1, "Version should increment after second change");
+
+		let entry = entry.remove_tags(Tag::from("tag1"));
+		let v3 = entry.version();
+		assert!(v3 > v2, "Version should increment after third change");
+
+		let entry = entry.update_address(address).unwrap();
+		let v4 = entry.version();
+		assert!(v4 > v3, "Version should increment after fourth change");
+	}
+
+	#[test]
+	fn is_newer_than_returns_correct_result() {
+		let secret = SecretKey::generate(&mut rand::rng());
+		let address = EndpointAddr::from(secret.public());
+		let entry1 = PeerEntry::new(address);
+		let entry2 = entry1.clone().add_tags(Tag::from("test"));
+
+		assert!(
+			entry2.is_newer_than(&entry1),
+			"Updated entry should be newer than original"
+		);
+		assert!(
+			!entry1.is_newer_than(&entry2),
+			"Original entry should not be newer than updated"
+		);
+		assert!(
+			!entry1.is_newer_than(&entry1),
+			"Entry should not be newer than itself"
+		);
 	}
 }

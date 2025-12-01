@@ -12,8 +12,15 @@ fn init_test_logging() {
 			_ => return,
 		};
 
-		let prefix_blacklist: &[&'static str] =
-			&["iroh::magicsock", "iroh::net_report"];
+		let prefix_blacklist: &[&'static str] = &[
+			"iroh::magicsock",
+			"iroh::net_report",
+			"iroh::_events::ping",
+			"iroh::_events::pong",
+			"rustls",
+			"hickory_",
+			"hyper_util",
+		];
 
 		let _ = tracing_subscriber::registry()
 			.with(tracing_subscriber::fmt::layer())
