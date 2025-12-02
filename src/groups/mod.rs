@@ -54,7 +54,10 @@
 //!     availability group.
 
 use {
-	crate::{Discovery, LocalNode, ProtocolProvider},
+	crate::{
+		discovery::Discovery,
+		network::{LocalNode, ProtocolProvider},
+	},
 	iroh::protocol::RouterBuilder,
 	listen::Listener,
 };
@@ -65,15 +68,18 @@ mod listen;
 pub use config::{Config, ConfigBuilder, ConfigBuilderError};
 
 pub struct Groups {
-	local: LocalNode,
-	discovery: Discovery,
+	_local: LocalNode,
+	_discovery: Discovery,
 }
 
 impl Groups {
 	const ALPN: &'static [u8] = b"/mosaik/groups/1";
 
 	pub fn new(local: LocalNode, discovery: Discovery, _config: Config) -> Self {
-		Self { local, discovery }
+		Self {
+			_local: local,
+			_discovery: discovery,
+		}
 	}
 }
 

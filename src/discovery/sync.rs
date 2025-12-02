@@ -1,6 +1,9 @@
 use {
-	super::{Catalog, Error, Event},
-	crate::{LocalNode, PeerId, SignedPeerEntry, UnboundedChannel},
+	super::{Catalog, Error, Event, SignedPeerEntry},
+	crate::{
+		network::{LocalNode, PeerId},
+		primitives::UnboundedChannel,
+	},
 	bincode::{
 		config::standard,
 		serde::{decode_from_std_read, encode_to_vec},
@@ -41,9 +44,14 @@ pub(super) struct CatalogSync {
 
 /// Internal methods
 impl CatalogSync {
-	pub(super) const ALPN: &'static [u8] = b"/mosaik/discovery/sync/1";
+	/// ALPN identifier for the catalog sync protocol.
+	pub const ALPN: &'static [u8] = b"/mosaik/discovery/sync/1.0";
 
-	pub(super) fn new(local: LocalNode, catalog: watch::Sender<Catalog>) -> Self {
+	/// Creates a new `CatalogSync` protocol handler instance.
+	///
+	/// This is used internally by the discovery system to handle incoming
+	/// catalog synchronization requests and to initiate syncs with remote peers.
+	pub fn new(local: LocalNode, catalog: watch::Sender<Catalog>) -> Self {
 		Self {
 			local,
 			catalog,
@@ -55,13 +63,13 @@ impl CatalogSync {
 	///
 	/// This is polled by the discovery worker to process incoming events from the
 	/// announcement protocol.
-	pub(super) const fn events(&mut self) -> &mut UnboundedReceiver<Event> {
+	pub const fn events(&mut self) -> &mut UnboundedReceiver<Event> {
 		self.events.receiver()
 	}
 
 	/// Returns the protocol listener instance responsible for accepting incoming
 	/// connections for the catalog sync protocol.
-	pub(super) const fn protocol(&self) -> &impl ProtocolHandler {
+	pub const fn protocol(&self) -> &impl ProtocolHandler {
 		self
 	}
 
@@ -86,6 +94,9 @@ impl CatalogSync {
 	///
 	/// - The initiator closes the connection after receiving the responder's
 	///   snapshot
+	///
+	/// - This async method's lifetime is detached from `self` and can be spawned
+	///   as a background task that requires `Send` + `Sync` + `'static`.
 	pub fn sync_with(
 		&self,
 		peer_id: PeerId,
@@ -157,9 +168,10 @@ impl CatalogSync {
 				updates > 0 || insertions > 0
 			});
 
+			// end of sync, the initiator is responsible for
+			// initiating the close of the connection, and the
+			// acceptor will await stream closure.
 			stream.flush().await?;
-
-			// end of sync, close the stream
 			connection.close(VarInt::from(1u32), b"done");
 			connection.closed().await;
 

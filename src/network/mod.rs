@@ -1,5 +1,10 @@
 use {
-	crate::{Discovery, Groups, Streams, UniqueId},
+	crate::{
+		discovery::Discovery,
+		groups::Groups,
+		primitives::UniqueId,
+		streams::Streams,
+	},
 	iroh::protocol::{Router, RouterBuilder},
 };
 
@@ -80,8 +85,8 @@ impl Network {
 		NetworkBuilder::default().with_network_id(network_id)
 	}
 
-	/// Creates and returns a new `Network` instance with the given network ID and
-	/// default settings.
+	/// Creates and returns a new [`Network`] instance with the given network ID
+	/// and default settings.
 	pub async fn new(network_id: NetworkId) -> Result<Self, NetworkError> {
 		NetworkBuilder::default()
 			.with_network_id(network_id)

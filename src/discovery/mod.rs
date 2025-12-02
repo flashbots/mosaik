@@ -1,10 +1,10 @@
+//! Automatic peer discovery system for Mosaik networks.
+
 use {
 	crate::{
-		IntoIterOrSingle,
-		LocalNode,
-		PeerId,
-		ProtocolProvider,
 		discovery::{announce::Announce, worker::WorkerCommand},
+		network::{LocalNode, PeerId},
+		primitives::IntoIterOrSingle,
 	},
 	iroh::{
 		endpoint::Connection,
@@ -29,7 +29,7 @@ mod worker;
 pub use {
 	announce::Event as AnnounceEvent,
 	catalog::Catalog,
-	config::{Config, ConfigBuilder},
+	config::{Config, ConfigBuilder, ConfigBuilderError, IntoConfig},
 	entry::{PeerEntry, PeerEntryVersion, SignedPeerEntry},
 	error::Error,
 	event::Event,
@@ -110,7 +110,7 @@ impl Discovery {
 }
 
 // Add all gossip ALPNs to the protocol router
-impl ProtocolProvider for Discovery {
+impl crate::network::ProtocolProvider for Discovery {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
 		let announce = Acceptor {
 			name: Announce::ALPN,

@@ -14,24 +14,41 @@ struct Data2(pub String);
 struct Data3(pub String);
 
 #[tokio::test]
-async fn api_design_auto_disc() {
+async fn api_design_basic() {
 	let network_id = NetworkId::random();
 
 	let n0 = Network::new(network_id).await.unwrap();
-	let mut p0 = n0.streams().produce::<Data1>();
+
+	let n1 = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder() //
+				.with_bootstrap(n0.local().id()),
+		)
+		.build()
+		.await
+		.unwrap();
+
+	let n2 = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder() //
+				.with_bootstrap(n0.local().id()),
+		)
+		.build()
+		.await
+		.unwrap();
+
+	// node0
+	let p0 = n0.streams().produce::<Data1>();
 	let p1 = n0.streams().produce::<Data2>();
 
-	let n1 = Network::new(network_id).await.unwrap();
+	// node1
 	let c1 = n1.streams().consume::<Data1>();
 	let p1 = n1.streams().produce::<Data3>();
 
-	let n2 = Network::new(network_id).await.unwrap();
+	// node2
 	let mut c2a = n2.streams().consume::<Data1>();
 	let c2b = n2.streams().consume::<Data2>();
 	let c2c = n2.streams().consume::<Data3>();
-
-	n1.discovery().dial(n0.local().id());
-	n2.discovery().dial(n0.local().id());
 
 	p0.status().subscribed().by_at_least(2).await;
 	p0.send(Data1("One".into())).await.unwrap();

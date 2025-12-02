@@ -107,7 +107,7 @@ thiserror.workspace = true
 tokio-stream.workspace = true
 n0-error.workspace = true
 
-derive_more = "2.0"
+derive_more = { version = "2.0", features = ["full"] }
 sha3 = "0.10"
 hmac = "0.12"
 hex = "0.4"

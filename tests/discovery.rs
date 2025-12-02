@@ -11,32 +11,25 @@ use {
 async fn peers_have_consistent_maps() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 	let n0 = Network::builder(network_id)
-		.with_discovery(
-			DiscoveryConfig::builder()
-				.with_tags("beacon-node")
-				.build()?,
-		)
+		.with_discovery(discovery::Config::builder().with_tags("beacon-node"))
 		.build()
 		.await?;
 
 	info!(
-		"Node0 is known as {:?} on network {}",
+		"Node0 (bootstrap) is known as {:?} on network {}",
 		n0.local().id(),
 		n0.network_id()
 	);
 
 	n0.online().await;
 
-	info!("Bootstrap addresses: {:?}", n0.local().addr());
-
 	let mut nodes = vec![];
 
 	for _ in 0..10 {
 		let node = Network::builder(network_id)
 			.with_discovery(
-				DiscoveryConfig::builder()
-					.with_bootstrap(n0.local().id())
-					.build()?,
+				discovery::Config::builder() //
+					.with_bootstrap(n0.local().id()),
 			)
 			.build()
 			.await?;

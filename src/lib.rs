@@ -1,49 +1,25 @@
-mod network;
-mod primitives;
+//! # Mosaik
+//!
+//! A Rust SDK for building self-organizing, leaderless distributed systems,
+//! providing primitives for automatic discovery, topology management, and
+//! load-balancing.
 
 pub mod discovery;
 pub mod groups;
+pub mod network;
+pub mod primitives;
 pub mod streams;
 
-pub use {
-	discovery::{
-		AnnounceEvent,
-		Catalog,
-		Config as DiscoveryConfig,
-		ConfigBuilder as DiscoveryConfigBuilder,
-		Discovery,
-		Error as DiscoveryError,
-		Event as DiscoveryEvent,
-		PeerEntry,
-		PeerEntryVersion,
-		SignedPeerEntry,
-	},
-	groups::*,
-	iroh::{
-		Endpoint,
-		EndpointAddr,
-		EndpointId,
-		PublicKey,
-		SecretKey,
-		Signature,
-		TransportAddr,
-	},
-	network::*,
-	primitives::*,
-	streams::{
-		Config as StreamsConfig,
-		ConfigBuilder as StreamsConfigBuilder,
-		Consumer,
-		Datum,
-		Producer,
-		StreamId,
-		Streams,
-	},
-};
-
-/// Used internally as a sentinel type for generic parameters.
-#[doc(hidden)]
-pub enum Variant<const U: usize = 0> {}
+// Mosaik Public API entry point
+pub use network::{Network, NetworkId};
 
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
+
+// Hidden re-exports for common types used by the Public API
+#[doc(hidden)]
+pub use {
+	futures,
+	iroh::{self, SecretKey, Signature},
+	streams::{Criteria, Datum, StreamId},
+};

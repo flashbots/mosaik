@@ -1,5 +1,5 @@
 use {
-	crate::{NetworkId, SecretKey},
+	crate::{SecretKey, network::NetworkId},
 	iroh::{Endpoint, EndpointAddr},
 	std::{fmt, sync::Arc},
 	tokio::sync::SetOnce,
@@ -10,7 +10,7 @@ use {
 ///
 /// Notes:
 /// - This type is cheap to clone; all clones refer to the same underlying
-///   instance that is created and owned by the [`Network`] type.
+///   instance that is created and owned by the [`super::Network`] type.
 ///
 /// - This type provides access to the transport layer of the local node for
 ///   establishing new connections to remote peers.
@@ -49,7 +49,7 @@ impl LocalNode {
 	///
 	/// This key is the private key corresponding to the node's public identity
 	/// and is used for signing and authenticating the node in the network. It is
-	/// also used to sign [`PeerEntry`]s advertised by the node.
+	/// also used to sign [`crate::discovery::PeerEntry`]s advertised by the node.
 	pub fn secret_key(&self) -> &SecretKey {
 		self.0.endpoint.secret_key()
 	}
@@ -66,8 +66,8 @@ impl LocalNode {
 impl LocalNode {
 	/// Creates a new local node instance with the given network ID and endpoint.
 	///
-	/// This is used by the [`NetworkBuilder`] to construct the local node as part
-	/// of building the overall network instance.
+	/// This is used by the [`super::NetworkBuilder`] to construct the local node
+	/// as part of building the overall network instance.
 	pub(crate) fn new(network_id: NetworkId, endpoint: Endpoint) -> Self {
 		Self(Arc::new(Inner {
 			network_id,
@@ -117,9 +117,6 @@ impl fmt::Display for LocalNode {
 }
 
 /// Inner state of the local node carried across all clones of [`LocalNode`].
-///
-/// Its constructed by the `EventLoop` struct and is responsible for
-/// communicating with it.
 struct Inner {
 	/// The network identifier of the local node.
 	network_id: NetworkId,

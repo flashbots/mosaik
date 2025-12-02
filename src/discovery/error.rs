@@ -1,5 +1,5 @@
 use {
-	crate::PeerId,
+	crate::network::PeerId,
 	iroh::endpoint::{ConnectError, ConnectionError},
 	n0_error::Meta,
 };

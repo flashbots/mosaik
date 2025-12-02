@@ -1,6 +1,6 @@
 use {
 	super::{Config, Event, PeerEntry, SignedPeerEntry},
-	crate::{LocalNode, PeerId},
+	crate::network::{LocalNode, PeerId},
 };
 
 /// A catalog of discovered nodes and their associated peer info.

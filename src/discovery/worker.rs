@@ -4,11 +4,15 @@ use {
 		Config,
 		Error,
 		Event,
+		PeerEntry,
 		announce::{self, Announce},
 		catalog::UpsertResult,
 		sync::CatalogSync,
 	},
-	crate::{IntoIterOrSingle, LocalNode, PeerEntry, PeerId},
+	crate::{
+		network::{LocalNode, PeerId},
+		primitives::IntoIterOrSingle,
+	},
 	core::{
 		pin::Pin,
 		task::{Context, Poll},
@@ -338,7 +342,7 @@ impl WorkerLoop {
 
 pub(super) enum WorkerCommand {
 	/// Dial a peer with the given `PeerId`s
-	DialPeers(Vec<crate::PeerId>, oneshot::Sender<()>),
+	DialPeers(Vec<PeerId>, oneshot::Sender<()>),
 
 	/// Update the local peer entry using the provided `PeerEntry` update function
 	UpdateLocalPeerEntry(

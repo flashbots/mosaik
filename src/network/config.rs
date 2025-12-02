@@ -1,25 +1,20 @@
 use {
 	super::{Network, NetworkId, error::Error},
 	crate::{
-		Discovery,
-		Groups,
-		LocalNode,
-		ProtocolProvider,
 		SecretKey,
-		Streams,
-		discovery,
-		groups,
-		streams,
+		discovery::{self, Discovery},
+		groups::{self, Groups},
+		network::{LocalNode, ProtocolProvider},
+		streams::{self, Streams},
 	},
 	core::net::SocketAddr,
 	derive_builder::Builder,
 	iroh::{Endpoint, protocol::Router},
-	serde::{Deserialize, Serialize},
 	std::collections::BTreeSet,
 };
 
 /// Configuration options for the discovery subsystem.
-#[derive(Debug, Clone, Builder, Serialize, Deserialize)]
+#[derive(Debug, Clone, Builder)]
 #[builder(
 	pattern = "owned",
 	name = "NetworkBuilder",
@@ -48,22 +43,23 @@ pub struct NetworkConfig {
 	/// Configuration options for the discovery subsystem.
 	///
 	/// See [`discovery::Config`] for details.
-	#[builder(default = "discovery::Config::builder().build().unwrap()")]
-	discovery: discovery::Config,
+	#[builder(default = "discovery::Config::builder()")]
+	discovery: discovery::ConfigBuilder,
 
 	/// Configuration options for the streams subsystem.
 	///
 	/// See [`streams::Config`] for details.
-	#[builder(default = "streams::Config::builder().build().unwrap()")]
-	streams: streams::Config,
+	#[builder(default = "streams::Config::builder()")]
+	streams: streams::ConfigBuilder,
 
 	/// Configuration options for the groups subsystem.
 	///
 	/// See [`groups::Config`] for details.
-	#[builder(default = "groups::Config::builder().build().unwrap()")]
-	groups: groups::Config,
+	#[builder(default = "groups::Config::builder()")]
+	groups: groups::ConfigBuilder,
 }
 
+/// Public API
 impl NetworkBuilder {
 	/// Builds and returns a new `Network` instance.
 	pub async fn build(self) -> Result<Network, Error> {
@@ -77,17 +73,17 @@ impl NetworkBuilder {
 		let mut protocols = Router::builder(local.endpoint().clone());
 
 		// discovery
-		let config = compiled.discovery;
+		let config = compiled.discovery.build()?;
 		let discovery = Discovery::new(local.clone(), config);
 		protocols = discovery.install(protocols);
 
 		// streams
-		let config = compiled.streams;
+		let config = compiled.streams.build()?;
 		let streams = Streams::new(local.clone(), discovery.clone(), config);
 		protocols = streams.install(protocols);
 
 		// groups
-		let config = compiled.groups;
+		let config = compiled.groups.build()?;
 		let groups = Groups::new(local.clone(), discovery.clone(), config);
 		protocols = groups.install(protocols);
 

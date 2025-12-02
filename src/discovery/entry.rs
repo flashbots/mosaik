@@ -1,16 +1,13 @@
 use {
 	super::Error,
 	crate::{
-		EndpointAddr,
-		IntoIterOrSingle,
-		PeerId,
-		SecretKey,
-		Signature,
 		StreamId,
-		Tag,
+		network::PeerId,
+		primitives::{IntoIterOrSingle, Tag},
 	},
 	bincode::{config::standard, serde::encode_into_std_write},
 	derive_more::{AsRef, Debug, Deref, Into},
+	iroh::{EndpointAddr, SecretKey, Signature},
 	serde::{Deserialize, Deserializer, Serialize, de},
 	std::collections::BTreeSet,
 };

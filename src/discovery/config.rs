@@ -1,15 +1,19 @@
 use {
-	crate::{IntoIterOrSingle, PeerId, Tag},
+	crate::{
+		network::PeerId,
+		primitives::{IntoIterOrSingle, Tag},
+	},
 	derive_builder::Builder,
 	serde::{Deserialize, Serialize},
 };
 
 /// Configuration options for the discovery subsystem.
 #[derive(Debug, Clone, Builder, Serialize, Deserialize, PartialEq, Hash)]
-#[builder(pattern = "owned", setter(prefix = "with"))]
+#[builder(pattern = "owned", setter(prefix = "with"), derive(Debug, Clone))]
+#[builder_struct_attr(doc(hidden))]
 pub struct Config {
 	/// The maximum number of past events to retain in the event backlog in
-	/// [`Discovery::events`] watchers.
+	/// [`super::Discovery::events`] watchers.
 	#[builder(default = "100")]
 	pub events_backlog: usize,
 
@@ -59,5 +63,22 @@ impl ConfigBuilder {
 			self.tags = Some(tags);
 		}
 		self
+	}
+}
+
+#[doc(hidden)]
+pub trait IntoConfig {
+	fn into_config(self) -> Result<Config, ConfigBuilderError>;
+}
+
+impl IntoConfig for Config {
+	fn into_config(self) -> Result<Config, ConfigBuilderError> {
+		Ok(self)
+	}
+}
+
+impl IntoConfig for ConfigBuilder {
+	fn into_config(self) -> Result<Config, ConfigBuilderError> {
+		self.build()
 	}
 }

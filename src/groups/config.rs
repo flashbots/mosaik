@@ -5,7 +5,8 @@ use {
 
 /// Configuration options for the streams subsystem.
 #[derive(Debug, Clone, Builder, Serialize, Deserialize, PartialEq, Hash)]
-#[builder(pattern = "owned", setter(prefix = "with"))]
+#[builder(pattern = "owned", setter(prefix = "with"), derive(Debug, Clone))]
+#[builder_struct_attr(doc(hidden))]
 pub struct Config {}
 
 impl Config {

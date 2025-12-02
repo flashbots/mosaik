@@ -1,4 +1,4 @@
-use crate::{PeerEntry, PeerId};
+use {super::PeerEntry, crate::network::PeerId};
 
 /// Discovery system public API events.
 #[derive(Debug, Clone)]

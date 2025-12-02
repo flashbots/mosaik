@@ -1,23 +1,29 @@
 use {
-	crate::{Discovery, LocalNode, ProtocolProvider, UniqueId},
-	dashmap::DashMap,
+	crate::{
+		discovery::Discovery,
+		network::{LocalNode, ProtocolProvider},
+		primitives::UniqueId,
+	},
+	accept::Acceptor,
 	iroh::protocol::RouterBuilder,
-	listen::Listener,
-	producer::FanoutSink,
+	producer::Sinks,
 	std::sync::Arc,
 };
 
+mod accept;
 mod config;
+mod criteria;
 mod datum;
-mod listen;
+mod link;
 
 // Streams submodules
 pub mod consumer;
 pub mod producer;
 
 pub use {
-	config::{Config, ConfigBuilder},
+	config::{Config, ConfigBuilder, ConfigBuilderError},
 	consumer::Consumer,
+	criteria::Criteria,
 	datum::Datum,
 	producer::Producer,
 };
@@ -34,7 +40,7 @@ pub type StreamId = UniqueId;
 /// network.
 pub struct Streams {
 	/// Configuration for the streams subsystem.
-	config: Config,
+	config: Arc<Config>,
 
 	/// The local node instance associated with this streams subsystem.
 	///
@@ -46,7 +52,7 @@ pub struct Streams {
 	discovery: Discovery,
 
 	/// Map of active fanout sinks by stream id.
-	sinks: Arc<DashMap<StreamId, FanoutSink>>,
+	sinks: Sinks,
 }
 
 /// Public API
@@ -55,12 +61,12 @@ impl Streams {
 	/// configuration.
 	///
 	/// For more advanced configuration, use [`Streams::producer`] to get a
-	/// [`ProducerBuilder`] that can be customized.
+	/// [`producer::Builder`] that can be customized.
 	pub async fn produce<D: Datum>(&self) -> Producer<D> {
 		self.producer().build().await
 	}
 
-	/// Creates a new [`ProducerBuilder`] for the given data type `D` to
+	/// Creates a new [`producer::Builder`] for the given data type `D` to
 	/// assemble a more nuanced producer configuration.
 	pub fn producer<D: Datum>(&self) -> producer::Builder<'_, D> {
 		producer::Builder::new(self)
@@ -70,12 +76,12 @@ impl Streams {
 	/// configuration.
 	///
 	/// For more advanced configuration, use [`Streams::consumer`] to get a
-	/// [`ConsumerBuilder`] that can be customized.
+	/// [`consumer::Builder`] that can be customized.
 	pub fn consume<D: Datum>(&self) -> Consumer<D> {
 		self.consumer().build()
 	}
 
-	/// Creates a new [`ConsumerBuilder`] for the given data type `D` to
+	/// Creates a new [`consumer::Builder`] for the given data type `D` to
 	/// assemble a more nuanced consumer configuration.
 	pub fn consumer<D: Datum>(&self) -> consumer::Builder<'_, D> {
 		consumer::Builder::new(self)
@@ -84,24 +90,28 @@ impl Streams {
 
 /// Internal construction API
 impl Streams {
-	const ALPN: &'static [u8] = b"/mosaik/streams/1";
+	/// ALPN identifier for the streams protocol.
+	const ALPN: &'static [u8] = b"/mosaik/streams/1.0";
 
+	/// Internally used by [`super::NetworkBuilder`] to create a new Streams
+	/// subsystem instance as part of the overall [`super::Network`] instance.
 	pub(crate) fn new(
 		local: LocalNode,
 		discovery: Discovery,
 		config: Config,
 	) -> Self {
+		let config = Arc::new(config);
 		Self {
-			config,
 			local,
-			discovery,
-			sinks: Arc::new(DashMap::new()),
+			config: Arc::clone(&config),
+			discovery: discovery.clone(),
+			sinks: Sinks::new(discovery, config),
 		}
 	}
 }
 
 impl ProtocolProvider for Streams {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
-		protocols.accept(Self::ALPN, Listener::new(self))
+		protocols.accept(Self::ALPN, Acceptor::new(self))
 	}
 }

@@ -4,6 +4,7 @@ use {
 };
 
 /// Implemented by all data types that are published as streams.
+///
 /// This type gives us zero-friction default implementations for
 /// any serializable rust type.
 pub trait Datum: Serialize + DeserializeOwned + Send + Sync + 'static {
