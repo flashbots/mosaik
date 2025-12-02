@@ -37,5 +37,7 @@ pub mod prelude {
 	};
 }
 
+pub use iroh::{EndpointAddr, EndpointId, PublicKey, SecretKey};
+
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
