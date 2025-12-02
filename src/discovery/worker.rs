@@ -46,7 +46,7 @@ pub(super) struct Handle {
 
 impl Handle {
 	/// Sends a command to dial a peer with the given `PeerId`
-	pub(super) async fn dial<V>(&self, peers: impl IntoIterOrSingle<PeerId, V>) {
+	pub async fn dial<V>(&self, peers: impl IntoIterOrSingle<PeerId, V>) {
 		let (tx, rx) = oneshot::channel();
 		self
 			.commands
@@ -60,16 +60,14 @@ impl Handle {
 
 	/// Sends a command to update the local peer entry using the provided update
 	/// function.
-	pub(super) async fn update_local_peer_entry(
+	pub fn update_local_peer_entry(
 		&self,
 		update: impl FnOnce(PeerEntry) -> PeerEntry + Send + 'static,
 	) {
-		let (tx, rx) = oneshot::channel();
 		self
 			.commands
-			.send(WorkerCommand::UpdateLocalPeerEntry(Box::new(update), tx))
-			.ok();
-		let _ = rx.await;
+			.send(WorkerCommand::UpdateLocalPeerEntry(Box::new(update)))
+			.expect("Discovery worker loop is down");
 	}
 }
 
@@ -220,9 +218,8 @@ impl WorkerLoop {
 				self.announce.dial(peers);
 				let _ = resp.send(());
 			}
-			WorkerCommand::UpdateLocalPeerEntry(update_fn, resp) => {
+			WorkerCommand::UpdateLocalPeerEntry(update_fn) => {
 				self.update_local_peer_entry(update_fn);
-				let _ = resp.send(());
 			}
 			WorkerCommand::AcceptCatalogSync(connection) => {
 				let peer_id = connection.remote_id();
@@ -245,6 +242,15 @@ impl WorkerLoop {
 						"Failed to accept announce connection"
 					);
 				}
+			}
+			WorkerCommand::InsertUnsignedPeer(entry) => {
+				self.insert_unsigned_peer(entry);
+			}
+			WorkerCommand::RemoveUnsignedPeer(peer_id) => {
+				self.remove_unsigned_peer(&peer_id);
+			}
+			WorkerCommand::ClearUnsignedPeers => {
+				self.clear_unsigned_peers();
 			}
 		}
 		Ok(())
@@ -338,6 +344,28 @@ impl WorkerLoop {
 			);
 		});
 	}
+
+	/// Inserts an unsigned peer entry into the catalog that is only used locally
+	/// by this node and is not synced to other peers.
+	fn insert_unsigned_peer(&mut self, entry: PeerEntry) {
+		self
+			.catalog
+			.send_if_modified(|catalog| catalog.insert_unsigned(entry));
+	}
+
+	/// Removes an unsigned peer entry from the catalog by its [`PeerId`].
+	fn remove_unsigned_peer(&mut self, peer_id: &PeerId) {
+		self
+			.catalog
+			.send_if_modified(|catalog| catalog.remove_unsigned(peer_id).is_some());
+	}
+
+	/// Clears all unsigned peer entries from the catalog.
+	fn clear_unsigned_peers(&mut self) {
+		self
+			.catalog
+			.send_if_modified(|catalog| catalog.clear_unsigned());
+	}
 }
 
 pub(super) enum WorkerCommand {
@@ -345,14 +373,21 @@ pub(super) enum WorkerCommand {
 	DialPeers(Vec<PeerId>, oneshot::Sender<()>),
 
 	/// Update the local peer entry using the provided `PeerEntry` update function
-	UpdateLocalPeerEntry(
-		Box<dyn FnOnce(PeerEntry) -> PeerEntry + Send>,
-		oneshot::Sender<()>,
-	),
+	UpdateLocalPeerEntry(Box<dyn FnOnce(PeerEntry) -> PeerEntry + Send>),
 
 	/// Accept an incoming `CatalogSync` protocol connection from a remote peer
 	AcceptCatalogSync(Connection),
 
 	/// Accept an incoming `Announce` protocol connection from a remote peer
 	AcceptAnnounce(Connection),
+
+	/// Adds a new unsigned peer entry to the catalog that is used locally by this
+	/// node but is not synced to other peers.
+	InsertUnsignedPeer(PeerEntry),
+
+	/// Removes an unsigned peer entry from the catalog by its [`PeerId`].
+	RemoveUnsignedPeer(PeerId),
+
+	/// Clears all unsigned peer entries from the catalog.
+	ClearUnsignedPeers,
 }

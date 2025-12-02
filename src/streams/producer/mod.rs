@@ -1,3 +1,5 @@
+//! Stream Producers
+
 use {crate::Datum, tokio::sync::mpsc};
 
 mod builder;
@@ -14,8 +16,9 @@ pub use {builder::Builder, error::Error, status::Status};
 /// Producer handle for sending data to a stream.
 ///
 /// Notes:
-///  - One [`crate::Network`] can have multiple [`Producer`] instances for the
-///    same data type `D` that share the same stream id.
+///  - One [`Network`](crate::Network) can have multiple [`Producer`] instances
+///    for the same stream id (mpsc). They all share the same underlying fanout
+///    sink.
 pub struct Producer<D: Datum> {
 	_chan: mpsc::Sender<D>,
 	_status: Status,

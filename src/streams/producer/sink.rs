@@ -49,7 +49,7 @@ impl Sinks {
 	/// Each active stream id sink has a corresponding entry in the local node's
 	/// [`PeerEntry`](crate::discovery::PeerEntry) that is used to advertise the
 	/// stream to remote peers.
-	pub async fn open_or_create<D: Datum>(&self) -> SinkHandle {
+	pub fn open_or_create<D: Datum>(&self) -> SinkHandle {
 		let stream_id = D::stream_id();
 		match self.active.entry(stream_id) {
 			Entry::Vacant(entry) => {
@@ -62,8 +62,7 @@ impl Sinks {
 				// in the list of advertised streams so it can be discovered by others.
 				self
 					.discovery
-					.update_local_entry(move |me| me.add_streams(stream_id))
-					.await;
+					.update_local_entry(move |me| me.add_streams(stream_id));
 
 				handle.clone()
 			}

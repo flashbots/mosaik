@@ -10,13 +10,11 @@ pub mod network;
 pub mod primitives;
 pub mod streams;
 
-// Mosaik Public API entry point
 pub use network::{Network, NetworkId};
 
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 
-// Hidden re-exports for common types used by the Public API
 #[doc(hidden)]
 pub use {
 	futures,

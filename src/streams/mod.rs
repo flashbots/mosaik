@@ -1,3 +1,5 @@
+//! Streams Consumers and Producers
+
 use {
 	crate::{
 		discovery::Discovery,

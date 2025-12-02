@@ -1,3 +1,5 @@
+//! Network management module
+
 use {
 	crate::{
 		discovery::Discovery,
@@ -25,7 +27,8 @@ pub use {
 /// - This type represents a Mosaik network connection and provides methods to
 ///   access different facilities such as peer discovery and stream management.
 ///
-/// - in most cases one network instance will represent one running actor/node.
+/// - In most cases one network instance will represent one running
+///   process/node.
 ///
 /// - Each network instance has a globally unique identity that is the public
 ///   key of the secret key used to construct it. If no secret key is provided a
@@ -39,10 +42,10 @@ pub use {
 /// - By default a random local port will be chosen for the network instance.
 ///   This can be overridden by providing a specific port in the builder.
 ///
-/// - Mosaik networks are identified by a `NetworkId` which is a unique
+/// - Mosaik networks are identified by a [`NetworkId`] which is a unique
 ///   identifier (a sha3-256 hash of the network name). Nodes can only connect
 ///   to other nodes that are part of the same network (i.e. have the same
-///   `NetworkId`).
+///   [`NetworkId`]).
 pub struct Network {
 	/// The local node instance.
 	/// Maintains the transport layer endpoint and addresses.

@@ -1,4 +1,4 @@
-//! Automatic peer discovery system for Mosaik networks.
+//! Automatic topology discovery
 
 use {
 	crate::{
@@ -25,7 +25,6 @@ mod event;
 mod sync;
 mod worker;
 
-/// Public Discovery API exports
 pub use {
 	announce::Event as AnnounceEvent,
 	catalog::Catalog,
@@ -81,6 +80,41 @@ impl Discovery {
 	pub fn events(&self) -> broadcast::Receiver<Event> {
 		self.0.events.resubscribe()
 	}
+
+	/// Inserts an unsigned [`PeerEntry`] into the local catalog.
+	///
+	/// Notes:
+	/// - This peer entry is not synced to other peers and is only used locally by
+	///   this node. When a signed peer entry with the same [`PeerId`] already
+	///   exists, this entry is ignored.
+	///  - When a signed entry is later added for the same [`PeerId`], the
+	///    unsigned entry is removed.
+	pub fn insert(&self, entry: PeerEntry) {
+		let _ = self
+			.0
+			.commands
+			.send(WorkerCommand::InsertUnsignedPeer(entry));
+	}
+
+	/// Removes an unsigned [`PeerEntry`] from the local catalog by its
+	/// [`PeerId`].
+	///
+	/// Notes:
+	/// - This will only remove unsigned entries that were previously added via
+	///   [`Discovery::insert`]. Signed entries are not affected.
+	pub fn remove(&self, peer_id: PeerId) {
+		let _ = self
+			.0
+			.commands
+			.send(WorkerCommand::RemoveUnsignedPeer(peer_id));
+	}
+
+	/// Clears all unsigned [`PeerEntry`] instances from the local catalog that
+	/// were manually added via [`Discovery::insert`]. Signed entries are not
+	/// affected.
+	pub fn clear_unsigned(&self) {
+		let _ = self.0.commands.send(WorkerCommand::ClearUnsignedPeers);
+	}
 }
 
 /// Internal construction API
@@ -101,11 +135,11 @@ impl Discovery {
 	/// This api is not intended to be used directly by users of the discovery
 	/// system, but rather by higher-level abstractions that manage the local
 	/// peer's state.
-	pub(crate) async fn update_local_entry(
+	pub(crate) fn update_local_entry(
 		&self,
 		update: impl FnOnce(PeerEntry) -> PeerEntry + Send + 'static,
 	) {
-		self.0.update_local_peer_entry(update).await;
+		self.0.update_local_peer_entry(update);
 	}
 }
 

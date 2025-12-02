@@ -16,8 +16,10 @@ struct Data3(pub String);
 #[tokio::test]
 async fn api_design_basic() {
 	let network_id = NetworkId::random();
-
 	let n0 = Network::new(network_id).await.unwrap();
+
+	// wait for the bootstrap node to be online
+	n0.online().await;
 
 	let n1 = Network::builder(network_id)
 		.with_discovery(

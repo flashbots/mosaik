@@ -8,10 +8,15 @@ use {
 };
 
 #[tokio::test]
-async fn peers_have_consistent_maps() -> anyhow::Result<()> {
+async fn catalogs_are_consistent() -> anyhow::Result<()> {
+	const PEERS_COUNT: usize = 10;
+
 	let network_id = NetworkId::random();
 	let n0 = Network::builder(network_id)
-		.with_discovery(discovery::Config::builder().with_tags("beacon-node"))
+		.with_discovery(
+			discovery::Config::builder() //
+				.with_tags("beacon-node"),
+		)
 		.build()
 		.await?;
 
@@ -21,11 +26,9 @@ async fn peers_have_consistent_maps() -> anyhow::Result<()> {
 		n0.network_id()
 	);
 
-	n0.online().await;
-
 	let mut nodes = vec![];
 
-	for _ in 0..10 {
+	for _ in 0..PEERS_COUNT {
 		let node = Network::builder(network_id)
 			.with_discovery(
 				discovery::Config::builder() //

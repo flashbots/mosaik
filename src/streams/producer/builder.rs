@@ -21,6 +21,6 @@ impl<'s, D: Datum> Builder<'s, D> {
 /// Public API
 impl<D: Datum> Builder<'_, D> {
 	pub async fn build(&self) -> Producer<D> {
-		self.streams.sinks.open_or_create::<D>().await.sender()
+		self.streams.sinks.open_or_create::<D>().sender()
 	}
 }

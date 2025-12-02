@@ -12,7 +12,7 @@ use {
 	std::collections::BTreeSet,
 };
 
-/// Version information for a `PeerEntry`.
+/// Version information for a [`PeerEntry`].
 ///
 /// The version is composed of a timestamp (in milliseconds since epoch)
 /// and a counter. The timestamp represents the time when the process was

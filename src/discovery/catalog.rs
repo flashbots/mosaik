@@ -154,7 +154,7 @@ impl Catalog {
 	}
 }
 
-/// Public Mutation API
+/// Untrusted peers Mutation API
 ///
 /// Only unsigned entries are manually mutable through the public API, those
 /// are local-only and are not synced with other peers.
@@ -168,7 +168,7 @@ impl Catalog {
 	/// peer ID.
 	///
 	/// Inserting the local peer entry is not allowed and always returns `false`.
-	pub fn insert_unsigned(&mut self, entry: PeerEntry) -> bool {
+	pub(super) fn insert_unsigned(&mut self, entry: PeerEntry) -> bool {
 		if entry.id() == &self.local_id {
 			return false;
 		}
@@ -183,13 +183,19 @@ impl Catalog {
 
 	/// Removes the unsigned entry for the given peer ID.
 	/// Returns the removed unsigned entry if it existed.
-	pub fn remove_unsigned(&mut self, peer_id: &PeerId) -> Option<PeerEntry> {
+	pub(super) fn remove_unsigned(
+		&mut self,
+		peer_id: &PeerId,
+	) -> Option<PeerEntry> {
 		self.unsigned.remove(peer_id)
 	}
 
 	/// Clears all unsigned entries from the catalog.
-	pub fn clear_unsigned(&mut self) {
+	/// Returns true if any entries were removed.
+	pub(super) fn clear_unsigned(&mut self) -> bool {
+		let was_empty = self.unsigned.is_empty();
 		self.unsigned.clear();
+		!was_empty
 	}
 }
 
@@ -287,6 +293,7 @@ impl Catalog {
 	/// Returns the removed unsigned entry if it existed.
 	///
 	/// Removing the local peer entry is not allowed and always returns `None`.
+	#[expect(unused)]
 	pub(super) fn remove(&mut self, peer_id: &PeerId) -> Option<PeerEntry> {
 		if peer_id == &self.local_id {
 			return None;
@@ -302,6 +309,7 @@ impl Catalog {
 	/// Removes the signed entry for the given peer ID.
 	/// Returns the removed signed entry if it existed.
 	/// Removing the local peer entry is not allowed and always returns `None`.
+	#[expect(unused)]
 	pub(super) fn remove_signed(
 		&mut self,
 		peer_id: &PeerId,
@@ -313,6 +321,7 @@ impl Catalog {
 	}
 
 	/// Clears all entries from the catalog except for the local peer entry.
+	#[expect(unused)]
 	pub(super) fn clear(&mut self) {
 		let local_entry = self
 			.signed

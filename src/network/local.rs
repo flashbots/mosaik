@@ -49,7 +49,8 @@ impl LocalNode {
 	///
 	/// This key is the private key corresponding to the node's public identity
 	/// and is used for signing and authenticating the node in the network. It is
-	/// also used to sign [`crate::discovery::PeerEntry`]s advertised by the node.
+	/// also used to sign [`PeerEntry`](crate::discovery::PeerEntry)s advertised
+	/// by the node.
 	pub fn secret_key(&self) -> &SecretKey {
 		self.0.endpoint.secret_key()
 	}

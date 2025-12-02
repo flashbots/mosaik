@@ -1,3 +1,5 @@
+//! Traits, helpers and types used across the SDK
+
 mod channel;
 mod id;
 mod iter;

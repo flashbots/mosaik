@@ -93,6 +93,10 @@ impl NetworkBuilder {
 		// all protocols are installed, mark the local node as ready
 		local.mark_ready();
 
+		// Wait for the node to acquire a public address and be reachable by other
+		// peers before returning the network instance.
+		local.online().await;
+
 		Ok(Network {
 			local,
 			discovery,
