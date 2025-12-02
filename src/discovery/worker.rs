@@ -163,19 +163,22 @@ impl WorkerLoop {
 			tokio::select! {
 				// Network graceful termination signal
 				() = self.local.termination().cancelled() => {
-					tracing::info!("Discovery worker loop terminating");
+					tracing::trace!(
+						peer_id = %self.local.id(),
+						network = %self.local.network_id(),
+						"worker loop terminating"
+					);
 					return Ok(());
 				}
 
 				// Announcement protocol events
 				Some(event) = self.announce.events().recv() => {
-					tracing::debug!(event = ?event, "Discovery announce event");
 					self.on_announce_event(event);
 				}
 
 				// Catalog sync protocol events
 				Some(event) = self.sync.events().recv() => {
-					tracing::debug!(event = ?event, "Discovery catalog sync event");
+					tracing::trace!(event = ?event, "catalog sync event");
 					self.events.send(event).ok();
 				}
 
@@ -190,7 +193,7 @@ impl WorkerLoop {
 						tracing::warn!(
 							error = %e,
 							network = %self.local.network_id(),
-							"Catalog sync task failed"
+							"Catalog Sync task failed"
 						);
 					}
 				}
@@ -214,7 +217,6 @@ impl WorkerLoop {
 	) -> Result<(), Error> {
 		match command {
 			WorkerCommand::DialPeers(peers, resp) => {
-				tracing::info!("Dialing peers {peers:?}");
 				self.announce.dial(peers);
 				let _ = resp.send(());
 			}
@@ -261,20 +263,15 @@ impl WorkerLoop {
 	fn on_announce_event(&mut self, event: announce::Event) {
 		match event {
 			announce::Event::PeerEntryReceived(signed_peer_entry) => {
-				tracing::debug!(
-					info = ?signed_peer_entry,
-					network = %self.local.network_id(),
-					"Received peer entry via discovery announcement"
-				);
-
 				// Update the catalog with the received peer entry
 				self.catalog.send_if_modified(|catalog| {
+					let incoming_version = signed_peer_entry.version();
 					match catalog.upsert_signed(signed_peer_entry) {
 						UpsertResult::New(signed_peer_entry) => {
-							tracing::info!(
+							tracing::debug!(
 								info = ?signed_peer_entry,
 								network = %self.local.network_id(),
-								"New peer discovered"
+								"new peer discovered"
 							);
 
 							// Trigger a full catalog sync with the newly discovered peer
@@ -292,7 +289,7 @@ impl WorkerLoop {
 							tracing::debug!(
 								info = ?signed_peer_entry,
 								network = %self.local.network_id(),
-								"Peer updated via discovery"
+								"peer info updated"
 							);
 							self
 								.events
@@ -301,10 +298,12 @@ impl WorkerLoop {
 							true
 						}
 						UpsertResult::Rejected(signed_peer_entry) => {
-							tracing::debug!(
+							tracing::trace!(
 								current = ?signed_peer_entry,
 								network = %self.local.network_id(),
-								"Stale peer update rejected via discovery"
+								incoming_version = %incoming_version,
+								current_version = %signed_peer_entry.version(),
+								"stale peer update rejected"
 							);
 							false
 						}
@@ -332,7 +331,7 @@ impl WorkerLoop {
 				.sign(self.local.secret_key())
 				.expect("signing updated local peer entry failed.");
 
-			tracing::info!(
+			tracing::debug!(
 				info = ?signed_updated_entry,
 				network = %self.local.network_id(),
 				"Updating local peer entry in catalog"

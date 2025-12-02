@@ -41,15 +41,18 @@ async fn catalogs_are_consistent() -> anyhow::Result<()> {
 
 	let mut updates: SelectAll<_> = nodes
 		.iter()
-		.map(|node| BroadcastStream::new(node.discovery().events()))
+		.map(|node| {
+			BroadcastStream::new(node.discovery().events())
+				.map(|event| event.map(|res| (res, node.local().id())))
+		})
 		.collect();
 
 	let mut interval = interval(Duration::from_secs(3));
 
 	loop {
 		tokio::select! {
-			Some(Ok(event)) = updates.next() => {
-				info!("Discovery event: {:?}", event);
+			Some(Ok((event, peer_id))) = updates.next() => {
+				info!("Discovery event from {peer_id}: {event:?}");
 			}
 
 			_ = interval.tick() => {

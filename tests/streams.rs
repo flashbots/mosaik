@@ -14,12 +14,9 @@ struct Data2(pub String);
 struct Data3(pub String);
 
 #[tokio::test]
-async fn api_design_basic() {
+async fn api_design_basic() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 	let n0 = Network::new(network_id).await.unwrap();
-
-	// wait for the bootstrap node to be online
-	n0.online().await;
 
 	let n1 = Network::builder(network_id)
 		.with_discovery(
@@ -27,8 +24,7 @@ async fn api_design_basic() {
 				.with_bootstrap(n0.local().id()),
 		)
 		.build()
-		.await
-		.unwrap();
+		.await?;
 
 	let n2 = Network::builder(network_id)
 		.with_discovery(
@@ -36,11 +32,10 @@ async fn api_design_basic() {
 				.with_bootstrap(n0.local().id()),
 		)
 		.build()
-		.await
-		.unwrap();
+		.await?;
 
 	// node0
-	let p0 = n0.streams().produce::<Data1>();
+	let mut p0 = n0.streams().produce::<Data1>();
 	let p1 = n0.streams().produce::<Data2>();
 
 	// node1
@@ -57,67 +52,15 @@ async fn api_design_basic() {
 
 	let recv_c2a = c2a.next().await;
 	assert_eq!(recv_c2a, Some(Data1("One".into())));
+
+	Ok(())
 }
-
-// #[tokio::test]
-// async fn api_design_manual_disc() -> anyhow::Result<()> {
-// 	let network_id = NetworkId::random();
-
-// 	let n0 = Network::new(network_id).await?;
-// 	let mut p0_1 = n0.produce::<Data1>();
-
-// 	let n1 = Network::new(network_id).await?;
-// 	let mut c1_1 = n1.consume::<Data1>();
-// 	let mut p1_1 = n1.produce::<Data1>();
-
-// 	let n2 = Network::new(network_id).await?;
-// 	let mut c2_1 = n2.consume::<Data1>();
-
-// 	full_manual_disco(&[&n0, &n1, &n2]);
-
-// 	p0_1.status().subscribed().by_at_least(2).await;
-// 	p1_1.status().subscribed().await;
-// 	c1_1.status().subscribed().await;
-// 	c2_1.status().subscribed().await;
-
-// 	p0_1.send(Data1("One".into())).await?;
-
-// 	let recv_c2a = c2_1.next().await;
-// 	let recv_c1 = c1_1.next().await;
-
-// 	assert_eq!(recv_c2a, Some(Data1("One".into())));
-// 	assert_eq!(recv_c1, Some(Data1("One".into())));
-
-// 	p1_1.send(Data1("Three".into())).await?;
-// 	let recv_c2 = c2_1.next().await;
-
-// 	assert_eq!(recv_c2, Some(Data1("Three".into())));
-
-// 	let n3 = Network::new(network_id.clone()).await?;
-// 	let mut c3_1 = n3.produce::<Data1>();
-
-// 	full_manual_disco(&[&n1, &n2, &n3]);
-
-// 	c3_1.status().subscribed().by_at_least(2).await;
-
-// 	c3_1.send(Data1("Five".into())).await?;
-
-// 	let recv_c1 = c1_1.next().await;
-// 	assert_eq!(recv_c1, Some(Data1("Five".into())));
-
-// 	let recv_c2 = c2_1.next().await;
-// 	assert_eq!(recv_c2, Some(Data1("Five".into())));
-
-// 	Ok(())
-// }
 
 fn full_manual_disco(peers: &[&Network]) {
 	for a in peers {
 		for b in peers {
 			if a.local().id() != b.local().id() {
-				a.discovery()
-					.catalog()
-					.insert_unsigned(b.discovery().catalog().local().into());
+				a.discovery().insert(b.discovery().catalog().local().into());
 			}
 		}
 	}

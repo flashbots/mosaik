@@ -19,22 +19,25 @@ use {
 /// started and can be thought of as run-id and the counter is the update number
 /// withing that particular run.
 #[derive(
-	Debug,
-	Clone,
-	Copy,
-	Serialize,
-	Deserialize,
-	PartialEq,
-	Eq,
-	PartialOrd,
-	Ord,
-	Hash,
+	Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
 pub struct PeerEntryVersion(i64, u64);
 
 impl Default for PeerEntryVersion {
 	fn default() -> Self {
 		Self(chrono::Utc::now().timestamp_millis(), 0)
+	}
+}
+
+impl core::fmt::Debug for PeerEntryVersion {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		write!(f, "{}:{}", self.0, self.1)
+	}
+}
+
+impl core::fmt::Display for PeerEntryVersion {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		write!(f, "{}:{}", self.0, self.1)
 	}
 }
 

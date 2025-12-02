@@ -16,7 +16,6 @@ mod accept;
 mod config;
 mod criteria;
 mod datum;
-mod link;
 
 // Streams submodules
 pub mod consumer;
@@ -64,8 +63,8 @@ impl Streams {
 	///
 	/// For more advanced configuration, use [`Streams::producer`] to get a
 	/// [`producer::Builder`] that can be customized.
-	pub async fn produce<D: Datum>(&self) -> Producer<D> {
-		self.producer().build().await
+	pub fn produce<D: Datum>(&self) -> Producer<D> {
+		self.producer().build()
 	}
 
 	/// Creates a new [`producer::Builder`] for the given data type `D` to

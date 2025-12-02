@@ -1,8 +1,5 @@
 use {
-	crate::{
-		network::{LocalNode, PeerId},
-		streams::Streams,
-	},
+	crate::network::{LocalNode, PeerId},
 	bincode::{
 		config::standard,
 		serde::{decode_from_std_read, encode_into_std_write},
@@ -16,6 +13,7 @@ use {
 	iroh::{
 		EndpointAddr,
 		endpoint::{
+			ApplicationClose,
 			ConnectError,
 			Connection,
 			ConnectionError,
@@ -65,9 +63,10 @@ impl Link {
 	/// to remote producers.
 	pub async fn connect(
 		local: &LocalNode,
-		remote: EndpointAddr,
+		remote: impl Into<EndpointAddr>,
+		alpn: &[u8],
 	) -> Result<Self, ConnectError> {
-		let connection = local.endpoint().connect(remote, Streams::ALPN).await?;
+		let connection = local.endpoint().connect(remote.into(), alpn).await?;
 		let (tx, rx) = connection.open_bi().await?;
 		let stream = Framed::new(join(rx, tx), LengthDelimitedCodec::new());
 		Ok(Self { connection, stream })
@@ -124,12 +123,26 @@ impl Link {
 		self
 			.connection()
 			.close(VarInt::from(reason as u8), reason.into());
+
 		let close_result = self.connection().closed().await;
 		if close_result != ConnectionError::LocallyClosed {
 			return Err(close_result.into());
 		}
 
 		Ok(())
+	}
+
+	/// Awaits the link closure and returns the closure result if the link was
+	/// closed for a reason not indicating success.
+	pub async fn closed(self) -> Result<(), ConnectionError> {
+		match self.connection.closed().await {
+			ConnectionError::LocallyClosed => Ok(()),
+			ConnectionError::ApplicationClosed(ApplicationClose {
+				error_code,
+				..
+			}) if error_code == VarInt::from(CloseReason::Success as u8) => Ok(()),
+			err => Err(err),
+		}
 	}
 }
 
@@ -178,14 +191,20 @@ impl Sink<Bytes> for Link {
 )]
 #[repr(u8)]
 pub enum CloseReason {
+	#[error("Protocol ran to completion successfully")]
+	Success = 0,
+
 	#[error("Unspecified")]
 	Unspecified = 1,
 
 	#[error("Stream not found")]
 	StreamNotFound = 2,
 
-	#[error("Invalid handshake")]
-	InvalidHandshake = 3,
+	#[error("Invalid message")]
+	InvalidMessage = 3,
+
+	#[error("Error sending data")]
+	SendError = 4,
 }
 
 impl From<CloseReason> for &'static [u8] {

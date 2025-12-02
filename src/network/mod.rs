@@ -14,6 +14,8 @@ mod config;
 mod error;
 mod local;
 
+pub(crate) mod link;
+
 pub use {
 	config::{NetworkBuilder, NetworkConfig},
 	error::Error as NetworkError,

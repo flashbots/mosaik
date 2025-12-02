@@ -1,26 +1,20 @@
 use {
 	super::{Catalog, Error, Event, SignedPeerEntry},
 	crate::{
-		network::{LocalNode, PeerId},
+		network::{
+			LocalNode,
+			PeerId,
+			link::{CloseReason, Link},
+		},
 		primitives::UnboundedChannel,
 	},
-	bincode::{
-		config::standard,
-		serde::{decode_from_std_read, encode_to_vec},
-	},
 	core::fmt,
-	futures::{SinkExt, StreamExt},
 	iroh::{
-		EndpointAddr,
-		endpoint::{Connection, VarInt},
+		endpoint::Connection,
 		protocol::{AcceptError, ProtocolHandler},
 	},
 	serde::{Deserialize, Serialize},
-	tokio::{
-		io::join,
-		sync::{mpsc::UnboundedReceiver, watch},
-	},
-	tokio_util::codec::{Framed, LengthDelimitedCodec},
+	tokio::sync::{mpsc::UnboundedReceiver, watch},
 };
 
 /// The catalog synchronization protocol exchanges snapshots of the signed peers
@@ -101,42 +95,50 @@ impl CatalogSync {
 		&self,
 		peer_id: PeerId,
 	) -> impl Future<Output = Result<(), Error>> + Send + Sync + 'static {
-		let endpoint = self.local.endpoint().clone();
+		let local = self.local.clone();
 		let catalog = self.catalog.clone();
 		let events_tx = self.events.sender().clone();
 
 		async move {
-			tracing::debug!(
+			tracing::trace!(
 				peer = %peer_id,
 				"Starting CatalogSync"
 			);
 
-			let connection = endpoint
-				.connect(EndpointAddr::new(peer_id), Self::ALPN)
-				.await?;
-
-			let (tx, rx) = connection.open_bi().await?;
-			let mut stream = Framed::new(join(rx, tx), LengthDelimitedCodec::new());
-			let local_snapshot = CatalogSnapshot::from(&*catalog.borrow());
-			let serialized = encode_to_vec(&local_snapshot, standard())
-				.expect("Serialization should be infallible. this is a bug");
+			// Establish a direct connection with remote peer on the catalog sync ALPN
+			let mut link = Link::connect(&local, peer_id, Self::ALPN).await?;
 
 			// Send our local catalog snapshot to the remote peer
-			stream.send(serialized.into()).await?;
+			let local_snapshot = CatalogSnapshot::from(&*catalog.borrow());
+			if let Err(e) = link.send_as(&local_snapshot).await {
+				tracing::warn!(
+					peer = %peer_id,
+					error = %e,
+					"Failed to send local catalog snapshot",
+				);
+
+				// Close the link with a send error reason before returning error
+				link.close_with_reason(CloseReason::SendError).await?;
+				return Err(e.into());
+			}
 
 			// Await the remote peer's catalog snapshot
-			let remote_data = stream.next().await.transpose()?.ok_or_else(|| {
-				Error::Io(std::io::Error::new(
-					std::io::ErrorKind::UnexpectedEof,
-					"Remote peer closed connection before sending catalog snapshot",
-				))
-			})?;
-
-			// Deserialize the remote catalog snapshot. Deserializing
 			// [`SignedPeerEntry`] will implicitly verify the signatures of each
-			// entry.
-			let remote_snapshot: CatalogSnapshot =
-				decode_from_std_read(&mut &remote_data[..], standard())?;
+			// received entry.
+			let remote_snapshot = match link.recv_as::<CatalogSnapshot>().await {
+				Ok(snapshot) => snapshot,
+				Err(e) => {
+					tracing::warn!(
+						peer = %peer_id,
+						error = %e,
+						"Failed to receive remote catalog snapshot",
+					);
+
+					// Close the link with a receive error reason before returning error
+					link.close_with_reason(CloseReason::InvalidMessage).await?;
+					return Err(e.into());
+				}
+			};
 
 			// Merge the remote snapshot into the local catalog and emit events
 			// that reflect the changes made.
@@ -157,12 +159,12 @@ impl CatalogSync {
 				}
 
 				tracing::debug!(
-					peer = %peer_id,
+					remote_peer = %peer_id,
 					new_peers = %insertions,
 					updated_peers = %updates,
 					remote_catalog_size = %remote_catalog_size,
 					local_catalog_size = %local_catalog_size,
-					"Discovery Catalog Sync completed"
+					"full catalog sync complete [initiator]"
 				);
 
 				updates > 0 || insertions > 0
@@ -171,9 +173,7 @@ impl CatalogSync {
 			// end of sync, the initiator is responsible for
 			// initiating the close of the connection, and the
 			// acceptor will await stream closure.
-			stream.flush().await?;
-			connection.close(VarInt::from(1u32), b"done");
-			connection.closed().await;
+			link.close_with_reason(CloseReason::Success).await?;
 
 			Ok(())
 		}
@@ -188,34 +188,45 @@ impl fmt::Debug for CatalogSync {
 
 impl ProtocolHandler for CatalogSync {
 	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
-		tracing::debug!(
+		tracing::trace!(
 			peer = %connection.remote_id(),
 			"Accepting incoming Discovery Catalog Sync",
 		);
 
-		let (tx, rx) = connection.accept_bi().await?;
-		let mut stream = Framed::new(join(rx, tx), LengthDelimitedCodec::new());
+		// Accept the incoming link for the catalog sync protocol
+		let mut link = Link::accept(connection).await?;
 
-		// Receive the remote peer's catalog snapshot
-		let remote_data = stream.next().await.transpose()?.ok_or_else(|| {
-			AcceptError::from(std::io::Error::new(
-				std::io::ErrorKind::UnexpectedEof,
-				"Remote peer closed connection before sending catalog snapshot",
-			))
-		})?;
-
-		// Deserialize the remote catalog snapshot. Deserializing
+		// The acceptor awaits the remote peer's catalog snapshot message first.
 		// [`SignedPeerEntry`] will implicitly verify the signatures of each
-		// entry.
-		let remote_snapshot: CatalogSnapshot =
-			decode_from_std_read(&mut &remote_data[..], standard())
-				.map_err(AcceptError::from_err)?;
+		// received entry.
+		let remote_snapshot = match link.recv_as::<CatalogSnapshot>().await {
+			Ok(snapshot) => snapshot,
+			Err(e) => {
+				tracing::warn!(
+					peer = %link.remote_id(),
+					error = %e,
+					"failed to receive remote catalog snapshot",
+				);
+
+				// Close the link with a receive error reason before returning error
+				link.close_with_reason(CloseReason::InvalidMessage).await?;
+				return Err(AcceptError::from_err(e));
+			}
+		};
 
 		// Send our local catalog snapshot to the remote peer
 		let local_snapshot = CatalogSnapshot::from(&*self.catalog.borrow());
-		let serialized = encode_to_vec(&local_snapshot, standard())
-			.expect("Serialization should be infallible. this is a bug");
-		stream.send(serialized.into()).await?;
+		if let Err(e) = link.send_as(&local_snapshot).await {
+			tracing::warn!(
+				peer = %link.remote_id(),
+				error = %e,
+				"failed to send local catalog snapshot",
+			);
+
+			// Close the link with a send error reason before returning error
+			link.close_with_reason(CloseReason::SendError).await?;
+			return Err(AcceptError::from_err(e));
+		}
 
 		// Merge the remote snapshot into the local catalog and emit events
 		// that reflect the changes made.
@@ -236,19 +247,19 @@ impl ProtocolHandler for CatalogSync {
 			}
 
 			tracing::debug!(
-				peer = %self.local.id(),
+				remote_peer = %link.remote_id(),
 				new_peers = %insertions,
 				updated_peers = %updates,
 				remote_catalog_size = %remote_catalog_size,
 				local_catalog_size = %local_catalog_size,
-				"Discovery Catalog Sync completed"
+				"full catalog sync complete [acceptor]"
 			);
 
 			updates > 0 || insertions > 0
 		});
 
-		stream.flush().await?;
-		connection.closed().await;
+		// Await the link closure initiated by the remote peer
+		link.closed().await?;
 
 		Ok(())
 	}

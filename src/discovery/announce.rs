@@ -181,15 +181,15 @@ impl WorkerLoop {
 			tokio::select! {
 				// Network is terminating, exit the loop
 				() = self.cancel.cancelled() => {
-					tracing::info!(
+					tracing::debug!(
 						network = %self.local.network_id(),
 						"Discovery announcement protocol terminating"
 					);
 					return Ok(());
 				}
 
-				// There is an outbound message to broadcast
-				Some(outbound) = self.messages_out.recv() => {
+				// There is an outbound message to broadcast and we have neighbors
+				Some(outbound) = self.messages_out.recv(), if topic_rx.is_joined() => {
 					self.broadcast_message(
 						&mut topic_tx,
 						&mut topic_rx,
@@ -303,10 +303,10 @@ impl WorkerLoop {
 	fn on_message_received(&mut self, message: AnnouncementMessage) {
 		match message {
 			AnnouncementMessage::OwnEntryUpdate(entry) => {
-				tracing::debug!(
+				tracing::trace!(
 						info = ?entry,
 						network = %self.local.network_id(),
-						"Received peer entry update announcement"
+						"received peer entry update announcement"
 				);
 
 				// Update local state or catalog as needed
@@ -334,7 +334,7 @@ impl WorkerLoop {
 		tracing::debug!(
 			info = ?entry,
 			network = %self.local.network_id(),
-			"Broadcasting local peer entry"
+			"broadcasting local peer entry"
 		);
 
 		self
@@ -358,7 +358,8 @@ impl WorkerLoop {
 		if !topic_rx.is_joined() {
 			tracing::debug!(
 				network = %self.local.network_id(),
-				"Not connected to any gossip neighbors, deferring announcement broadcast"
+				"not connected to any gossip neighbors, \
+				 deferring announcement broadcast"
 			);
 
 			// Re-queue the message for later retry
@@ -378,30 +379,30 @@ impl WorkerLoop {
 				error = %e,
 				network = %self.local.network_id(),
 				message = ?message,
-				"Failed to broadcast announcement message"
+				"failed to broadcast announcement message"
 			);
 
 			if matches!(e, GossipError::Closed { .. }) {
 				// topic connection dropped, re-join
 				tracing::warn!(
 					network = %self.local.network_id(),
-					"Gossip topic connection closed, re-joining"
+					"gossip topic connection closed, re-joining"
 				);
 
 				self.rejoin_topic(topic_tx, topic_rx).await?;
 			}
 		} else {
 			let neighbor_count = topic_rx.neighbors().count();
-			tracing::debug!(
+			tracing::trace!(
 				network = %self.local.network_id(),
-				"Broadcasted announcement message to {neighbor_count} neighbors"
+				"broadcasted announcement message to {neighbor_count} neighbors"
 			);
 		}
 		Ok(())
 	}
 
 	async fn dial_peers(&self, peers: Vec<PeerId>, topic_tx: &mut GossipSender) {
-		tracing::info!(
+		tracing::debug!(
 			network = %self.local.network_id(),
 			peers = ?peers,
 			"Dialing peers"

@@ -1,9 +1,10 @@
 use {
 	super::{
-		super::{Config, Criteria, Datum, StreamId, link::Link},
+		super::{Config, Criteria, Datum, StreamId},
 		Producer,
 		Status,
 	},
+	crate::network::link::Link,
 	core::any::Any,
 	std::sync::Arc,
 	tokio::sync::mpsc,

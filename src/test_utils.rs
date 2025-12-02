@@ -12,14 +12,17 @@ fn init_test_logging() {
 			_ => return,
 		};
 
+		// disable noisy modules from dependencies
 		let prefix_blacklist: &[&'static str] = &[
-			"iroh::magicsock",
-			"iroh::net_report",
-			"iroh::_events::ping",
-			"iroh::_events::pong",
+			"iroh::",
+			"iroh_",
 			"rustls",
+			"igd_next",
 			"hickory_",
 			"hyper_util",
+			"portmapper",
+			"reqwest::connect",
+			"events.net.relay.connected",
 		];
 
 		let _ = tracing_subscriber::registry()

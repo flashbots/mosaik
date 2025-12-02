@@ -1,11 +1,6 @@
 use {
-	super::{
-		Criteria,
-		StreamId,
-		Streams,
-		link::{CloseReason, Link},
-		producer::Sinks,
-	},
+	super::{Criteria, StreamId, Streams, producer::Sinks},
+	crate::network::link::{CloseReason, Link},
 	core::fmt,
 	iroh::{
 		endpoint::Connection,
@@ -64,7 +59,7 @@ impl ProtocolHandler for Acceptor {
 				);
 
 				// Close the link with a reason before returning error
-				let error = CloseReason::InvalidHandshake;
+				let error = CloseReason::InvalidMessage;
 				link.close_with_reason(error).await?;
 				return Err(AcceptError::from_err(error));
 			}
