@@ -187,12 +187,6 @@ impl NetworkBuilder {
 			.bind()
 			.await?;
 
-		println!(
-			"secret key {:?}",
-			hex::encode(endpoint.secret_key().to_bytes())
-		);
-		println!("addrs {:?}", endpoint.addr());
-
 		Network::run(
 			network_id,
 			endpoint,
