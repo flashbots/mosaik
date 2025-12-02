@@ -92,6 +92,5 @@ impl<D: Datum> WorkerLoop<D> {
 impl<D: Datum> WorkerLoop<D> {
 	pub async fn run(self) {
 		async {}.await;
-		todo!()
 	}
 }

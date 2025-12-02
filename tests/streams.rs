@@ -55,13 +55,3 @@ async fn api_design_basic() -> anyhow::Result<()> {
 
 	Ok(())
 }
-
-fn full_manual_disco(peers: &[&Network]) {
-	for a in peers {
-		for b in peers {
-			if a.local().id() != b.local().id() {
-				a.discovery().insert(b.discovery().catalog().local().into());
-			}
-		}
-	}
-}

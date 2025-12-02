@@ -1,6 +1,7 @@
 use {
+	super::link::Link,
 	crate::{SecretKey, network::NetworkId},
-	iroh::{Endpoint, EndpointAddr},
+	iroh::{Endpoint, EndpointAddr, endpoint::ConnectError},
 	std::{fmt, sync::Arc},
 	tokio::sync::SetOnce,
 	tokio_util::sync::CancellationToken,
@@ -20,6 +21,9 @@ use {
 ///
 /// - This type is responsible for maintaining the up to list of transport-level
 ///   addresses and their changes over time.
+///
+/// - This type is used by anything that need to establish new connections to
+///   remote peers.
 pub struct LocalNode(Arc<Inner>);
 
 /// Public API
@@ -93,6 +97,18 @@ impl LocalNode {
 	/// instance gracefully and all its associated protocols.
 	pub(crate) fn termination(&self) -> &CancellationToken {
 		&self.0.termination
+	}
+
+	/// Establishes a new outgoing connection to a remote peer on the protocol
+	/// specified by the ALPN parameter. The returned link has an open
+	/// bidirectional stream with the remote peer with message framing semantics
+	/// defined by the [`Link`] type.
+	pub(crate) async fn connect(
+		&self,
+		remote: impl Into<EndpointAddr>,
+		alpn: &[u8],
+	) -> Result<Link, ConnectError> {
+		Link::connect(self, remote, alpn).await
 	}
 }
 

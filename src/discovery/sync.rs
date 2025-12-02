@@ -106,7 +106,7 @@ impl CatalogSync {
 			);
 
 			// Establish a direct connection with remote peer on the catalog sync ALPN
-			let mut link = Link::connect(&local, peer_id, Self::ALPN).await?;
+			let mut link = local.connect(peer_id, Self::ALPN).await?;
 
 			// Send our local catalog snapshot to the remote peer
 			let local_snapshot = CatalogSnapshot::from(&*catalog.borrow());

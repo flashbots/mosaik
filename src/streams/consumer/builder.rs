@@ -31,7 +31,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 impl<D: Datum> Builder<'_, D> {
 	/// Builds the consumer instance and returns the receiver handle.
 	pub fn build(self) -> Consumer<D> {
-		worker::ReceiveWorker::<D>::spawn(
+		worker::ConsumerWorker::<D>::spawn(
 			&self.streams.local,
 			&self.streams.discovery,
 			&self.streams.config,

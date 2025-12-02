@@ -4,6 +4,7 @@ use {
 		pin::Pin,
 		task::{Context, Poll},
 	},
+	std::collections::BTreeSet,
 };
 
 pub struct Status;
@@ -26,13 +27,14 @@ impl Status {
 /// not met to met.
 pub struct SubscriptionConditionFuture {
 	min_subscribers: usize,
-	required_tags: Option<Vec<Tag>>,
+	required_tags: Option<BTreeSet<Tag>>,
 }
 
 impl SubscriptionConditionFuture {
 	/// Specifies that the future should resolve when there is at least the given
 	/// number of subscribers.
-	pub fn by_at_least(self, _: usize) -> Self {
+	pub fn by_at_least(mut self, min: usize) -> Self {
+		self.min_subscribers = min;
 		self
 	}
 
@@ -42,7 +44,8 @@ impl SubscriptionConditionFuture {
 	///
 	/// When combined with `by_at_least`, the condition is met when there are at
 	/// least that many subscribers with the given tags.
-	pub fn with_tags<V>(self, _: impl IntoIterOrSingle<Tag, V>) -> Self {
+	pub fn with_tags<V>(mut self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
+		self.required_tags = Some(tags.iterator().into_iter().collect());
 		self
 	}
 }
@@ -50,7 +53,7 @@ impl SubscriptionConditionFuture {
 impl Future for SubscriptionConditionFuture {
 	type Output = ();
 
-	fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+	fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
 		Poll::Ready(())
 	}
 }
