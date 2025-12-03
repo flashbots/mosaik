@@ -151,10 +151,10 @@ impl<D: Datum> WorkerLoop<D> {
 				// remote consumer
 				Some((link, criteria)) = self.accepted.recv() => {
 					tracing::info!(
-						peer_id = %link.remote_id(),
+						consumer_id = %link.remote_id(),
 						stream_id = %D::stream_id(),
 						criteria = ?criteria,
-						"accepting new remote consumer",
+						"accepting new consumer",
 					);
 				}
 			}

@@ -1,5 +1,9 @@
 pub use backoff;
-use {backoff::ExponentialBackoff, core::fmt::Debug, derive_builder::Builder};
+use {
+	backoff::{ExponentialBackoff, backoff::Backoff},
+	core::fmt::Debug,
+	derive_builder::Builder,
+};
 
 /// Configuration options for the streams subsystem.
 #[derive(Builder)]
@@ -15,7 +19,7 @@ pub struct Config {
 		setter(custom),
 		default = "Box::new(|| Box::new(ExponentialBackoff::default()))"
 	)]
-	pub backoff: Box<dyn Fn() -> Box<dyn Backoff> + Send + Sync>,
+	pub backoff: BackoffFactory,
 }
 
 impl Config {
@@ -28,14 +32,12 @@ impl Config {
 impl ConfigBuilder {
 	/// Sets a backoff policy for stream connection retries.
 	#[must_use]
-	pub fn with_backoff<B: Backoff + Clone + 'static>(
+	pub fn with_backoff<B: Backoff + Clone + Send + Sync + 'static>(
 		mut self,
 		backoff: B,
 	) -> Self {
 		let backoff = backoff;
-		self.backoff = Some(Box::new(move || {
-			Box::new(backoff.clone()) as Box<dyn Backoff>
-		}));
+		self.backoff = Some(Box::new(move || Box::new(backoff.clone())));
 		self
 	}
 }
@@ -44,7 +46,7 @@ impl core::fmt::Debug for Config {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		f.debug_struct("Config")
 			.field("producer_buffer_size", &self.producer_buffer_size)
-			.field("backoff", &(self.backoff)())
+			.field("backoff", &"<backoff factory>")
 			.finish()
 	}
 }
@@ -58,15 +60,6 @@ impl core::fmt::Debug for ConfigBuilder {
 	}
 }
 
-#[doc(hidden)]
-pub trait Backoff:
-	backoff::backoff::Backoff + core::fmt::Debug + Send + Sync + Debug + 'static
-{
-}
-
-#[doc(hidden)]
-impl<
-	T: backoff::backoff::Backoff + core::fmt::Debug + Send + Sync + Debug + 'static,
-> Backoff for T
-{
-}
+pub type BackoffFactory = Box<
+	dyn Fn() -> Box<dyn Backoff + Send + Sync + 'static> + Send + Sync + 'static,
+>;

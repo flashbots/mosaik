@@ -54,7 +54,7 @@ impl ProtocolHandler for Acceptor {
 			Ok(handshake) => handshake,
 			Err(e) => {
 				tracing::debug!(
-					peer = %remote_peer_id,
+					consumer_id = %remote_peer_id,
 					error = %e,
 					"Failed to receive consumer handshake",
 				);
@@ -69,9 +69,9 @@ impl ProtocolHandler for Acceptor {
 		// Lookup the fanout sink for the requested stream id
 		let Some(sink) = self.sinks.open(handshake.stream_id) else {
 			tracing::debug!(
-				peer = %remote_peer_id,
+				consumer_id = %remote_peer_id,
 				stream_id = %handshake.stream_id,
-				"Consumer requesting unknown stream id",
+				"Consumer requesting unavailable stream",
 			);
 
 			// Close the link with a reason before returning error

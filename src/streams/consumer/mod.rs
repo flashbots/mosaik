@@ -12,6 +12,7 @@ use {
 };
 
 mod builder;
+mod receiver;
 mod status;
 mod worker;
 

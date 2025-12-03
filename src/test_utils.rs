@@ -39,7 +39,7 @@ fn init_test_logging() {
 		let default_hook = std::panic::take_hook();
 		std::panic::set_hook(Box::new(move |panic_info| {
 			default_hook(panic_info);
-			tracing::error!("panic: {panic_info:?}");
+			tracing::error!("panic: {panic_info}");
 			std::process::abort();
 		}));
 	}

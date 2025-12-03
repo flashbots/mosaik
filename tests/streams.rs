@@ -1,4 +1,6 @@
 use {
+	backoff::{SystemClock, exponential::ExponentialBackoffBuilder},
+	core::time::Duration,
 	futures::{SinkExt, StreamExt},
 	mosaik::*,
 	serde::{Deserialize, Serialize},
@@ -23,6 +25,13 @@ async fn api_design_basic() -> anyhow::Result<()> {
 			discovery::Config::builder() //
 				.with_bootstrap(n0.local().id()),
 		)
+		.with_streams(
+			streams::Config::builder().with_backoff(
+				ExponentialBackoffBuilder::<SystemClock>::default()
+					.with_max_elapsed_time(Some(Duration::from_secs(10)))
+					.build(),
+			),
+		)
 		.build()
 		.await?;
 
@@ -30,6 +39,13 @@ async fn api_design_basic() -> anyhow::Result<()> {
 		.with_discovery(
 			discovery::Config::builder() //
 				.with_bootstrap(n0.local().id()),
+		)
+		.with_streams(
+			streams::Config::builder().with_backoff(
+				ExponentialBackoffBuilder::<SystemClock>::default()
+					.with_max_elapsed_time(Some(Duration::from_secs(10)))
+					.build(),
+			),
 		)
 		.build()
 		.await?;
