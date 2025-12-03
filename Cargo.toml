@@ -103,6 +103,8 @@ thiserror.workspace = true
 tokio-stream.workspace = true
 n0-error.workspace = true
 
+op-alloy-consensus = { version = "0.22", features = [ "serde", "serde-bincode-compat" ] }
+
 derive_more = "2.0"
 sha3 = "0.10"
 hmac = "0.12"

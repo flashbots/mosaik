@@ -41,3 +41,6 @@ pub use iroh::{EndpointAddr, EndpointId, PublicKey, SecretKey};
 
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
+
+mod transaction;
+pub use transaction::Transaction;
