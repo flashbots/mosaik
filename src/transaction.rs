@@ -3,6 +3,12 @@ pub struct Transaction {
 	inner: op_alloy_consensus::OpTxEnvelope,
 }
 
+impl Transaction {
+	pub fn hash(&self) -> &alloy_primitives::B256 {
+		self.inner.hash()
+	}
+}
+
 impl serde::Serialize for Transaction {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where
