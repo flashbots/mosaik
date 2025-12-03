@@ -36,12 +36,11 @@ impl Config {
 impl ConfigBuilder {
 	/// Adds bootstrap peer(s) to the discovery configuration.
 	#[must_use]
-	pub fn with_bootstrap<P: Into<PeerId>, V>(
+	pub fn with_bootstrap<V>(
 		mut self,
-		peers: impl IntoIterOrSingle<P, V>,
+		peers: impl IntoIterOrSingle<PeerId, V>,
 	) -> Self {
-		let peers: Vec<PeerId> =
-			peers.iterator().into_iter().map(Into::into).collect();
+		let peers: Vec<PeerId> = peers.iterator().into_iter().collect();
 		if let Some(existing) = &mut self.bootstrap_peers {
 			existing.extend(peers);
 		} else {

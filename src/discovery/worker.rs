@@ -200,7 +200,7 @@ impl WorkerLoop {
 
 				// observe local transport-level address changes
 				Some(addr) = addr_change.next() => {
-					tracing::debug!(addr = ?addr, "Local node address updated");
+					tracing::trace!(addr = ?addr, "Local node address updated");
 					self.update_local_peer_entry(|entry| {
 						entry.update_address(addr.clone())
 							.expect("peer id changed for local node.")
@@ -265,7 +265,7 @@ impl WorkerLoop {
 			announce::Event::PeerEntryReceived(signed_peer_entry) => {
 				// Update the catalog with the received peer entry
 				self.catalog.send_if_modified(|catalog| {
-					let incoming_version = signed_peer_entry.version();
+					let incoming_version = signed_peer_entry.update_version();
 					match catalog.upsert_signed(signed_peer_entry) {
 						UpsertResult::New(signed_peer_entry) => {
 							tracing::debug!(
@@ -302,7 +302,7 @@ impl WorkerLoop {
 								current = ?signed_peer_entry,
 								network = %self.local.network_id(),
 								incoming_version = %incoming_version,
-								current_version = %signed_peer_entry.version(),
+								current_version = %signed_peer_entry.update_version(),
 								"stale peer update rejected"
 							);
 							false
@@ -331,7 +331,7 @@ impl WorkerLoop {
 				.sign(self.local.secret_key())
 				.expect("signing updated local peer entry failed.");
 
-			tracing::debug!(
+			tracing::trace!(
 				info = ?signed_updated_entry,
 				network = %self.local.network_id(),
 				"Updating local peer entry in catalog"

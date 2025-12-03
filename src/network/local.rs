@@ -103,12 +103,15 @@ impl LocalNode {
 	/// specified by the ALPN parameter. The returned link has an open
 	/// bidirectional stream with the remote peer with message framing semantics
 	/// defined by the [`Link`] type.
-	pub(crate) async fn connect(
+	pub(crate) fn connect(
 		&self,
 		remote: impl Into<EndpointAddr>,
 		alpn: &[u8],
-	) -> Result<Link, ConnectError> {
-		Link::connect(self, remote, alpn).await
+	) -> impl Future<Output = Result<Link, ConnectError>> + Send + 'static {
+		let local = self.clone();
+		let remote = remote.into();
+		let alpn = alpn.to_owned();
+		async move { Link::connect(&local, remote, &alpn).await }
 	}
 }
 

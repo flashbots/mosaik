@@ -62,6 +62,11 @@ impl Discovery {
 		self.0.dial(peers.iterator().into_iter()).await;
 	}
 
+	/// Returns the latest version of the signed peer entry for the local node.
+	pub fn me(&self) -> SignedPeerEntry {
+		self.catalog().local().clone()
+	}
+
 	/// Returns a snapshot of the current peers catalog.
 	pub fn catalog(&self) -> Catalog {
 		self.0.catalog.borrow().clone()

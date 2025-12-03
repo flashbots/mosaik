@@ -22,7 +22,7 @@ pub mod consumer;
 pub mod producer;
 
 pub use {
-	config::{Config, ConfigBuilder, ConfigBuilderError},
+	config::{Config, ConfigBuilder, ConfigBuilderError, backoff},
 	consumer::Consumer,
 	criteria::Criteria,
 	datum::Datum,
@@ -53,7 +53,7 @@ pub struct Streams {
 	discovery: Discovery,
 
 	/// Map of active fanout sinks by stream id.
-	sinks: Sinks,
+	sinks: Arc<Sinks>,
 }
 
 /// Public API
@@ -103,10 +103,10 @@ impl Streams {
 	) -> Self {
 		let config = Arc::new(config);
 		Self {
-			local,
+			local: local.clone(),
 			config: Arc::clone(&config),
 			discovery: discovery.clone(),
-			sinks: Sinks::new(discovery, config),
+			sinks: Arc::new(Sinks::new(local, config, discovery)),
 		}
 	}
 }

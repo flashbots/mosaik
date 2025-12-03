@@ -12,3 +12,10 @@ pub(crate) use {channel::UnboundedChannel, iter::IntoIterOrSingle};
 /// Used internally as a sentinel type for generic parameters.
 #[doc(hidden)]
 pub enum Variant<const U: usize = 0> {}
+
+pub(crate) struct Pretty<'a, T: core::fmt::Debug>(pub &'a T);
+impl<T: core::fmt::Debug> core::fmt::Display for Pretty<'_, T> {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		write!(f, "{:#?}", self.0)
+	}
+}

@@ -2,7 +2,7 @@ use {
 	super::{Catalog, Config, Error, PeerEntryVersion, SignedPeerEntry},
 	crate::{
 		network::{LocalNode, PeerId},
-		primitives::UnboundedChannel,
+		primitives::{Pretty, UnboundedChannel},
 	},
 	bincode::{
 		config::standard,
@@ -95,7 +95,7 @@ impl Announce {
 		let events = unbounded_channel();
 		let dials = unbounded_channel();
 		let cancel = local.termination().clone();
-		let last_own_version = catalog.borrow().local().version();
+		let last_own_version = catalog.borrow().local().update_version();
 
 		let driver = WorkerLoop {
 			config: config.clone(),
@@ -317,7 +317,7 @@ impl WorkerLoop {
 
 	/// Handles updates to the local peer entry in the catalog.
 	fn on_catalog_update(&mut self) {
-		let current_local_version = self.catalog.borrow().local().version();
+		let current_local_version = self.catalog.borrow().local().update_version();
 		if current_local_version > self.last_own_version {
 			self.broadcast_self_info();
 			self.last_own_version = current_local_version;
@@ -332,9 +332,9 @@ impl WorkerLoop {
 		let entry = self.catalog.borrow().local().clone();
 
 		tracing::debug!(
-			info = ?entry,
 			network = %self.local.network_id(),
-			"broadcasting local peer entry"
+			entry = %Pretty(&entry),
+			"broadcasting local peer info update"
 		);
 
 		self

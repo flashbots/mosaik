@@ -43,6 +43,7 @@ use {
 ///
 /// - The unit of transfer is [`Bytes`].
 pub struct Link {
+	alpn: Vec<u8>,
 	connection: Connection,
 	stream: Framed<Join<RecvStream, SendStream>, LengthDelimitedCodec>,
 }
@@ -53,9 +54,15 @@ impl Link {
 	/// This is used by the stream acceptor to handle incoming connections from
 	/// remote consumer peers.
 	pub async fn accept(connection: Connection) -> Result<Self, AcceptError> {
+		let alpn = connection.alpn().to_owned();
 		let (tx, rx) = connection.accept_bi().await?;
 		let stream = Framed::new(join(rx, tx), LengthDelimitedCodec::new());
-		Ok(Self { connection, stream })
+
+		Ok(Self {
+			alpn,
+			connection,
+			stream,
+		})
 	}
 
 	/// Opens a new outgoing connection to a remote peer on the streams protocol
@@ -66,10 +73,21 @@ impl Link {
 		remote: impl Into<EndpointAddr>,
 		alpn: &[u8],
 	) -> Result<Self, ConnectError> {
-		let connection = local.endpoint().connect(remote.into(), alpn).await?;
+		let alpn = alpn.to_owned();
+		let connection = local.endpoint().connect(remote.into(), &alpn).await?;
 		let (tx, rx) = connection.open_bi().await?;
 		let stream = Framed::new(join(rx, tx), LengthDelimitedCodec::new());
-		Ok(Self { connection, stream })
+
+		Ok(Self {
+			alpn,
+			connection,
+			stream,
+		})
+	}
+
+	/// Returns the ALPN identifier for this link.
+	pub fn alpn(&self) -> &[u8] {
+		&self.alpn
 	}
 
 	/// Returns remote peer id.
@@ -143,6 +161,15 @@ impl Link {
 			}) if error_code == VarInt::from(CloseReason::Success as u8) => Ok(()),
 			err => Err(err),
 		}
+	}
+}
+
+impl core::fmt::Debug for Link {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		f.debug_struct("Link")
+			.field("alpn", &String::from_utf8_lossy(self.alpn()))
+			.field("remote_id", &self.remote_id())
+			.finish_non_exhaustive()
 	}
 }
 

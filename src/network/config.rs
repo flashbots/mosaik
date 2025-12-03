@@ -14,7 +14,7 @@ use {
 };
 
 /// Configuration options for the discovery subsystem.
-#[derive(Debug, Clone, Builder)]
+#[derive(Debug, Builder)]
 #[builder(
 	pattern = "owned",
 	name = "NetworkBuilder",

@@ -1,6 +1,6 @@
 use {
 	clap::ArgAction,
-	mosaik::prelude::*,
+	mosaik::*,
 	tracing::Level,
 	tracing_subscriber::{
 		Layer,
@@ -22,7 +22,7 @@ pub struct CliNetOpts {
 
 	/// Optional bootstrap peer ids to connect to.
 	#[clap(long, short = 'p')]
-	pub bootstrap: Vec<EndpointId>,
+	pub bootstrap: Vec<PeerId>,
 
 	/// Optional secret key for node identity.
 	/// If not provided, a random identity will be generated.

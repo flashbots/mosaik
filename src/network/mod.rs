@@ -135,6 +135,13 @@ impl Network {
 	}
 }
 
+impl Drop for Network {
+	fn drop(&mut self) {
+		// Signal termination to all network components
+		self.local.termination().cancel();
+	}
+}
+
 /// Internal trait for network components that need to install new ALPNs during
 /// network initialization.
 pub(crate) trait ProtocolProvider {

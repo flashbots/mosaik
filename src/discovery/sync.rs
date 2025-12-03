@@ -284,7 +284,12 @@ impl core::fmt::Debug for CatalogSnapshot {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		write!(f, "CatalogSnapshot[{}]( ", self.0.len())?;
 		for entry in &self.0 {
-			write!(f, "(peer {},  version {:?}) ", entry.id(), entry.version())?;
+			write!(
+				f,
+				"(peer {},  version {:?}) ",
+				entry.id(),
+				entry.update_version()
+			)?;
 		}
 		write!(f, ")")
 	}

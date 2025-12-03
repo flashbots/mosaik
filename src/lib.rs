@@ -10,7 +10,7 @@ pub mod network;
 pub mod primitives;
 pub mod streams;
 
-pub use network::{Network, NetworkId};
+pub use network::{Network, NetworkId, PeerId};
 
 #[cfg(feature = "test-utils")]
 pub mod test_utils;

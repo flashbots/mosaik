@@ -6,8 +6,10 @@ use {
 		primitives::{IntoIterOrSingle, Tag},
 	},
 	bincode::{config::standard, serde::encode_into_std_write},
+	core::fmt,
 	derive_more::{AsRef, Debug, Deref, Into},
 	iroh::{EndpointAddr, SecretKey, Signature},
+	semver::Version,
 	serde::{Deserialize, Deserializer, Serialize, de},
 	std::collections::BTreeSet,
 };
@@ -68,8 +70,9 @@ impl PeerEntryVersion {
 /// - There is no public API to create a [`PeerEntry`] directly. It is intended
 ///   to be created by the discovery system when the network is booting and
 ///   received from other peers during discovery and catalog sync.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PeerEntry {
+	protocol: Version,
 	version: PeerEntryVersion,
 	address: EndpointAddr,
 	tags: BTreeSet<Tag>,
@@ -87,6 +90,13 @@ impl PeerEntry {
 		&self.address.id
 	}
 
+	/// The `mosaik` version used by the peer.
+	///
+	/// This value never changes once set during peer startup.
+	pub const fn protocol_version(&self) -> &Version {
+		&self.protocol
+	}
+
 	/// The list of currently known transport addresses for the peer.
 	pub const fn address(&self) -> &EndpointAddr {
 		&self.address
@@ -102,10 +112,10 @@ impl PeerEntry {
 		&self.streams
 	}
 
-	/// The version of the peer entry.
+	/// The update version of the peer entry.
 	///
 	/// This is incremented each time the peer entry is updated.
-	pub const fn version(&self) -> PeerEntryVersion {
+	pub const fn update_version(&self) -> PeerEntryVersion {
 		self.version
 	}
 
@@ -138,6 +148,9 @@ impl PeerEntry {
 			tags: BTreeSet::new(),
 			streams: BTreeSet::new(),
 			version: PeerEntryVersion::default(),
+			protocol: env!("CARGO_PKG_VERSION")
+				.parse()
+				.expect("Invalid CARGO_PKG_VERSION for mosaik"),
 		}
 	}
 
@@ -216,6 +229,65 @@ impl PeerEntry {
 		let signature = secret.sign(&self.digest());
 
 		Ok(SignedPeerEntry(self, signature))
+	}
+}
+
+impl fmt::Debug for PeerEntry {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		if f.alternate() {
+			writeln!(f, "PeerEntry:")?;
+			writeln!(f, "  id: {}", self.id())?;
+
+			if !self.address.ip_addrs().count() == 0 {
+				writeln!(f, "  ips: <none>")?;
+			} else {
+				writeln!(f, "  ips:")?;
+				for addr in self.address.ip_addrs() {
+					writeln!(f, "    - {addr}")?;
+				}
+			}
+
+			if self.address().relay_urls().count() == 0 {
+				writeln!(f, "  relays: <none>")?;
+			} else {
+				writeln!(f, "  relays:")?;
+				for url in self.address.relay_urls() {
+					writeln!(f, "    - {url}")?;
+				}
+			}
+
+			if self.tags.is_empty() {
+				writeln!(f, "  tags: <none>")?;
+			} else {
+				writeln!(f, "  tags:")?;
+				for tag in &self.tags {
+					writeln!(f, "    - {tag}")?;
+				}
+			}
+
+			if self.streams.is_empty() {
+				writeln!(f, "  streams: <none>")?;
+			} else {
+				writeln!(f, "  streams:")?;
+				for stream in &self.streams {
+					writeln!(f, "    - {stream}")?;
+				}
+			}
+
+			writeln!(f, "  update: {}", self.update_version())?;
+			writeln!(f, "  protocol: {}", self.protocol)?;
+
+			Ok(())
+		} else {
+			f.debug_struct("PeerEntry")
+				.field("id", &self.id())
+				.field("address", &self.address)
+				.field("protocol", &self.protocol)
+				.field("tags", &self.tags)
+				.field("streams", &self.streams)
+				.field("version", &self.version)
+				.finish()
+		}
 	}
 }
 
@@ -379,12 +451,12 @@ mod tests {
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
 		let entry = PeerEntry::new(address);
-		let initial_version = entry.version();
+		let initial_version = entry.update_version();
 
 		let updated = entry.add_tags(Tag::from("test"));
 
 		assert!(
-			updated.version() > initial_version,
+			updated.update_version() > initial_version,
 			"Version should increment after add_tags"
 		);
 	}
@@ -394,12 +466,12 @@ mod tests {
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
 		let entry = PeerEntry::new(address).add_tags(Tag::from("test"));
-		let initial_version = entry.version();
+		let initial_version = entry.update_version();
 
 		let updated = entry.remove_tags(Tag::from("test"));
 
 		assert!(
-			updated.version() > initial_version,
+			updated.update_version() > initial_version,
 			"Version should increment after remove_tags"
 		);
 	}
@@ -409,12 +481,12 @@ mod tests {
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
 		let entry = PeerEntry::new(address);
-		let initial_version = entry.version();
+		let initial_version = entry.update_version();
 
 		let updated = entry.add_streams(StreamId::from("test-stream"));
 
 		assert!(
-			updated.version() > initial_version,
+			updated.update_version() > initial_version,
 			"Version should increment after add_streams"
 		);
 	}
@@ -425,12 +497,12 @@ mod tests {
 		let address = EndpointAddr::from(secret.public());
 		let entry =
 			PeerEntry::new(address).add_streams(StreamId::from("test-stream"));
-		let initial_version = entry.version();
+		let initial_version = entry.update_version();
 
 		let updated = entry.remove_streams(StreamId::from("test-stream"));
 
 		assert!(
-			updated.version() > initial_version,
+			updated.update_version() > initial_version,
 			"Version should increment after remove_streams"
 		);
 	}
@@ -440,12 +512,12 @@ mod tests {
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
 		let entry = PeerEntry::new(address.clone());
-		let initial_version = entry.version();
+		let initial_version = entry.update_version();
 
 		let updated = entry.update_address(address).unwrap();
 
 		assert!(
-			updated.version() > initial_version,
+			updated.update_version() > initial_version,
 			"Version should increment after update_address"
 		);
 	}
@@ -455,22 +527,22 @@ mod tests {
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
 		let entry = PeerEntry::new(address.clone());
-		let v0 = entry.version();
+		let v0 = entry.update_version();
 
 		let entry = entry.add_tags(Tag::from("tag1"));
-		let v1 = entry.version();
+		let v1 = entry.update_version();
 		assert!(v1 > v0, "Version should increment after first change");
 
 		let entry = entry.add_streams(StreamId::from("stream1"));
-		let v2 = entry.version();
+		let v2 = entry.update_version();
 		assert!(v2 > v1, "Version should increment after second change");
 
 		let entry = entry.remove_tags(Tag::from("tag1"));
-		let v3 = entry.version();
+		let v3 = entry.update_version();
 		assert!(v3 > v2, "Version should increment after third change");
 
 		let entry = entry.update_address(address).unwrap();
-		let v4 = entry.version();
+		let v4 = entry.update_version();
 		assert!(v4 > v3, "Version should increment after fourth change");
 	}
 

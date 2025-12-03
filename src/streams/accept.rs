@@ -1,5 +1,5 @@
 use {
-	super::{Criteria, StreamId, Streams, producer::Sinks},
+	super::{Criteria, Datum, StreamId, Streams, producer::Sinks},
 	crate::network::link::{CloseReason, Link},
 	core::fmt,
 	iroh::{
@@ -7,6 +7,7 @@ use {
 		protocol::{AcceptError, ProtocolHandler},
 	},
 	serde::{Deserialize, Serialize},
+	std::sync::Arc,
 };
 
 /// Streams protocol acceptor
@@ -25,13 +26,13 @@ use {
 /// - The connection is passed to the [`SinkHandle`] to handle the data stream
 ///   initiation with the consumer.
 pub(super) struct Acceptor {
-	sinks: Sinks,
+	sinks: Arc<Sinks>,
 }
 
 impl Acceptor {
 	/// Creates a new [`Acceptor`] instance for the [`Streams`] subsystem.
 	pub(super) fn new(streams: &Streams) -> Self {
-		let sinks = streams.sinks.clone();
+		let sinks = Arc::clone(&streams.sinks);
 		Self { sinks }
 	}
 }
@@ -81,7 +82,7 @@ impl ProtocolHandler for Acceptor {
 
 		// pass the connection to the stream-specific [`SinkHandle`]
 		// to handle the initiation of the data stream with this remote consumer.
-		sink.accept(link, handshake.criteria).await;
+		sink.accept(link, handshake.criteria);
 		Ok(())
 	}
 }
@@ -94,4 +95,15 @@ pub(super) struct ConsumerHandshake {
 
 	/// The criteria the consumer is using to filter the stream data.
 	criteria: Criteria,
+}
+
+impl ConsumerHandshake {
+	/// Creates a new [`ConsumerHandshake`] instance.
+	pub fn new<D: Datum>(criteria: Criteria) -> Self {
+		let stream_id = D::stream_id();
+		Self {
+			stream_id,
+			criteria,
+		}
+	}
 }

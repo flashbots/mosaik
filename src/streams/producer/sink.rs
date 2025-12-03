@@ -3,7 +3,7 @@ use {
 		super::{Config, Datum, StreamId},
 		worker::{Handle, WorkerLoop},
 	},
-	crate::discovery::Discovery,
+	crate::{discovery::Discovery, network::LocalNode},
 	dashmap::{DashMap, Entry},
 	derive_more::{Deref, From, Into},
 	std::sync::Arc,
@@ -16,11 +16,15 @@ use {
 ///
 /// This type is cheap to clone and all clones point to the same underlying map.
 pub(in crate::streams) struct Sinks {
+	/// The local node instance of the network associated with this streams
+	/// subsystem.
+	pub(super) local: LocalNode,
+
 	/// Configuration for the streams subsystem.
-	config: Arc<Config>,
+	pub(super) config: Arc<Config>,
 
 	/// The discovery system used to announce newly created streams.
-	discovery: Discovery,
+	pub(super) discovery: Discovery,
 
 	/// Map of all active fanout sinks by stream id that have producers
 	/// associated with them.
@@ -30,10 +34,12 @@ pub(in crate::streams) struct Sinks {
 impl Sinks {
 	/// Creates a new empty Sinks map.
 	pub(in crate::streams) fn new(
-		discovery: Discovery,
+		local: LocalNode,
 		config: Arc<Config>,
+		discovery: Discovery,
 	) -> Self {
 		Self {
+			local,
 			config,
 			discovery,
 			active: Arc::new(DashMap::new()),
@@ -55,7 +61,7 @@ impl Sinks {
 			Entry::Vacant(entry) => {
 				// Create a new fanout sink worker loop for this stream id
 				// and insert it into the active map, then return a handle to it.
-				let sink = WorkerLoop::<D>::spawn(Arc::clone(&self.config));
+				let sink = WorkerLoop::<D>::spawn(self);
 				let handle = entry.insert(sink.into()).clone();
 
 				// Update our local peer entry in discovery to include this stream id
@@ -73,16 +79,6 @@ impl Sinks {
 	/// Opens an existing fanout sink for the given stream id, if it exists.
 	pub fn open(&self, stream_id: StreamId) -> Option<SinkHandle> {
 		self.active.get(&stream_id).map(|entry| entry.clone())
-	}
-}
-
-impl Clone for Sinks {
-	fn clone(&self) -> Self {
-		Self {
-			config: Arc::clone(&self.config),
-			discovery: self.discovery.clone(),
-			active: Arc::clone(&self.active),
-		}
 	}
 }
 

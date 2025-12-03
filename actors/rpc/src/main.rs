@@ -17,7 +17,7 @@
 //!   based on the local state it maintains from the internal network.
 
 use {
-	mosaik::prelude::*,
+	mosaik::*,
 	rblib::prelude::*,
 	shared::model::{BalancesUpdate, NoncesUpdate},
 	tracing::info,
@@ -30,7 +30,6 @@ mod cli;
 async fn main() -> anyhow::Result<()> {
 	let opts = cli::Opts::default();
 	info!("Starting RPC actor with options: {opts:#?}");
-	info!("v3");
 
 	if opts.network.optimism {
 		run::<Optimism>(opts).await
@@ -41,41 +40,43 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run<P: Platform>(opts: cli::Opts) -> anyhow::Result<()> {
 	// connect to mosaik network
-	let network = Network::new(opts.network.network_id).await?;
+	let network = Network::builder(opts.network.network_id)
+		.with_discovery(
+			discovery::Config::builder() //
+				.with_bootstrap(opts.network.bootstrap),
+		)
+		.build()
+		.await?;
 
-	// wait for network to be online
-	network.local().online().await;
-
-	for bootstrap in opts.network.bootstrap {
-		info!("Dialing bootstrap peer {bootstrap}");
-		network.discovery().dial(bootstrap.into()).await?;
-	}
+	info!("local peer info: {:#?}", network.discovery().me());
 
 	// consumers
-	let nonces = network.consume::<NoncesUpdate>();
-	let balances = network.consume::<BalancesUpdate>();
+	let nonces = network.streams().consume::<NoncesUpdate>();
+	let balances = network.streams().consume::<BalancesUpdate>();
 
-	// correlate streams by key
-	let nonces = nonces.keyed_by(|update| update.block);
-	let balances = balances.keyed_by(|update| update.block);
+	Ok(())
 
-	info!("RPC server started on network {}", network.network_id());
-	info!("nonces stream_id: {}", nonces.stream_id());
-	info!("balances stream_id: {}", balances.stream_id());
-	info!("rpc listen addr: {}", opts.listen_addr);
+	// // correlate streams by key
+	// let nonces = nonces.keyed_by(|update| update.block);
+	// let balances = balances.keyed_by(|update| update.block);
 
-	nonces.status().subscribed().await;
-	balances.status().subscribed().await;
+	// info!("RPC server started on network {}", network.network_id());
+	// info!("nonces stream_id: {}", nonces.stream_id());
+	// info!("balances stream_id: {}", balances.stream_id());
+	// info!("rpc listen addr: {}", opts.listen_addr);
 
-	let mut joined = Join::new(nonces, balances);
+	// nonces.status().subscribed().await;
+	// balances.status().subscribed().await;
 
-	loop {
-		tokio::select! {
-			Some(KeyedDatum(block, (nonces, balances))) = joined.next() => {
-				info!("Received correlated updates at block {block}");
-				info!("  NoncesUpdate: {nonces:?}");
-				info!("  BalancesUpdate: {balances:?}");
-			}
-		}
-	}
+	// let mut joined = Join::new(nonces, balances);
+
+	// loop {
+	// 	tokio::select! {
+	// 		Some(KeyedDatum(block, (nonces, balances))) = joined.next() => {
+	// 			info!("Received correlated updates at block {block}");
+	// 			info!("  NoncesUpdate: {nonces:?}");
+	// 			info!("  BalancesUpdate: {balances:?}");
+	// 		}
+	// 	}
+	// }
 }
