@@ -22,9 +22,16 @@ pub use {builder::Builder, status::Status};
 /// produced by a remote peer.
 ///
 /// Notes:
+///
 /// - Multiple [`Consumer`] instances can be created for the same stream id and
 ///   data type `D`. They will each receive their own copy of the data sent to
 ///   the stream.
+///
+/// - Each [`Consumer`] instance has its own worker task that manages
+///   subscriptions to remote producers, discovery of new producers and
+///   receiving data from remote producers.
+///
+/// - Consumers implement [`Stream`] for receiving datum of type `D`.
 pub struct Consumer<D> {
 	status: Status,
 	chan: mpsc::UnboundedReceiver<D>,

@@ -2,13 +2,19 @@
 
 mod channel;
 mod fmt;
+mod futures;
 mod id;
 mod iter;
 
 /// Public API re-exported primitives.
 pub use id::{Tag, UniqueId};
 /// Internal primitives.
-pub(crate) use {channel::UnboundedChannel, fmt::*, iter::IntoIterOrSingle};
+pub(crate) use {
+	channel::UnboundedChannel,
+	fmt::*,
+	futures::*,
+	iter::IntoIterOrSingle,
+};
 
 /// Used internally as a sentinel type for generic parameters.
 #[doc(hidden)]

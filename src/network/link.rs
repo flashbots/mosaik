@@ -1,11 +1,15 @@
 use {
-	crate::network::{LocalNode, PeerId},
+	crate::{
+		network::{LocalNode, PeerId},
+		primitives::Short,
+	},
 	bincode::{
 		config::standard,
 		serde::{decode_from_std_read, encode_into_std_write},
 	},
 	bytes::{Buf, BufMut, Bytes, BytesMut},
 	core::{
+		fmt,
 		pin::Pin,
 		task::{Context, Poll},
 	},
@@ -164,12 +168,23 @@ impl Link {
 	}
 }
 
-impl core::fmt::Debug for Link {
-	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+impl fmt::Debug for Link {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("Link")
 			.field("alpn", &String::from_utf8_lossy(self.alpn()))
 			.field("remote_id", &self.remote_id())
 			.finish_non_exhaustive()
+	}
+}
+
+impl fmt::Display for Link {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(
+			f,
+			"Link<{}:{}>",
+			String::from_utf8_lossy(self.alpn()),
+			Short(self.remote_id())
+		)
 	}
 }
 
@@ -232,11 +247,37 @@ pub enum CloseReason {
 
 	#[error("Error sending data")]
 	SendError = 4,
+
+	#[error("Unknown peer")]
+	UnknownPeer = 5,
 }
 
 impl From<CloseReason> for &'static [u8] {
 	fn from(val: CloseReason) -> Self {
 		let bytes: &'static str = val.into();
 		bytes.as_bytes()
+	}
+}
+
+impl From<CloseReason> for ApplicationClose {
+	fn from(val: CloseReason) -> Self {
+		ApplicationClose {
+			error_code: VarInt::from(val as u8),
+			reason: val.to_string().into(),
+		}
+	}
+}
+
+impl PartialEq<ApplicationClose> for CloseReason {
+	fn eq(&self, other: &ApplicationClose) -> bool {
+		let reason = self.as_ref().as_bytes();
+		VarInt::from(*self as u8) == other.error_code
+			&& other.reason.as_ref() == reason
+	}
+}
+
+impl PartialEq<CloseReason> for ApplicationClose {
+	fn eq(&self, other: &CloseReason) -> bool {
+		other == self
 	}
 }

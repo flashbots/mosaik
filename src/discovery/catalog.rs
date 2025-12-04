@@ -147,8 +147,8 @@ impl Catalog {
 			.expect("local peer entry always exists")
 	}
 
-	/// Returns the number of peer entries in the catalog, i.e. all entries - the
-	/// local peer entry.
+	/// Returns the number of all (signed and unsigned) peer entries in the
+	/// catalog, excluding the local peer entry.
 	pub fn peers_count(&self) -> usize {
 		self.signed.len() + self.unsigned.len() - 1
 	}

@@ -26,6 +26,9 @@ pub enum Error {
 
 	#[error("Serialization error: {0}")]
 	Decode(#[from] bincode::error::DecodeError),
+
+	#[error("Operation Cancelled")]
+	Cancelled,
 }
 
 impl From<ConnectionError> for Error {

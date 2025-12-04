@@ -12,7 +12,7 @@ use {
 	},
 	std::sync::Arc,
 	sync::CatalogSync,
-	tokio::sync::{broadcast, mpsc::UnboundedSender, watch},
+	tokio::sync::{broadcast, mpsc::UnboundedSender, oneshot, watch},
 	worker::{Handle, WorkerLoop},
 };
 
@@ -73,9 +73,9 @@ impl Discovery {
 	}
 
 	/// Returns a watch receiver that can be used to monitor changes to the
-	/// peers catalog.
+	/// peers catalog from this point onwards.
 	pub fn catalog_watch(&self) -> watch::Receiver<Catalog> {
-		self.0.catalog.clone()
+		self.0.catalog.subscribe()
 	}
 
 	/// Returns a receiver for discovery events.
@@ -86,39 +86,62 @@ impl Discovery {
 		self.0.events.resubscribe()
 	}
 
+	/// Performs a full catalog synchronization with the specified peer.
+	///
+	/// This async method resolves when the sync is complete or fails.
+	pub async fn sync_with(
+		&self,
+		peer_id: impl Into<PeerId>,
+	) -> Result<(), Error> {
+		let peer_id = peer_id.into();
+		let (tx, rx) = oneshot::channel();
+		self
+			.0
+			.commands
+			.send(WorkerCommand::SyncWith(peer_id, tx))
+			.map_err(|_| Error::Cancelled)?;
+		rx.await.map_err(|_| Error::Cancelled)?
+	}
+
 	/// Inserts an unsigned [`PeerEntry`] into the local catalog.
 	///
 	/// Notes:
 	/// - This peer entry is not synced to other peers and is only used locally by
 	///   this node. When a signed peer entry with the same [`PeerId`] already
 	///   exists, this entry is ignored.
-	///  - When a signed entry is later added for the same [`PeerId`], the
-	///    unsigned entry is removed.
-	pub fn insert(&self, entry: PeerEntry) {
-		let _ = self
+	/// - When a signed entry is later added for the same [`PeerId`], the unsigned
+	///   entry is removed.
+	/// - Returns `true` if the entry was added.
+	/// - Insertion fails for the local node's own peer entry.
+	/// - Insertion fails for entries that already exist as signed entries.
+	pub fn insert(&self, entry: impl Into<PeerEntry>) -> bool {
+		self
 			.0
-			.commands
-			.send(WorkerCommand::InsertUnsignedPeer(entry));
+			.catalog
+			.send_if_modified(|catalog| catalog.insert_unsigned(entry.into()))
 	}
 
 	/// Removes an unsigned [`PeerEntry`] from the local catalog by its
-	/// [`PeerId`].
+	/// [`PeerId`] and returns `true` if the entry was removed.
 	///
 	/// Notes:
 	/// - This will only remove unsigned entries that were previously added via
 	///   [`Discovery::insert`]. Signed entries are not affected.
-	pub fn remove(&self, peer_id: PeerId) {
-		let _ = self
+	pub fn remove(&self, peer_id: PeerId) -> bool {
+		self
 			.0
-			.commands
-			.send(WorkerCommand::RemoveUnsignedPeer(peer_id));
+			.catalog
+			.send_if_modified(|catalog| catalog.remove_unsigned(&peer_id).is_some())
 	}
 
 	/// Clears all unsigned [`PeerEntry`] instances from the local catalog that
 	/// were manually added via [`Discovery::insert`]. Signed entries are not
-	/// affected.
-	pub fn clear_unsigned(&self) {
-		let _ = self.0.commands.send(WorkerCommand::ClearUnsignedPeers);
+	/// affected. Returns `true` if any entries were removed.
+	pub fn clear_unsigned(&self) -> bool {
+		self
+			.0
+			.catalog
+			.send_if_modified(|catalog| catalog.clear_unsigned())
 	}
 }
 

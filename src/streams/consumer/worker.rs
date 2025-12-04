@@ -168,6 +168,8 @@ impl<D: Datum> ConsumerWorker<D> {
 	/// Handles state updates from remote receiver workers.
 	fn on_receiver_state_update(&mut self, peer_id: PeerId, state: State) {
 		if state == State::Terminated {
+			// The receiver has unrecoverably terminated, remove it from the active
+			// list
 			self.active.remove(&peer_id);
 			tracing::info!(
 				producer_id = %Short(&peer_id),
@@ -180,12 +182,22 @@ impl<D: Datum> ConsumerWorker<D> {
 
 	/// Gracefully closes all connections with remote producers.
 	async fn on_terminated(&mut self) {
+		// terminate all active receiver workers
+		let producers_count = self.active.len();
+
 		self
 			.active
 			.drain()
-			.map(|(_peer_id, handle)| handle.terminate())
+			.map(|(_, handle)| handle.terminate())
 			.collect::<JoinAll<_>>()
 			.await;
+
+		tracing::debug!(
+			stream_id = %D::stream_id(),
+			producers_count = producers_count,
+			criteria = ?self.criteria,
+			"consumer terminated"
+		);
 	}
 }
 

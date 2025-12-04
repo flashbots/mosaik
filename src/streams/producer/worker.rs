@@ -84,6 +84,11 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// Streams-wide configuration options of this node.
 	config: Arc<Config>,
 
+	/// Cancellation token triggered when the worker loop should shut down.
+	/// This token is derived from the local node's termination token and will
+	/// shut down when the node network is terminating.
+	cancel: CancellationToken,
+
 	/// Receiver channel for incoming datum to be forwarded to connected
 	/// consumers.
 	data_rx: mpsc::Receiver<D>,
@@ -97,11 +102,6 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// Remote peers that arrive here are past the handshake phase and have an
 	/// open transport-level stream.
 	accepted: mpsc::UnboundedReceiver<(Link, Criteria)>,
-
-	/// Cancellation token triggered when the worker loop should shut down.
-	/// This token is derived from the local node's termination token and will
-	/// shut down when the node network is terminating.
-	cancel: CancellationToken,
 }
 
 impl<D: Datum> WorkerLoop<D> {
@@ -116,10 +116,10 @@ impl<D: Datum> WorkerLoop<D> {
 
 		let worker = WorkerLoop::<D> {
 			config,
+			cancel,
 			data_rx,
 			active: DenseSlotMap::with_key(),
 			accepted: accepted_rx,
-			cancel,
 		};
 
 		tokio::spawn(worker.run());
@@ -150,15 +150,34 @@ impl<D: Datum> WorkerLoop<D> {
 				// Triggered when [`Acceptor`] accepts a new connection from a
 				// remote consumer
 				Some((link, criteria)) = self.accepted.recv() => {
-					tracing::info!(
-						consumer_id = %Short(&link.remote_id()),
-						stream_id = %D::stream_id(),
-						criteria = ?criteria,
-						"accepting new consumer",
-					);
+					self.accept(link, criteria);
+				}
+
+				// Triggered when a new datum is produced for this stream
+				// by the public api via the [`Producer`] handle.
+				Some(datum) = self.data_rx.recv() => {
+					self.fanout(datum);
 				}
 			}
 		}
+	}
+
+	/// Forwards the given datum to all active remote consumers that match the
+	/// criteria.
+	fn fanout(&mut self, _datum: D) {
+		tracing::warn!("implement producer fanout logic");
+	}
+
+	fn accept(&mut self, link: Link, criteria: Criteria) {
+		tracing::info!(
+			consumer_id = %Short(&link.remote_id()),
+			stream_id = %D::stream_id(),
+			criteria = ?criteria,
+			"accepted new consumer",
+		);
+
+		let subscription = Subscription { link, criteria };
+		self.active.insert(subscription);
 	}
 }
 
@@ -179,14 +198,4 @@ struct Subscription {
 
 	/// The stream subscription criteria for this consumer.
 	criteria: Criteria,
-
-	/// Connection Id of the remote consumer.
-	subid: SubscriptionId,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum State {
-	Connected,
-	Terminating,
-	Terminated,
 }

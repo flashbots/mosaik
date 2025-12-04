@@ -6,14 +6,18 @@ pub trait IntoIterOrSingle<T, V = Variant<0>> {
 	fn iterator(self) -> impl IntoIterator<Item = T>;
 }
 
-impl<T> IntoIterOrSingle<T, Variant<0>> for T {
+impl<T, U: Into<T>> IntoIterOrSingle<T, Variant<0>> for U {
 	fn iterator(self) -> impl IntoIterator<Item = T> {
-		std::iter::once(self)
+		std::iter::once(self.into())
 	}
 }
 
-impl<T, I: IntoIterator<Item = T>> IntoIterOrSingle<T, Variant<2>> for I {
+impl<T, U, I> IntoIterOrSingle<T, Variant<1>> for I
+where
+	U: Into<T>,
+	I: IntoIterator<Item = U>,
+{
 	fn iterator(self) -> impl IntoIterator<Item = T> {
-		self
+		self.into_iter().map(Into::into)
 	}
 }

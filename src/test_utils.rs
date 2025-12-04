@@ -23,6 +23,7 @@ fn init_test_logging() {
 			"portmapper",
 			"reqwest::connect",
 			"events.net.relay.connected",
+			"netwatch",
 		];
 
 		let _ = tracing_subscriber::registry()

@@ -51,11 +51,8 @@ impl ConfigBuilder {
 
 	/// Adds tag(s) to advertise in the local peer entry.
 	#[must_use]
-	pub fn with_tags<T: Into<Tag>, V>(
-		mut self,
-		tags: impl IntoIterOrSingle<T, V>,
-	) -> Self {
-		let tags: Vec<Tag> = tags.iterator().into_iter().map(Into::into).collect();
+	pub fn with_tags<V>(mut self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
+		let tags: Vec<Tag> = tags.iterator().into_iter().collect();
 		if let Some(existing) = &mut self.tags {
 			existing.extend(tags);
 		} else {

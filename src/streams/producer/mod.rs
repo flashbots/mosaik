@@ -26,7 +26,7 @@ pub use {
 	status::Status,
 };
 
-/// Producer handle for sending data to a stream.
+/// a local stream producer handle for sending data to remote peers.
 ///
 /// Notes:
 ///

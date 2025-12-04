@@ -69,3 +69,46 @@ async fn catalogs_are_consistent() -> anyhow::Result<()> {
 		}
 	}
 }
+
+#[tokio::test]
+async fn manual_catalog_sync() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	// n0 does not know n1 initially and has no bootstrap peers
+	let n0 = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder()
+				.with_tags("tag1")
+				.with_tags(["tag2", "tag3"]),
+		)
+		.build()
+		.await?;
+	let p1 = n0.streams().produce::<String>();
+
+	// n1 does not know n0 initially and has no bootstrap peers
+	let n1 = Network::new(network_id).await?;
+
+	// nodes don't know each other yet
+	assert_eq!(n0.discovery().catalog().peers_count(), 0);
+	assert_eq!(n1.discovery().catalog().peers_count(), 0);
+
+	// insert local peer entry of n0 into n1's catalog that doesn't get synced
+	// over the network
+	n1.discovery().insert(n0.discovery().me());
+
+	assert_eq!(n0.discovery().catalog().peers_count(), 0);
+	assert_eq!(n1.discovery().catalog().peers_count(), 1);
+	assert_eq!(n1.discovery().catalog().signed_peers().count(), 0);
+
+	// perform manual catalog sync from n1 to n0
+	n1.discovery().sync_with(n0.local().id()).await?;
+
+	// both nodes should now know each other
+	assert_eq!(n0.discovery().catalog().peers_count(), 1);
+	assert_eq!(n1.discovery().catalog().peers_count(), 1);
+
+	// n1 should have n0's signed peer entry now
+	assert_eq!(n1.discovery().catalog().signed_peers().count(), 1);
+
+	Ok(())
+}

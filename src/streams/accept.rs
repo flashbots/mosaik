@@ -1,6 +1,7 @@
 use {
 	super::{Criteria, Datum, StreamId, Streams, producer::Sinks},
 	crate::{
+		discovery::Discovery,
 		network::link::{CloseReason, Link},
 		primitives::Short,
 	},
@@ -20,23 +21,35 @@ use {
 /// [`StreamId`].
 ///
 /// The stream subscription protocol works as follows:
+///
 /// - A remote consumer connects to a producer's stream sink using the streams
 ///   protocol ALPN identifier.
+///
 /// - The consumer sends a handshake message ([`ConsumerHandshake`]) containing
 ///   the desired [`StreamId`] and any filtering [`Criteria`].
+///
 /// - The acceptor looks up the corresponding [`SinkHandle`] for the requested
 ///   [`StreamId`].
+///
 /// - The connection is passed to the [`SinkHandle`] to handle the data stream
 ///   initiation with the consumer.
+///
+/// - If the connecting consumer peer is not known in the discovery catalog, the
+///   subscription request is rejected. When the consumer gets a
+///   [`CloseReason::UnknownPeer`], it should re-sync its catalog and retry the
+///   subscription again.
 pub(super) struct Acceptor {
 	sinks: Arc<Sinks>,
+	discovery: Discovery,
 }
 
 impl Acceptor {
 	/// Creates a new [`Acceptor`] instance for the [`Streams`] subsystem.
 	pub(super) fn new(streams: &Streams) -> Self {
 		let sinks = Arc::clone(&streams.sinks);
-		Self { sinks }
+		let discovery = streams.discovery.clone();
+
+		Self { sinks, discovery }
 	}
 }
 
@@ -51,6 +64,24 @@ impl ProtocolHandler for Acceptor {
 	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
 		let mut link = Link::accept(connection).await?;
 		let remote_peer_id = link.remote_id();
+		let catalog = self.discovery.catalog();
+		let Some(info) = catalog.get(&remote_peer_id) else {
+			tracing::debug!(
+				consumer_id = %Short(&remote_peer_id),
+				"unknown consumer peer attempted to connect",
+			);
+
+			// Close the link with a reason before returning error
+			let error = CloseReason::UnknownPeer;
+			link.close_with_reason(error).await?;
+			return Err(AcceptError::from_err(error));
+		};
+
+		tracing::info!(
+			consumer_id = %Short(&remote_peer_id),
+			consumer_info = ?info,
+			"Accepted new consumer connection",
+		);
 
 		// Receive the consumer's handshake message
 		let handshake: ConsumerHandshake = match link.recv_as().await {

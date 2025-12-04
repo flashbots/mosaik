@@ -9,18 +9,29 @@ use {
 			LocalNode,
 			link::{CloseReason, Link},
 		},
-		primitives::Short,
+		primitives::{Short, cancellable},
 		streams::accept::ConsumerHandshake,
 	},
 	backoff::{backoff::Backoff, future::retry},
 	core::{future::pending, ops::ControlFlow},
 	futures::FutureExt,
+	iroh::endpoint::ConnectionError,
 	std::{io, sync::Arc},
 	tokio::sync::{mpsc, watch},
 	tokio_util::sync::{CancellationToken, ReusableBoxFuture},
 };
 
 /// Worker task that manages receiving data from one remote producer peer.
+///
+/// Notes:
+///
+/// - Individual receiver workers are spawned for each connected producer peer.
+///
+/// - A Producer will reject connections from consumers that are not known in
+///   its discovery catalog. So if a consumer attempts to subscribe to a stream
+///   from a producer and the connection is rejected with
+///   [`CloseReason::UnknownPeer`] the consumer should trigger a catalog sync
+///   with the producer and retry the subscription again.
 pub(super) struct Receiver<D: Datum> {
 	/// Configuration for the streams subsystem.
 	config: Arc<Config>,
@@ -178,19 +189,31 @@ impl<D: Datum> Receiver<D> {
 			// unless cancelled, drop the current link and attempt to
 			// reconnect according to the backoff policy.
 			Err(e) => {
-				// explicitly cancelled through the cancellation token
-				if e.kind() == io::ErrorKind::Interrupted {
-					let _ = link.close_with_reason(CloseReason::Unspecified).await;
-					self.state_tx.send(State::Terminated).ok();
-					return;
+				match (e.kind(), link.connection().close_reason()) {
+					(io::ErrorKind::Interrupted, _) => {
+						// explicitly cancelled through the cancellation token
+						let _ = link.close_with_reason(CloseReason::Unspecified).await;
+						self.state_tx.send(State::Terminated).ok();
+						return;
+					}
+					// The connection was closed by the producer because it does not have
+					// this consumer in its discovery catalog. Trigger full catalog
+					// sync with the producer.
+					(_, Some(ConnectionError::ApplicationClosed(reason)))
+						if reason == CloseReason::UnknownPeer =>
+					{
+						self.sync_catalog_then_reconnect(link);
+						return;
+					}
+					_ => {
+						// io error occurred, drop the current link and attempt to reconnect
+						tracing::warn!(
+							error = %e,
+							stream_id = %D::stream_id(),
+							producer_id = %Short(self.peer.id()),
+						);
+					}
 				}
-
-				// io error occurred, drop the current link and attempt to reconnect
-				tracing::warn!(
-					error = %e,
-					stream_id = %D::stream_id(),
-					producer_id = %Short(self.peer.id()),
-				);
 
 				self.connect(Some(link)).await;
 			}
@@ -294,6 +317,12 @@ impl<D: Datum> Receiver<D> {
 		}
 	}
 
+	fn sync_catalog_then_reconnect(&mut self, link: Link) {
+		tracing::info!(
+			".._> syncing catalog with producer before reconnecting for link {link}"
+		);
+	}
+
 	async fn apply_backoff(&mut self) -> ControlFlow<()> {
 		match self.backoff {
 			None => {
@@ -322,6 +351,7 @@ impl<D: Datum> Receiver<D> {
 					criteria = ?self.criteria,
 					"waiting {duration:?} before reconnecting",
 				);
+
 				tokio::time::sleep(duration).await;
 				ControlFlow::Continue(())
 			}
@@ -343,21 +373,4 @@ pub(super) enum State {
 	/// Only once this state is reached this consumer may establish a new
 	/// connection to the same producer.
 	Terminated,
-}
-
-async fn cancellable<F, T, E>(
-	cancel: &CancellationToken,
-	fut: F,
-) -> Result<T, io::Error>
-where
-	E: core::error::Error + Send + Sync + 'static,
-	F: Future<Output = Result<T, E>> + Send + Sync,
-{
-	cancel
-		.run_until_cancelled(fut)
-		.await
-		.ok_or_else(|| {
-			io::Error::new(io::ErrorKind::Interrupted, "connection attempt cancelled")
-		})?
-		.map_err(io::Error::other)
 }

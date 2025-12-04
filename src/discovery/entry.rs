@@ -183,12 +183,12 @@ impl PeerEntry {
 
 	/// Removes stream id(s) from the list of streams produced by the peer.
 	#[must_use]
-	pub fn remove_streams<T: Into<StreamId>, V>(
+	pub fn remove_streams<V>(
 		mut self,
-		streams: impl IntoIterOrSingle<T, V>,
+		streams: impl IntoIterOrSingle<StreamId, V>,
 	) -> Self {
 		for stream in streams.iterator() {
-			self.streams.remove(&stream.into());
+			self.streams.remove(&stream);
 		}
 		self.version = self.version.increment();
 		self
@@ -204,12 +204,9 @@ impl PeerEntry {
 
 	/// Removes tag(s) from the list of tags associated with the peer.
 	#[must_use]
-	pub fn remove_tags<T: Into<Tag>, V>(
-		mut self,
-		tags: impl IntoIterOrSingle<T, V>,
-	) -> Self {
+	pub fn remove_tags<V>(mut self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
 		for tag in tags.iterator() {
-			self.tags.remove(&tag.into());
+			self.tags.remove(&tag);
 		}
 		self.version = self.version.increment();
 		self
@@ -270,8 +267,8 @@ impl fmt::Debug for Pretty<'_, PeerEntry> {
 ///
 /// Notes:
 ///
-/// - This is the structure that is actually broadcasted in the discovery
-///   protocol to advertise a peer's information or during catalog sync.
+/// - This is the structure that is broadcasted in the discovery protocol to
+///   advertise a peer's information or during catalog sync.
 ///
 /// - When a [`SignedPeerEntry`] is received, peers should verify the signature
 ///   against the peer id before accepting and processing the entry.
@@ -462,7 +459,7 @@ mod tests {
 		let entry = PeerEntry::new(address).add_tags(Tag::from("test"));
 		let initial_version = entry.update_version();
 
-		let updated = entry.remove_tags(Tag::from("test"));
+		let updated = entry.remove_tags("test");
 
 		assert!(
 			updated.update_version() > initial_version,

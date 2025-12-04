@@ -12,8 +12,8 @@ pub struct Status;
 impl Status {
 	/// Returns a future that resolves when the producer has at least one
 	/// subscriber.
-	pub fn subscribed(&self) -> SubscriptionConditionFuture {
-		SubscriptionConditionFuture {
+	pub fn subscribed(&self) -> SubscriptionCondition {
+		SubscriptionCondition {
 			min_subscribers: 1,
 			required_tags: None,
 		}
@@ -25,12 +25,12 @@ impl Status {
 /// This future can be polled multiple times even after it has resolved once,
 /// and it will resolve again when the awaited condition transitions again from
 /// not met to met.
-pub struct SubscriptionConditionFuture {
+pub struct SubscriptionCondition {
 	min_subscribers: usize,
 	required_tags: Option<BTreeSet<Tag>>,
 }
 
-impl SubscriptionConditionFuture {
+impl SubscriptionCondition {
 	/// Specifies that the future should resolve when there is at least the given
 	/// number of subscribers.
 	pub fn by_at_least(mut self, min: usize) -> Self {
@@ -50,7 +50,7 @@ impl SubscriptionConditionFuture {
 	}
 }
 
-impl Future for SubscriptionConditionFuture {
+impl Future for SubscriptionCondition {
 	type Output = ();
 
 	fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {

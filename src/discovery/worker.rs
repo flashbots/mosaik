@@ -19,6 +19,7 @@ use {
 	},
 	futures::{FutureExt, StreamExt},
 	iroh::{Watcher, endpoint::Connection, protocol::DynProtocolHandler},
+	std::io,
 	tokio::{
 		sync::{
 			broadcast,
@@ -38,7 +39,7 @@ use {
 /// This struct is instantiated by the `WorkerLoop::spawn` method and is held
 /// by the `Discovery` struct.
 pub(super) struct Handle {
-	pub catalog: watch::Receiver<Catalog>,
+	pub catalog: watch::Sender<Catalog>,
 	pub events: broadcast::Receiver<Event>,
 	pub commands: UnboundedSender<WorkerCommand>,
 	pub task: JoinHandle<Result<(), Error>>,
@@ -102,19 +103,18 @@ impl WorkerLoop {
 	/// the `Discovery::new` method.
 	#[expect(clippy::needless_pass_by_value)]
 	pub(super) fn spawn(local: LocalNode, config: Config) -> Handle {
-		let (catalog_tx, catalog_rx) =
-			watch::channel(Catalog::new(&local, &config));
+		let catalog = watch::Sender::new(Catalog::new(&local, &config));
 		let (commands_tx, commands_rx) = unbounded_channel();
 		let (events_tx, events_rx) = broadcast::channel(config.events_backlog);
 
-		let sync = CatalogSync::new(local.clone(), catalog_tx.clone());
-		let announce = Announce::new(local.clone(), &config, catalog_rx.clone());
+		let sync = CatalogSync::new(local.clone(), catalog.clone());
+		let announce = Announce::new(local.clone(), &config, catalog.subscribe());
 
 		let worker = Self {
 			local,
 			sync,
 			announce,
-			catalog: catalog_tx,
+			catalog: catalog.clone(),
 			events: events_tx,
 			syncs: JoinSet::new(),
 			commands: commands_rx,
@@ -141,7 +141,7 @@ impl WorkerLoop {
 
 		// Return the handle to interact with the worker loop
 		Handle {
-			catalog: catalog_rx,
+			catalog,
 			events: events_rx,
 			commands: commands_tx,
 			task,
@@ -245,14 +245,8 @@ impl WorkerLoop {
 					);
 				}
 			}
-			WorkerCommand::InsertUnsignedPeer(entry) => {
-				self.insert_unsigned_peer(entry);
-			}
-			WorkerCommand::RemoveUnsignedPeer(peer_id) => {
-				self.remove_unsigned_peer(&peer_id);
-			}
-			WorkerCommand::ClearUnsignedPeers => {
-				self.clear_unsigned_peers();
+			WorkerCommand::SyncWith(peer_id, done) => {
+				self.on_manual_sync_request(peer_id, done);
 			}
 		}
 		Ok(())
@@ -313,6 +307,29 @@ impl WorkerLoop {
 		}
 	}
 
+	/// Invoked with an manual catalog sync request from the handle is initiated
+	/// through the public api.
+	fn on_manual_sync_request(
+		&mut self,
+		peer_id: PeerId,
+		done: oneshot::Sender<Result<(), Error>>,
+	) {
+		let sync_fut = self.sync.sync_with(peer_id);
+		self.syncs.spawn(async move {
+			match sync_fut.await {
+				Ok(()) => {
+					let _ = done.send(Ok(()));
+					Ok(())
+				}
+				Err(e) => {
+					let wrapped = io::Error::other(e.to_string());
+					let _ = done.send(Err(e));
+					Err(wrapped.into())
+				}
+			}
+		});
+	}
+
 	/// Updates the local peer entry using the provided update function.
 	///
 	/// The effects of this update are:
@@ -343,28 +360,6 @@ impl WorkerLoop {
 			);
 		});
 	}
-
-	/// Inserts an unsigned peer entry into the catalog that is only used locally
-	/// by this node and is not synced to other peers.
-	fn insert_unsigned_peer(&mut self, entry: PeerEntry) {
-		self
-			.catalog
-			.send_if_modified(|catalog| catalog.insert_unsigned(entry));
-	}
-
-	/// Removes an unsigned peer entry from the catalog by its [`PeerId`].
-	fn remove_unsigned_peer(&mut self, peer_id: &PeerId) {
-		self
-			.catalog
-			.send_if_modified(|catalog| catalog.remove_unsigned(peer_id).is_some());
-	}
-
-	/// Clears all unsigned peer entries from the catalog.
-	fn clear_unsigned_peers(&mut self) {
-		self
-			.catalog
-			.send_if_modified(|catalog| catalog.clear_unsigned());
-	}
 }
 
 pub(super) enum WorkerCommand {
@@ -380,13 +375,6 @@ pub(super) enum WorkerCommand {
 	/// Accept an incoming `Announce` protocol connection from a remote peer
 	AcceptAnnounce(Connection),
 
-	/// Adds a new unsigned peer entry to the catalog that is used locally by this
-	/// node but is not synced to other peers.
-	InsertUnsignedPeer(PeerEntry),
-
-	/// Removes an unsigned peer entry from the catalog by its [`PeerId`].
-	RemoveUnsignedPeer(PeerId),
-
-	/// Clears all unsigned peer entries from the catalog.
-	ClearUnsignedPeers,
+	/// Initiates a catalog sync with the given `PeerId`
+	SyncWith(PeerId, oneshot::Sender<Result<(), Error>>),
 }

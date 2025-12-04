@@ -83,6 +83,7 @@ impl Announce {
 	/// configuration.
 	///
 	/// This sets up the gossip topic and prepares the protocol for operation.
+	/// We need the catalog watch receiver to monitor local peer entry updates.
 	pub(super) fn new(
 		local: LocalNode,
 		config: &Config,
