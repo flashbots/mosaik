@@ -6,7 +6,7 @@ use {
 			PeerId,
 			link::{CloseReason, Link},
 		},
-		primitives::UnboundedChannel,
+		primitives::{Short, UnboundedChannel},
 	},
 	core::fmt,
 	iroh::{
@@ -101,8 +101,8 @@ impl CatalogSync {
 
 		async move {
 			tracing::trace!(
-				peer = %peer_id,
-				"Starting CatalogSync"
+				peer = %Short(&peer_id),
+				"initiating discovery catalog sync",
 			);
 
 			// Establish a direct connection with remote peer on the catalog sync ALPN
@@ -112,9 +112,9 @@ impl CatalogSync {
 			let local_snapshot = CatalogSnapshot::from(&*catalog.borrow());
 			if let Err(e) = link.send_as(&local_snapshot).await {
 				tracing::warn!(
-					peer = %peer_id,
+					peer = %Short(&peer_id),
 					error = %e,
-					"Failed to send local catalog snapshot",
+					"failed to send local catalog snapshot",
 				);
 
 				// Close the link with a send error reason before returning error
@@ -129,9 +129,9 @@ impl CatalogSync {
 				Ok(snapshot) => snapshot,
 				Err(e) => {
 					tracing::warn!(
-						peer = %peer_id,
+						peer = %Short(&peer_id),
 						error = %e,
-						"Failed to receive remote catalog snapshot",
+						"failed to receive remote catalog snapshot",
 					);
 
 					// Close the link with a receive error reason before returning error
@@ -159,7 +159,7 @@ impl CatalogSync {
 				}
 
 				tracing::debug!(
-					remote_peer = %peer_id,
+					peer = %Short(&peer_id),
 					new_peers = %insertions,
 					updated_peers = %updates,
 					remote_catalog_size = %remote_catalog_size,
@@ -189,8 +189,8 @@ impl fmt::Debug for CatalogSync {
 impl ProtocolHandler for CatalogSync {
 	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
 		tracing::trace!(
-			peer = %connection.remote_id(),
-			"Accepting incoming Discovery Catalog Sync",
+			peer = %Short(&connection.remote_id()),
+			"accepting incoming discovery catalog sync",
 		);
 
 		// Accept the incoming link for the catalog sync protocol
@@ -203,7 +203,7 @@ impl ProtocolHandler for CatalogSync {
 			Ok(snapshot) => snapshot,
 			Err(e) => {
 				tracing::warn!(
-					peer = %link.remote_id(),
+					peer = %Short(&link.remote_id()),
 					error = %e,
 					"failed to receive remote catalog snapshot",
 				);
@@ -218,7 +218,7 @@ impl ProtocolHandler for CatalogSync {
 		let local_snapshot = CatalogSnapshot::from(&*self.catalog.borrow());
 		if let Err(e) = link.send_as(&local_snapshot).await {
 			tracing::warn!(
-				peer = %link.remote_id(),
+				peer = %Short(&link.remote_id()),
 				error = %e,
 				"failed to send local catalog snapshot",
 			);
@@ -247,7 +247,7 @@ impl ProtocolHandler for CatalogSync {
 			}
 
 			tracing::debug!(
-				remote_peer = %link.remote_id(),
+				peer = %Short(link.remote_id()),
 				new_peers = %insertions,
 				updated_peers = %updates,
 				remote_catalog_size = %remote_catalog_size,

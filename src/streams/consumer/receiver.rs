@@ -9,6 +9,7 @@ use {
 			LocalNode,
 			link::{CloseReason, Link},
 		},
+		primitives::Short,
 		streams::accept::ConsumerHandshake,
 	},
 	backoff::{backoff::Backoff, future::retry},
@@ -188,7 +189,7 @@ impl<D: Datum> Receiver<D> {
 				tracing::warn!(
 					error = %e,
 					stream_id = %D::stream_id(),
-					producer_id = %self.peer.id(),
+					producer_id = %Short(self.peer.id()),
 				);
 
 				self.connect(Some(link)).await;
@@ -245,7 +246,7 @@ impl<D: Datum> Receiver<D> {
 			async move {
 				tracing::debug!(
 					stream_id = %D::stream_id(),
-					producer_id = %peer_addr.id,
+					producer_id = %Short(&peer_addr.id),
 					criteria = ?criteria,
 					"connecting to stream producer",
 				);
@@ -267,7 +268,7 @@ impl<D: Datum> Receiver<D> {
 				// successfully connected and performed handshake
 				tracing::info!(
 					stream_id = %D::stream_id(),
-					producer_id = %self.peer.id(),
+					producer_id = %Short(&self.peer.id()),
 					criteria = ?self.criteria,
 					"connected to stream producer",
 				);
@@ -282,7 +283,7 @@ impl<D: Datum> Receiver<D> {
 					tracing::error!(
 						error = %e,
 						stream_id = %D::stream_id(),
-						producer_id = %self.peer.id(),
+						producer_id = %Short(&self.peer.id()),
 						criteria = ?self.criteria,
 					  "failed to connect to stream producer");
 					self.cancel.cancel();
@@ -304,7 +305,7 @@ impl<D: Datum> Receiver<D> {
 					// backoff policy has been exhausted, terminate the worker
 					tracing::debug!(
 						stream_id = %D::stream_id(),
-						producer_id = %self.peer.id(),
+						producer_id = %Short(&self.peer.id()),
 						criteria = ?self.criteria,
 						"exhausted all reconnection attempts, terminating",
 					);
@@ -317,7 +318,7 @@ impl<D: Datum> Receiver<D> {
 
 				tracing::debug!(
 					stream_id = %D::stream_id(),
-					producer_id = %self.peer.id(),
+					producer_id = %Short(&self.peer.id()),
 					criteria = ?self.criteria,
 					"waiting {duration:?} before reconnecting",
 				);

@@ -1,6 +1,9 @@
 use {
 	super::{Criteria, Datum, StreamId, Streams, producer::Sinks},
-	crate::network::link::{CloseReason, Link},
+	crate::{
+		network::link::{CloseReason, Link},
+		primitives::Short,
+	},
 	core::fmt,
 	iroh::{
 		endpoint::Connection,
@@ -54,7 +57,7 @@ impl ProtocolHandler for Acceptor {
 			Ok(handshake) => handshake,
 			Err(e) => {
 				tracing::debug!(
-					consumer_id = %remote_peer_id,
+					consumer_id = %Short(&remote_peer_id),
 					error = %e,
 					"Failed to receive consumer handshake",
 				);
@@ -69,7 +72,7 @@ impl ProtocolHandler for Acceptor {
 		// Lookup the fanout sink for the requested stream id
 		let Some(sink) = self.sinks.open(handshake.stream_id) else {
 			tracing::debug!(
-				consumer_id = %remote_peer_id,
+				consumer_id = %Short(&remote_peer_id),
 				stream_id = %handshake.stream_id,
 				"Consumer requesting unavailable stream",
 			);

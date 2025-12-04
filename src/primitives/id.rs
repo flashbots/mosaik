@@ -1,4 +1,5 @@
 use {
+	crate::primitives::Short,
 	core::{convert::Infallible, fmt, str::FromStr},
 	derive_more::Deref,
 	serde::{Deserialize, Deserializer, Serialize, de},
@@ -31,6 +32,12 @@ impl<T: AsRef<str>> From<T> for UniqueId {
 	}
 }
 
+impl AsRef<[u8]> for UniqueId {
+	fn as_ref(&self) -> &[u8] {
+		&self.0
+	}
+}
+
 impl From<UniqueId> for [u8; 32] {
 	fn from(id: UniqueId) -> Self {
 		id.0
@@ -59,7 +66,7 @@ impl fmt::Debug for UniqueId {
 
 impl fmt::Display for UniqueId {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}", hex::encode(self.0))
+		write!(f, "{}", Short(&self.0))
 	}
 }
 

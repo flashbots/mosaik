@@ -1,21 +1,15 @@
 //! Traits, helpers and types used across the SDK
 
 mod channel;
+mod fmt;
 mod id;
 mod iter;
 
 /// Public API re-exported primitives.
 pub use id::{Tag, UniqueId};
 /// Internal primitives.
-pub(crate) use {channel::UnboundedChannel, iter::IntoIterOrSingle};
+pub(crate) use {channel::UnboundedChannel, fmt::*, iter::IntoIterOrSingle};
 
 /// Used internally as a sentinel type for generic parameters.
 #[doc(hidden)]
 pub enum Variant<const U: usize = 0> {}
-
-pub(crate) struct Pretty<'a, T: core::fmt::Debug>(pub &'a T);
-impl<T: core::fmt::Debug> core::fmt::Display for Pretty<'_, T> {
-	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-		write!(f, "{:#?}", self.0)
-	}
-}

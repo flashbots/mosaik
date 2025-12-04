@@ -11,7 +11,7 @@ use {
 	},
 	crate::{
 		network::{LocalNode, PeerId},
-		primitives::IntoIterOrSingle,
+		primitives::{IntoIterOrSingle, Short},
 	},
 	core::{
 		pin::Pin,
@@ -269,7 +269,7 @@ impl WorkerLoop {
 					match catalog.upsert_signed(signed_peer_entry) {
 						UpsertResult::New(signed_peer_entry) => {
 							tracing::debug!(
-								info = ?signed_peer_entry,
+								info = %Short(signed_peer_entry),
 								network = %self.local.network_id(),
 								"new peer discovered"
 							);
@@ -287,7 +287,7 @@ impl WorkerLoop {
 						}
 						UpsertResult::Updated(signed_peer_entry) => {
 							tracing::debug!(
-								info = ?signed_peer_entry,
+								info = %Short(signed_peer_entry),
 								network = %self.local.network_id(),
 								"peer info updated"
 							);

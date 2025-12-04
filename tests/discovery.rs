@@ -21,7 +21,7 @@ async fn catalogs_are_consistent() -> anyhow::Result<()> {
 		.await?;
 
 	info!(
-		"Node0 (bootstrap) is known as {:?} on network {}",
+		"Node0 (bootstrap) is known as {} on network {}",
 		n0.local().id(),
 		n0.network_id()
 	);

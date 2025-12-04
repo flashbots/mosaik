@@ -9,6 +9,7 @@ use {
 	crate::{
 		discovery::Catalog,
 		network::{LocalNode, PeerId},
+		primitives::Short,
 	},
 	core::pin::Pin,
 	futures::{Stream, StreamExt, future::JoinAll, stream::SelectAll},
@@ -135,7 +136,7 @@ impl<D: Datum> ConsumerWorker<D> {
 			if !self.active.contains_key(producer.id()) {
 				tracing::debug!(
 					stream_id = %stream_id,
-					producer_id = %producer.id(),
+					producer_id = %Short(producer.id()),
 					"discovered new producer"
 				);
 
@@ -169,7 +170,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		if state == State::Terminated {
 			self.active.remove(&peer_id);
 			tracing::info!(
-				producer_id = %peer_id,
+				producer_id = %Short(&peer_id),
 				stream_id = %D::stream_id(),
 				criteria = ?self.criteria,
 				"connection with producer terminated"

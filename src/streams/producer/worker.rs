@@ -5,7 +5,7 @@ use {
 		Sinks,
 		Status,
 	},
-	crate::network::link::Link,
+	crate::{network::link::Link, primitives::Short},
 	core::any::Any,
 	slotmap::DenseSlotMap,
 	std::sync::Arc,
@@ -151,7 +151,7 @@ impl<D: Datum> WorkerLoop<D> {
 				// remote consumer
 				Some((link, criteria)) = self.accepted.recv() => {
 					tracing::info!(
-						consumer_id = %link.remote_id(),
+						consumer_id = %Short(&link.remote_id()),
 						stream_id = %D::stream_id(),
 						criteria = ?criteria,
 						"accepting new consumer",

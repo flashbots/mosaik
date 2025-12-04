@@ -1,10 +1,6 @@
 use {
 	super::Error,
-	crate::{
-		StreamId,
-		network::PeerId,
-		primitives::{IntoIterOrSingle, Tag},
-	},
+	crate::{StreamId, network::PeerId, primitives::*},
 	bincode::{config::standard, serde::encode_into_std_write},
 	core::fmt,
 	derive_more::{AsRef, Debug, Deref, Into},
@@ -43,6 +39,12 @@ impl core::fmt::Display for PeerEntryVersion {
 	}
 }
 
+impl core::fmt::Display for Short<PeerEntryVersion> {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		write!(f, "{}", self.0.1)
+	}
+}
+
 impl PeerEntryVersion {
 	/// Increments the version's counter.
 	#[must_use]
@@ -70,7 +72,7 @@ impl PeerEntryVersion {
 /// - There is no public API to create a [`PeerEntry`] directly. It is intended
 ///   to be created by the discovery system when the network is booting and
 ///   received from other peers during discovery and catalog sync.
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PeerEntry {
 	protocol: Version,
 	version: PeerEntryVersion,
@@ -232,62 +234,35 @@ impl PeerEntry {
 	}
 }
 
-impl fmt::Debug for PeerEntry {
+impl fmt::Debug for Pretty<'_, PeerEntry> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		if f.alternate() {
-			writeln!(f, "PeerEntry:")?;
-			writeln!(f, "  id: {}", self.id())?;
+		writeln!(f, "PeerEntry:")?;
+		writeln!(f, "  id: {}", self.id())?;
+		writeln!(
+			f,
+			"  ips: {:#?}",
+			&self.address.ip_addrs().collect::<Vec<_>>()
+		)?;
 
-			if !self.address.ip_addrs().count() == 0 {
-				writeln!(f, "  ips: <none>")?;
-			} else {
-				writeln!(f, "  ips:")?;
-				for addr in self.address.ip_addrs() {
-					writeln!(f, "    - {addr}")?;
-				}
-			}
+		writeln!(
+			f,
+			"  relays: {:?}",
+			&self
+				.address
+				.relay_urls()
+				.map(|r| r.as_str())
+				.collect::<Vec<_>>()
+		)?;
 
-			if self.address().relay_urls().count() == 0 {
-				writeln!(f, "  relays: <none>")?;
-			} else {
-				writeln!(f, "  relays:")?;
-				for url in self.address.relay_urls() {
-					writeln!(f, "    - {url}")?;
-				}
-			}
+		writeln!(f, "  tags: {}", FmtIter::<Short<_>, _>::new(&self.tags))?;
+		writeln!(
+			f,
+			"  streams: {}",
+			FmtIter::<Short<_>, _>::new(&self.streams)
+		)?;
 
-			if self.tags.is_empty() {
-				writeln!(f, "  tags: <none>")?;
-			} else {
-				writeln!(f, "  tags:")?;
-				for tag in &self.tags {
-					writeln!(f, "    - {tag}")?;
-				}
-			}
-
-			if self.streams.is_empty() {
-				writeln!(f, "  streams: <none>")?;
-			} else {
-				writeln!(f, "  streams:")?;
-				for stream in &self.streams {
-					writeln!(f, "    - {stream}")?;
-				}
-			}
-
-			writeln!(f, "  update: {}", self.update_version())?;
-			writeln!(f, "  protocol: {}", self.protocol)?;
-
-			Ok(())
-		} else {
-			f.debug_struct("PeerEntry")
-				.field("id", &self.id())
-				.field("address", &self.address)
-				.field("protocol", &self.protocol)
-				.field("tags", &self.tags)
-				.field("streams", &self.streams)
-				.field("version", &self.version)
-				.finish()
-		}
+		writeln!(f, "  update: {}", self.update_version())?;
+		writeln!(f, "  protocol: {}", self.protocol)
 	}
 }
 
@@ -312,7 +287,7 @@ impl fmt::Debug for PeerEntry {
 #[derive(Debug, Clone, Serialize, Deref, AsRef, Into, PartialEq)]
 pub struct SignedPeerEntry(
 	#[deref] PeerEntry,
-	#[debug("signature: {}", hex::encode(_1.to_bytes()))] Signature,
+	#[debug("signature: {}", Abbreviated(_1.to_bytes()))] Signature,
 );
 
 impl SignedPeerEntry {
@@ -364,6 +339,25 @@ impl From<SignedPeerEntry> for PeerEntry {
 impl From<&SignedPeerEntry> for PeerEntry {
 	fn from(signed: &SignedPeerEntry) -> Self {
 		signed.clone().0
+	}
+}
+
+impl fmt::Display for Short<&SignedPeerEntry> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(
+			f,
+			"SignedPeerEntry[v{}]({}, tags: {}, streams: {})",
+			Short(self.0.update_version()),
+			Short(self.0.id()),
+			FmtIter::<Short<_>, _>::new(&self.0.tags),
+			FmtIter::<Short<_>, _>::new(&self.0.streams),
+		)
+	}
+}
+
+impl fmt::Display for Pretty<'_, SignedPeerEntry> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "Signed{:?}", Pretty(&self.0.0))
 	}
 }
 

@@ -2,7 +2,7 @@ use {
 	super::{Catalog, Config, Error, PeerEntryVersion, SignedPeerEntry},
 	crate::{
 		network::{LocalNode, PeerId},
-		primitives::{Pretty, UnboundedChannel},
+		primitives::{Pretty, Short, UnboundedChannel},
 	},
 	bincode::{
 		config::standard,
@@ -272,7 +272,7 @@ impl WorkerLoop {
 	fn on_gossip_event(&mut self, event: GossipEvent) {
 		tracing::trace!(
 			network = %self.local.network_id(),
-			peer_id = %self.local.id(),
+			peer_id = %Short(&self.local.id()),
 			event = ?event,
 			"Received gossip event"
 		);
