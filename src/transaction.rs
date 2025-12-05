@@ -7,6 +7,10 @@ impl Transaction {
 	pub fn hash(&self) -> &alloy_primitives::B256 {
 		self.inner.hash()
 	}
+
+	pub fn into_inner(self) -> op_alloy_consensus::OpTxEnvelope {
+		self.inner
+	}
 }
 
 impl serde::Serialize for Transaction {
