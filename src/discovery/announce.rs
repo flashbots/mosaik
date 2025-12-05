@@ -1,7 +1,7 @@
 use {
 	super::{Catalog, Config, Error, PeerEntryVersion, SignedPeerEntry},
 	crate::{
-		network::{LocalNode, PeerId},
+		network::{LocalNode, PeerId, link::Protocol},
 		primitives::{Pretty, Short, UnboundedChannel},
 	},
 	bincode::{
@@ -71,14 +71,16 @@ pub(super) struct Announce {
 	dials: UnboundedSender<Vec<PeerId>>,
 }
 
-/// Public API for the announcement protocol
-impl Announce {
-	/// ALPN protocol identifier for the announcement protocol.
+impl Protocol for Announce {
+	/// ALPN identifier for the announcement protocol.
 	///
 	/// This overrides the default `iroh_gossip` ALPN to use a Mosaik-specific
 	/// namespace.
-	pub(super) const ALPN: &'static [u8] = b"/mosaik/discovery/announce/1.0";
+	const ALPN: &'static [u8] = b"/mosaik/discovery/announce/1.0";
+}
 
+/// Public API for the announcement protocol
+impl Announce {
 	/// Initializes the announcement protocol with the given local node and
 	/// configuration.
 	///

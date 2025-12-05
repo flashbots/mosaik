@@ -14,7 +14,7 @@ use {
 mod builder;
 mod error;
 mod sink;
-mod status;
+mod when;
 mod worker;
 
 /// Internal API
@@ -23,7 +23,7 @@ pub(super) use sink::Sinks;
 pub use {
 	builder::Builder,
 	error::{Error, SendError},
-	status::Status,
+	when::When,
 };
 
 /// a local stream producer handle for sending data to remote peers.
@@ -37,12 +37,12 @@ pub use {
 /// - Producers implement [`Sink`] for sending datum of type `D` to the
 ///   underlying stream.
 pub struct Producer<D: Datum> {
-	status: Status,
+	status: When,
 	chan: PollSender<D>,
 }
 
 impl<D: Datum> Producer<D> {
-	pub(crate) fn new(chan: mpsc::Sender<D>, status: Status) -> Self {
+	pub(crate) fn new(chan: mpsc::Sender<D>, status: When) -> Self {
 		Self {
 			status,
 			chan: PollSender::new(chan),
@@ -50,7 +50,7 @@ impl<D: Datum> Producer<D> {
 	}
 
 	/// Access to the producer's status information.
-	pub const fn status(&self) -> &Status {
+	pub const fn when(&self) -> &When {
 		&self.status
 	}
 }

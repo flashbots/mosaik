@@ -4,19 +4,23 @@ use {
 		Datum,
 	},
 	crate::{
-		discovery::PeerEntry,
+		discovery::{Discovery, PeerEntry},
 		network::{
 			LocalNode,
-			link::{CloseReason, Link},
+			link::{Link, LinkError, RecvError},
 		},
-		primitives::{Short, cancellable},
-		streams::accept::ConsumerHandshake,
+		primitives::Short,
+		streams::accept::{
+			ConsumerHandshake,
+			StartStream,
+			StreamNotFound,
+			UnknownPeer,
+		},
 	},
-	backoff::{backoff::Backoff, future::retry},
+	backoff::backoff::Backoff,
 	core::{future::pending, ops::ControlFlow},
 	futures::FutureExt,
-	iroh::endpoint::ConnectionError,
-	std::{io, sync::Arc},
+	std::sync::Arc,
 	tokio::sync::{mpsc, watch},
 	tokio_util::sync::{CancellationToken, ReusableBoxFuture},
 };
@@ -36,13 +40,17 @@ pub(super) struct Receiver<D: Datum> {
 	/// Configuration for the streams subsystem.
 	config: Arc<Config>,
 
+	/// Discovery system handle used to trigger catalog syncs with producers that
+	/// are not recognizing this consumer.
+	discovery: Discovery,
+
 	/// Local socket, used to initiate connections to remote peers on the Streams
 	/// protocol.
 	local: LocalNode,
 
 	/// The remote producer peer entry snapshot as known at the time of worker
 	/// creation.
-	peer: PeerEntry,
+	peer: Arc<PeerEntry>,
 
 	/// The stream subscription criteria for this consumer.
 	criteria: Criteria,
@@ -63,7 +71,7 @@ pub(super) struct Receiver<D: Datum> {
 	/// The receiver future always carries the current physical link along with
 	/// it to enable repairing dropped connections according to the backoff
 	/// policy.
-	next_recv: ReusableBoxFuture<'static, (Result<D, io::Error>, Link)>,
+	next_recv: ReusableBoxFuture<'static, (Result<D, LinkError>, Link<Streams>)>,
 
 	/// Backoff policy for reconnecting to the remote producer.
 	backoff: Option<Box<dyn Backoff + Send + Sync + 'static>>,
@@ -82,22 +90,40 @@ pub(super) struct ReceiverHandle {
 
 	/// Observes changes to the receiver worker connection state.
 	state: watch::Receiver<State>,
+
+	/// Snapshot of the remote producer peer entry as known at the time of
+	/// receiver worker creation.
+	peer: Arc<PeerEntry>,
 }
 
 impl ReceiverHandle {
 	/// Terminates the receiver worker and waits for it to shut down.
-	pub async fn terminate(mut self) {
+	pub fn terminate(&self) -> impl Future<Output = ()> + use<> {
 		// Fire off the cancellation signal
 		self.cancel.cancel();
 
 		// Wait for the worker to observe the cancellation and set its state to
 		// `Terminated`.
-		let _ = self.state.wait_for(|s| *s == State::Terminated).await;
+		let mut state = self.state.clone();
+		async move {
+			let _ = state.wait_for(|s| *s == State::Terminated).await;
+		}
 	}
 
 	/// Returns a watch handle for monitoring the receiver state.
 	pub const fn state(&self) -> &watch::Receiver<State> {
 		&self.state
+	}
+
+	/// Returns the current state of the receiver worker.
+	pub fn is_connected(&self) -> bool {
+		*self.state.borrow() == State::Connected
+	}
+
+	/// Returns a reference to the remote producer peer entry as known at the
+	/// time of receiver worker creation.
+	pub fn peer(&self) -> &PeerEntry {
+		&self.peer
 	}
 }
 
@@ -105,6 +131,7 @@ impl<D: Datum> Receiver<D> {
 	pub fn spawn(
 		peer: PeerEntry,
 		local: &LocalNode,
+		discovery: &Discovery,
 		cancel: &CancellationToken,
 		data_tx: &mpsc::UnboundedSender<D>,
 		config: &Arc<Config>,
@@ -115,31 +142,38 @@ impl<D: Datum> Receiver<D> {
 		let data_tx = data_tx.clone();
 		let config = Arc::clone(config);
 		let criteria = criteria.clone();
+		let discovery = discovery.clone();
+		let peer = Arc::new(peer);
 		let next_recv = ReusableBoxFuture::new(pending());
 		let (state_tx, state) = watch::channel(State::Connecting);
 
 		let worker = Receiver {
 			config,
 			local,
-			peer,
 			criteria,
+			discovery,
 			data_tx,
 			state_tx,
-			cancel: cancel.clone(),
 			next_recv,
 			backoff: None,
+			cancel: cancel.clone(),
+			peer: Arc::clone(&peer),
 		};
 
 		tokio::spawn(worker.run());
 
-		ReceiverHandle { cancel, state }
+		ReceiverHandle {
+			cancel,
+			state,
+			peer,
+		}
 	}
 }
 
 impl<D: Datum> Receiver<D> {
 	pub async fn run(mut self) {
 		// initial connection attempt
-		self.connect(None).await;
+		self.connect().await;
 
 		loop {
 			tokio::select! {
@@ -167,7 +201,11 @@ impl<D: Datum> Receiver<D> {
 	///
 	/// Ensures that the next receive future is properly set up for the next datum
 	/// and honors the cancellation signal.
-	async fn on_next_recv(&mut self, result: Result<D, io::Error>, link: Link) {
+	async fn on_next_recv(
+		&mut self,
+		result: Result<D, LinkError>,
+		link: Link<Streams>,
+	) {
 		match result {
 			// a datum was successfully received
 			Ok(datum) => {
@@ -186,37 +224,8 @@ impl<D: Datum> Receiver<D> {
 				}
 			}
 			// an error occurred while receiving the datum,
-			// unless cancelled, drop the current link and attempt to
-			// reconnect according to the backoff policy.
-			Err(e) => {
-				match (e.kind(), link.connection().close_reason()) {
-					(io::ErrorKind::Interrupted, _) => {
-						// explicitly cancelled through the cancellation token
-						let _ = link.close_with_reason(CloseReason::Unspecified).await;
-						self.state_tx.send(State::Terminated).ok();
-						return;
-					}
-					// The connection was closed by the producer because it does not have
-					// this consumer in its discovery catalog. Trigger full catalog
-					// sync with the producer.
-					(_, Some(ConnectionError::ApplicationClosed(reason)))
-						if reason == CloseReason::UnknownPeer =>
-					{
-						self.sync_catalog_then_reconnect(link);
-						return;
-					}
-					_ => {
-						// io error occurred, drop the current link and attempt to reconnect
-						tracing::warn!(
-							error = %e,
-							stream_id = %D::stream_id(),
-							producer_id = %Short(self.peer.id()),
-						);
-					}
-				}
-
-				self.connect(Some(link)).await;
-			}
+			// kick off the sad path handling for the current link.
+			Err(error) => self.handle_recv_error(error).await,
 		}
 	}
 
@@ -229,64 +238,53 @@ impl<D: Datum> Receiver<D> {
 	/// The first instance of this future is created by [`connect`].
 	fn make_next_recv_future(
 		&self,
-		mut link: Link,
-	) -> impl Future<Output = (Result<D, io::Error>, Link)> + 'static {
-		let cancel = self.cancel.clone();
-
+		mut link: Link<Streams>,
+	) -> impl Future<Output = (Result<D, LinkError>, Link<Streams>)> + 'static {
 		// bind the the receive future along with the link instance for next
 		// receive polls or for connection recovery logic.
-		async move { (cancellable(&cancel, link.recv_as::<D>()).await, link) }
+		async move { (link.recv::<D>().await.map_err(LinkError::Recv), link) }
 			.fuse()
 	}
 
 	/// Attempts to connect to the remote producer and perform the stream
 	/// subscription handshake. This method will retry connections according
 	/// to the backoff policy specified in the configuration.
-	async fn connect(&mut self, prev: Option<Link>) {
+	async fn connect(&mut self) {
 		self.state_tx.send(State::Connecting).ok();
-
-		if let Some(link) = prev {
-			// close the previous link before attempting to reconnect
-			let _ = link.close_with_reason(CloseReason::Unspecified).await;
-		}
 
 		// apply backoff before attempting to reconnect
 		if self.apply_backoff().await.is_break() {
 			return;
 		}
 
-		let criteria = &self.criteria;
+		let cancel = &self.cancel;
+		let criteria = self.criteria.clone();
 		let peer_addr = self.peer.address();
-		let backoff = (self.config.backoff)();
 
-		// create a connect-and-handshake future with retries according to
-		// the backoff policy
-		let result: Result<Link, _> = retry(backoff, || {
-			let criteria = criteria.clone();
-			let cancel = self.cancel.clone();
-			let connect_fut = self.local.connect(peer_addr.clone(), Streams::ALPN);
+		let result = async {
+			tracing::debug!(
+				stream_id = %D::stream_id(),
+				producer_id = %Short(&peer_addr.id),
+				criteria = ?criteria,
+				"connecting to stream producer",
+			);
 
-			async move {
-				tracing::debug!(
-					stream_id = %D::stream_id(),
-					producer_id = %Short(&peer_addr.id),
-					criteria = ?criteria,
-					"connecting to stream producer",
-				);
+			// attempt to establish a new connection to the remote producer
+			let mut link = self
+				.local
+				.connect_with_cancel_token::<Streams>(peer_addr.clone(), cancel.clone())
+				.await?;
 
-				// attempt to establish a new connection to the remote producer
-				let mut link = cancellable(&cancel, connect_fut).await?;
+			// Send the consumer handshake to the producer
+			link.send(&ConsumerHandshake::new::<D>(criteria)).await?;
 
-				// Send the consumer handshake to the producer
-				let handshake = ConsumerHandshake::new::<D>(criteria);
-				cancellable(&cancel, link.send_as(&handshake)).await?;
+			// await the producer's handshake response
+			let _start = link.recv::<StartStream>().await?;
 
-				Ok(link)
-			}
-		})
-		.await;
+			Ok(link)
+		};
 
-		match result {
+		match result.await {
 			Ok(link) => {
 				// successfully connected and performed handshake
 				tracing::info!(
@@ -295,32 +293,114 @@ impl<D: Datum> Receiver<D> {
 					criteria = ?self.criteria,
 					"connected to stream producer",
 				);
+
 				// set the receiver state to connected
 				self.state_tx.send(State::Connected).ok();
 
 				// begin listening for incoming data
 				self.next_recv.set(self.make_next_recv_future(link));
 			}
-			Err(e) => {
-				if !self.cancel.is_cancelled() {
-					tracing::error!(
-						error = %e,
-						stream_id = %D::stream_id(),
-						producer_id = %Short(&self.peer.id()),
-						criteria = ?self.criteria,
-					  "failed to connect to stream producer");
-					self.cancel.cancel();
-				}
-				// no more cleanup to do, mark the worker as terminated
-				self.state_tx.send(State::Terminated).ok();
-			}
+			Err(error) => self.handle_recv_error(error).await,
 		}
 	}
 
-	fn sync_catalog_then_reconnect(&mut self, link: Link) {
-		tracing::info!(
-			".._> syncing catalog with producer before reconnecting for link {link}"
-		);
+	/// Handles errors that occur while receiving data from the remote producer or
+	/// during initial connection setup.
+	///
+	/// Application-level errors such as being unknown to the producer are
+	/// communicated by the producer by closing the connection with a specific
+	/// [`CloseReason`].
+	///
+	/// Any error during receiving data will result in dropping the current link
+	/// (if it was not already closed by the producer) and potentially repairing
+	/// with a new connection according to the backoff policy.
+	///
+	/// Inside this method, if the error is unrecoverable, the worker's
+	/// cancellation token is triggered to initiate shutdown.
+	async fn handle_recv_error(&mut self, error: LinkError) {
+		let close_reason = error.close_reason().cloned();
+
+		// indicates an unrecoverable error that should terminate the worker
+		// and not attempt to repair the connection any further.
+		macro_rules! unrecoverable {
+			() => {
+				self.cancel.cancel();
+				self.state_tx.send(State::Terminated).ok();
+				return;
+			};
+
+			($msg:expr, $e:expr) => {
+				tracing::warn!(
+					stream_id = %D::stream_id(),
+					producer_id = %Short(&self.peer.id()),
+					criteria = ?self.criteria,
+					error = %$e,
+					$msg,
+				);
+
+				self.cancel.cancel();
+				self.state_tx.send(State::Terminated).ok();
+				return;
+			};
+		}
+
+		match (error, close_reason) {
+			// Consumer or network is terminating
+			(LinkError::Cancelled, _) => {
+				// explicitly cancelled through the cancellation token, shut down
+				unrecoverable!();
+			}
+
+			// Received datum could not be deserialized
+			(LinkError::Recv(RecvError::Decode(err)), _) => {
+				// High likelihood of malicious or buggy producer sending invalid data.
+				unrecoverable!("producer sent invalid datum", err);
+			}
+
+			// The connection was closed by the producer because it does not have
+			// this consumer in its discovery catalog. Trigger full catalog
+			// sync with the producer then reconnect.
+			(_, Some(reason)) if reason == UnknownPeer => {
+				// The connection was closed by the producer because the stream id
+				// was not produced by this node. Do not attempt to reconnect.
+				tracing::debug!(
+					stream_id = %D::stream_id(),
+					producer_id = %Short(&self.peer.id()),
+					"producer does not recognize this consumer",
+				);
+				let _ = self
+					.discovery
+					.sync_with(self.peer.address().clone())
+					.await
+					.inspect_err(|e| {
+						tracing::warn!(
+							error = %e,
+							stream_id = %D::stream_id(),
+							producer_id = %Short(&self.peer.id()),
+							"failed to sync catalog with producer",
+						);
+					});
+			}
+			(e, Some(reason)) if reason == StreamNotFound => {
+				// the reason why we are not reconnecting on this error is because
+				// producers are discovered through the discovery catalog which
+				// should only list producers that are actually producing the
+				// requested stream. If we reach this point it indicates a bug
+				// either in the discovery system or the producer's stream
+				// registration logic.
+				unrecoverable!("producer does not have the requested stream", e);
+			}
+			(e, _) => {
+				// io error occurred, drop the current link and attempt to reconnect
+				tracing::warn!(
+					error = %e,
+					stream_id = %D::stream_id(),
+					producer_id = %Short(self.peer.id()),
+				);
+			}
+		};
+
+		Box::pin(self.connect()).await;
 	}
 
 	async fn apply_backoff(&mut self) -> ControlFlow<()> {

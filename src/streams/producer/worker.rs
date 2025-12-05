@@ -1,9 +1,9 @@
 use {
 	super::{
-		super::{Config, Criteria, Datum, StreamId},
+		super::{Config, Criteria, Datum, StreamId, Streams, accept::StartStream},
 		Producer,
 		Sinks,
-		Status,
+		When,
 	},
 	crate::{network::link::Link, primitives::Short},
 	core::any::Any,
@@ -35,7 +35,7 @@ pub(in crate::streams) struct Handle {
 	/// This is populated by the [`Acceptor`] when a remote peer requests to
 	/// subscribe to this stream and then passed to the worker loop to be added
 	/// as a new subscription.
-	accepted: mpsc::UnboundedSender<(Link, Criteria)>,
+	accepted: mpsc::UnboundedSender<(Link<Streams>, Criteria)>,
 }
 
 impl Handle {
@@ -57,7 +57,7 @@ impl Handle {
 			.downcast_ref::<mpsc::Sender<D>>()
 			.expect("Failed to downcast data sender channel");
 
-		Producer::new(data_tx.clone(), Status)
+		Producer::new(data_tx.clone(), When)
 	}
 
 	/// Accepts an incoming connection from a remote consumer for this stream id.
@@ -65,7 +65,7 @@ impl Handle {
 	/// By the time the connection is accepted, the [`Acceptor`] has already
 	/// decoded the handshake message and opened a transport-level stream with
 	/// the remote peer.
-	pub fn accept(&self, link: Link, criteria: Criteria) {
+	pub fn accept(&self, link: Link<Streams>, criteria: Criteria) {
 		self
 			.accepted
 			.send((link, criteria))
@@ -101,7 +101,7 @@ pub(super) struct WorkerLoop<D: Datum> {
 	///
 	/// Remote peers that arrive here are past the handshake phase and have an
 	/// open transport-level stream.
-	accepted: mpsc::UnboundedReceiver<(Link, Criteria)>,
+	accepted: mpsc::UnboundedReceiver<(Link<Streams>, Criteria)>,
 }
 
 impl<D: Datum> WorkerLoop<D> {
@@ -150,7 +150,7 @@ impl<D: Datum> WorkerLoop<D> {
 				// Triggered when [`Acceptor`] accepts a new connection from a
 				// remote consumer
 				Some((link, criteria)) = self.accepted.recv() => {
-					self.accept(link, criteria);
+					self.accept(link, criteria).await;
 				}
 
 				// Triggered when a new datum is produced for this stream
@@ -168,13 +168,25 @@ impl<D: Datum> WorkerLoop<D> {
 		tracing::warn!("implement producer fanout logic");
 	}
 
-	fn accept(&mut self, link: Link, criteria: Criteria) {
+	async fn accept(&mut self, link: Link<Streams>, criteria: Criteria) {
 		tracing::info!(
 			consumer_id = %Short(&link.remote_id()),
 			stream_id = %D::stream_id(),
 			criteria = ?criteria,
 			"accepted new consumer",
 		);
+
+		let mut link = link;
+		let start_stream = StartStream(D::stream_id());
+
+		if let Err(e) = link.send(&start_stream).await {
+			tracing::error!(
+				consumer_id = %Short(&link.remote_id()),
+				error = %e,
+				"failed to send start stream message to consumer",
+			);
+			return;
+		}
 
 		let subscription = Subscription { link, criteria };
 		self.active.insert(subscription);
@@ -194,7 +206,7 @@ slotmap::new_key_type! {
 /// Each subscription is an independent transport-level connection.
 struct Subscription {
 	/// The transport-level link to the remote consumer.
-	link: Link,
+	link: Link<Streams>,
 
 	/// The stream subscription criteria for this consumer.
 	criteria: Criteria,

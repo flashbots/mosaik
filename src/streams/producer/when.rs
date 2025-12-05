@@ -7,9 +7,9 @@ use {
 	std::collections::BTreeSet,
 };
 
-pub struct Status;
+pub struct When;
 
-impl Status {
+impl When {
 	/// Returns a future that resolves when the producer has at least one
 	/// subscriber.
 	pub fn subscribed(&self) -> SubscriptionCondition {

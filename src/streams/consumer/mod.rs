@@ -13,10 +13,10 @@ use {
 
 mod builder;
 mod receiver;
-mod status;
+mod when;
 mod worker;
 
-pub use {builder::Builder, status::Status};
+pub use {builder::Builder, when::When};
 
 /// A local stream consumer handle that allows receiving data from a stream
 /// produced by a remote peer.
@@ -33,14 +33,25 @@ pub use {builder::Builder, status::Status};
 ///
 /// - Consumers implement [`Stream`] for receiving datum of type `D`.
 pub struct Consumer<D> {
-	status: Status,
+	status: When,
 	chan: mpsc::UnboundedReceiver<D>,
 	_abort: DropGuard,
 }
 
 impl<D> Consumer<D> {
-	/// Access to the consumer's status information.
-	pub const fn status(&self) -> &Status {
+	/// Awaits changes to the consumer's status.
+	///
+	/// example:
+	/// ```no_run
+	/// let c = net.streams().consume::<MyDatum>();
+	///
+	/// // resolves when at least one producer is connected
+	/// c.when().subscribed().await;
+	///
+	/// // resolves when at least two producers are connected
+	/// c.when().subscribed().to_at_least(2).await;
+	/// ```
+	pub const fn when(&self) -> &When {
 		&self.status
 	}
 }

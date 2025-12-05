@@ -67,7 +67,7 @@ async fn api_design_basic() -> anyhow::Result<()> {
 	let c2b = n2.streams().consume::<Data2>();
 	let c2c = n2.streams().consume::<Data3>();
 
-	p0.status().subscribed().by_at_least(2).await;
+	p0.when().subscribed().by_at_least(2).await;
 	p0.send(Data1("One".into())).await.unwrap();
 
 	let recv_c2a = c2a.next().await;
@@ -93,13 +93,24 @@ async fn subscription_triggers_catalog_sync() -> anyhow::Result<()> {
 		)
 		.build()
 		.await?;
-	let p1 = n0.streams().produce::<Data1>();
+	let p0 = n0.streams().produce::<Data1>();
 
 	// n1 knows n0 through local catalog entry
 	let n1 = Network::new(network_id).await?;
 	n1.discovery().insert(n0.discovery().me());
-	let mut c1 = n1.streams().consume::<Data1>();
 
+	// n1 should have n0 in its catalog as an unsigned peer
+	assert_eq!(n1.discovery().catalog().unsigned_peers().count(), 1);
+
+	// n1 consumes Data1, triggering a subscription request to n0
+	// which initially gets rejected with CloseReason::UnknownPeer
+	// then a full catalog sync is performed, and finally the subscription
+	// request is retried and accepted. N1 should have n0 as a signed peer
+	// after the sync.
+	let c1 = n1.streams().consume::<Data1>();
+
+	c1.when().subscribed().await;
+	tracing::info!("consumer successfully subscribed to producer");
 	core::future::pending::<()>().await;
 
 	Ok(())

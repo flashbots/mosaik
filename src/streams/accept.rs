@@ -2,14 +2,15 @@ use {
 	super::{Criteria, Datum, StreamId, Streams, producer::Sinks},
 	crate::{
 		discovery::Discovery,
-		network::link::{CloseReason, Link},
+		network::link::{Link, Protocol},
 		primitives::Short,
 	},
 	core::fmt,
 	iroh::{
-		endpoint::Connection,
+		endpoint::{ApplicationClose, Connection},
 		protocol::{AcceptError, ProtocolHandler},
 	},
+	n0_error::Meta,
 	serde::{Deserialize, Serialize},
 	std::sync::Arc,
 };
@@ -68,13 +69,15 @@ impl ProtocolHandler for Acceptor {
 		let Some(info) = catalog.get(&remote_peer_id) else {
 			tracing::debug!(
 				consumer_id = %Short(&remote_peer_id),
-				"unknown consumer peer attempted to connect",
+				"unknown consumer peer",
 			);
 
 			// Close the link with a reason before returning error
-			let error = CloseReason::UnknownPeer;
-			link.close_with_reason(error).await?;
-			return Err(AcceptError::from_err(error));
+			let reason: ApplicationClose = UnknownPeer.into();
+			link.close(reason.clone()).await?;
+			return Err(AcceptError::NotAllowed {
+				meta: Meta::default(),
+			});
 		};
 
 		tracing::info!(
@@ -84,21 +87,17 @@ impl ProtocolHandler for Acceptor {
 		);
 
 		// Receive the consumer's handshake message
-		let handshake: ConsumerHandshake = match link.recv_as().await {
-			Ok(handshake) => handshake,
-			Err(e) => {
+		let handshake: ConsumerHandshake = link
+			.recv()
+			.await
+			.inspect_err(|e| {
 				tracing::debug!(
 					consumer_id = %Short(&remote_peer_id),
 					error = %e,
 					"Failed to receive consumer handshake",
-				);
-
-				// Close the link with a reason before returning error
-				let error = CloseReason::InvalidMessage;
-				link.close_with_reason(error).await?;
-				return Err(AcceptError::from_err(error));
-			}
-		};
+				)
+			})
+			.map_err(AcceptError::from_err)?;
 
 		// Lookup the fanout sink for the requested stream id
 		let Some(sink) = self.sinks.open(handshake.stream_id) else {
@@ -109,9 +108,11 @@ impl ProtocolHandler for Acceptor {
 			);
 
 			// Close the link with a reason before returning error
-			let error = CloseReason::StreamNotFound;
-			link.close_with_reason(error).await?;
-			return Err(AcceptError::from_err(error));
+			let reason: ApplicationClose = StreamNotFound.into();
+			link.close(reason.clone()).await?;
+			return Err(AcceptError::NotAllowed {
+				meta: Meta::default(),
+			});
 		};
 
 		// pass the connection to the stream-specific [`SinkHandle`]
@@ -122,7 +123,7 @@ impl ProtocolHandler for Acceptor {
 }
 
 /// Handshake sent by consumers when connecting to a producer's stream sink.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(super) struct ConsumerHandshake {
 	/// The stream id the consumer wishes to subscribe to.
 	stream_id: StreamId,
@@ -141,3 +142,40 @@ impl ConsumerHandshake {
 		}
 	}
 }
+
+/// Handshake response sent by producers to consumers upon successful
+/// initiation of a stream.
+#[derive(Debug, Serialize, Deserialize)]
+pub(super) struct StartStream(pub StreamId);
+
+macro_rules! make_close_reason {
+	($code:expr, $name:ident) => {
+		#[derive(Debug, Clone, Copy)]
+		pub(super) struct $name;
+		const _: () = {
+			impl From<$name> for iroh::endpoint::ApplicationClose {
+				fn from(_: $name) -> Self {
+					iroh::endpoint::ApplicationClose {
+						error_code: iroh::endpoint::VarInt::from($code as u32),
+						reason: stringify!($name).into(),
+					}
+				}
+			}
+
+			impl PartialEq<iroh::endpoint::ApplicationClose> for $name {
+				fn eq(&self, other: &iroh::endpoint::ApplicationClose) -> bool {
+					other.error_code == iroh::endpoint::VarInt::from($code as u32)
+				}
+			}
+
+			impl PartialEq<$name> for iroh::endpoint::ApplicationClose {
+				fn eq(&self, _: &$name) -> bool {
+					self.error_code == iroh::endpoint::VarInt::from($code as u32)
+				}
+			}
+		};
+	};
+}
+
+make_close_reason!(0x1001, UnknownPeer);
+make_close_reason!(0x1002, StreamNotFound);

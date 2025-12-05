@@ -1,7 +1,13 @@
 use {
 	super::link::Link,
-	crate::{SecretKey, network::NetworkId},
-	iroh::{Endpoint, EndpointAddr, endpoint::ConnectError},
+	crate::{
+		SecretKey,
+		network::{
+			NetworkId,
+			link::{OpenError, Protocol},
+		},
+	},
+	iroh::{Endpoint, EndpointAddr},
 	std::{fmt, sync::Arc},
 	tokio::sync::SetOnce,
 	tokio_util::sync::CancellationToken,
@@ -100,18 +106,35 @@ impl LocalNode {
 	}
 
 	/// Establishes a new outgoing connection to a remote peer on the protocol
-	/// specified by the ALPN parameter. The returned link has an open
+	/// specified by the ALPN of the protocol `P`. The returned link has an open
 	/// bidirectional stream with the remote peer with message framing semantics
 	/// defined by the [`Link`] type.
-	pub(crate) fn connect(
+	///
+	/// Gets cancelled when the network is shutting down.
+	pub(crate) fn connect<P: Protocol>(
 		&self,
 		remote: impl Into<EndpointAddr>,
-		alpn: &[u8],
-	) -> impl Future<Output = Result<Link, ConnectError>> + Send + 'static {
+	) -> impl Future<Output = Result<Link<P>, OpenError>> + Send + 'static {
 		let local = self.clone();
 		let remote = remote.into();
-		let alpn = alpn.to_owned();
-		async move { Link::connect(&local, remote, &alpn).await }
+		let cancel = self.termination().clone();
+		async move { Link::open_with_cancel_token(&local, remote, cancel).await }
+	}
+
+	/// Establishes a new outgoing connection to a remote peer on the protocol
+	/// specified by the ALPN of the protocol `P`. The returned link has an open
+	/// bidirectional stream with the remote peer with message framing semantics
+	/// defined by the [`Link`] type.
+	///
+	/// Gets cancelled when the provided cancellation token is triggered.
+	pub(crate) fn connect_with_cancel_token<P: Protocol>(
+		&self,
+		remote: impl Into<EndpointAddr>,
+		cancel: CancellationToken,
+	) -> impl Future<Output = Result<Link<P>, OpenError>> + Send + 'static {
+		let local = self.clone();
+		let remote = remote.into();
+		async move { Link::open_with_cancel_token(&local, remote, cancel).await }
 	}
 }
 

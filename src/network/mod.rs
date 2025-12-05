@@ -11,7 +11,7 @@ use {
 };
 
 mod config;
-mod error;
+pub(crate) mod error;
 mod local;
 
 pub(crate) mod link;

@@ -3,21 +3,23 @@ use {
 		super::{Config, Criteria, Streams},
 		Consumer,
 		Datum,
-		Status,
+		When,
 		receiver::{Receiver, ReceiverHandle, State},
 	},
 	crate::{
-		discovery::Catalog,
+		discovery::{Catalog, Discovery},
 		network::{LocalNode, PeerId},
 		primitives::Short,
 	},
 	core::pin::Pin,
 	futures::{Stream, StreamExt, future::JoinAll, stream::SelectAll},
-	std::{collections::HashMap, sync::Arc},
+	std::sync::Arc,
 	tokio::sync::{mpsc, watch},
 	tokio_stream::wrappers::WatchStream,
 	tokio_util::sync::CancellationToken,
 };
+
+pub(super) type ActiveReceivers = im::HashMap<PeerId, Arc<ReceiverHandle>>;
 
 /// Worker task that manages the state of one consumer for a specific datum type
 /// `D` on the local node.
@@ -34,11 +36,10 @@ pub(super) struct ConsumerWorker<D: Datum> {
 	/// The stream subscription criteria for this consumer.
 	criteria: Criteria,
 
-	/// Watch handle for the discovery catalog.
-	///
-	/// This is used to monitor known peers that are producing the desired
-	/// stream.
-	catalog: watch::Receiver<Catalog>,
+	/// The discovery system handle used to monitor known peers that are
+	/// producing the desired stream and also to trigger catalog syncs when
+	/// the consumer is connecting to a producer that does not recognize it.
+	discovery: Discovery,
 
 	/// Channel for sending received data to the consumer handle.
 	data_tx: mpsc::UnboundedSender<D>,
@@ -47,7 +48,9 @@ pub(super) struct ConsumerWorker<D: Datum> {
 	cancel: CancellationToken,
 
 	/// Active receive workers for connected producer peers.
-	active: HashMap<PeerId, ReceiverHandle>,
+	/// This value can be observed to get the current snapshot of connected
+	/// producers.
+	active: watch::Sender<ActiveReceivers>,
 
 	/// Aggregated status streams from all active receiver workers.
 	status_rx: StateUpdatesStream,
@@ -62,30 +65,25 @@ impl<D: Datum> ConsumerWorker<D> {
 		let local = streams.local.clone();
 		let config = Arc::clone(&streams.config);
 		let cancel = local.termination().child_token();
+		let active = watch::Sender::new(ActiveReceivers::new());
 		let (data_tx, data_rx) = mpsc::unbounded_channel();
-
-		// Get a watch handle for the discovery catalog
-		// and mark it as changed to trigger an initial producers lookup in the
-		// current state of the catalog.
-		let mut catalog = streams.discovery.catalog_watch();
-		catalog.mark_changed();
 
 		let worker = ConsumerWorker {
 			config,
 			local,
 			data_tx,
 			criteria,
-			catalog,
+			discovery: streams.discovery.clone(),
 			cancel: cancel.clone(),
-			active: HashMap::new(),
+			active: active.clone(),
 			status_rx: StateUpdatesStream::new(),
 		};
 
 		tokio::spawn(worker.run());
 
 		Consumer {
-			status: Status,
 			chan: data_rx,
+			status: When::new(active.subscribe()),
 			_abort: cancel.drop_guard(),
 		}
 	}
@@ -93,6 +91,12 @@ impl<D: Datum> ConsumerWorker<D> {
 
 impl<D: Datum> ConsumerWorker<D> {
 	async fn run(mut self) {
+		// Get a watch handle for the discovery catalog
+		// and mark it as changed to trigger an initial producers lookup in the
+		// current state of the catalog.
+		let mut catalog = self.discovery.catalog_watch();
+		catalog.mark_changed();
+
 		loop {
 			tokio::select! {
 				// Triggered when the consumer is dropped or the network is shutting down
@@ -102,9 +106,9 @@ impl<D: Datum> ConsumerWorker<D> {
 				}
 
 				// Triggered when new peers are discovered or existing peers are updated
-				_ = self.catalog.changed() => {
+				_ = catalog.changed() => {
 					// mark the latest catalog snapshot as seen and trigger peers scan
-					let snapshot = self.catalog.borrow_and_update().clone();
+					let snapshot = catalog.borrow_and_update().clone();
 					self.on_catalog_update(snapshot);
 				}
 
@@ -133,7 +137,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		for producer in producers {
 			// for each discovered producer, create a receive worker if it is not
 			// already in the active list of connected producers.
-			if !self.active.contains_key(producer.id()) {
+			if !self.active.borrow().contains_key(producer.id()) {
 				tracing::debug!(
 					stream_id = %stream_id,
 					producer_id = %Short(producer.id()),
@@ -144,6 +148,7 @@ impl<D: Datum> ConsumerWorker<D> {
 				let receiver = Receiver::spawn(
 					producer.clone(),
 					&self.local,
+					&self.discovery,
 					&self.cancel,
 					&self.data_tx,
 					&self.config,
@@ -160,7 +165,9 @@ impl<D: Datum> ConsumerWorker<D> {
 				// track the active receiver handle, when workers terminate they will
 				// transition into the terminated state and be removed from the active
 				// list
-				self.active.insert(*producer.id(), receiver);
+				self.active.send_modify(|active| {
+					active.insert(*producer.id(), Arc::new(receiver));
+				});
 			}
 		}
 	}
@@ -170,7 +177,10 @@ impl<D: Datum> ConsumerWorker<D> {
 		if state == State::Terminated {
 			// The receiver has unrecoverably terminated, remove it from the active
 			// list
-			self.active.remove(&peer_id);
+			self.active.send_modify(|active| {
+				active.remove(&peer_id);
+			});
+
 			tracing::info!(
 				producer_id = %Short(&peer_id),
 				stream_id = %D::stream_id(),
@@ -183,11 +193,11 @@ impl<D: Datum> ConsumerWorker<D> {
 	/// Gracefully closes all connections with remote producers.
 	async fn on_terminated(&mut self) {
 		// terminate all active receiver workers
-		let producers_count = self.active.len();
+		let producers_count = self.active.borrow().len();
+		let active = self.active.send_replace(im::HashMap::default());
 
-		self
-			.active
-			.drain()
+		active
+			.into_iter()
 			.map(|(_, handle)| handle.terminate())
 			.collect::<JoinAll<_>>()
 			.await;

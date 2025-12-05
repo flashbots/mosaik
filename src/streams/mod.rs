@@ -1,9 +1,24 @@
 //! Streams Consumers and Producers
+//!
+//! Notes:
+//! - Streams are the primary dataflow primitive in Mosaik. They represent
+//!   typed, asynchronous data channels that connect producers and consumers
+//!   across a network.
+//!
+//! - Streams can be established between nodes that have discovered each other
+//!   via the [`discovery`](crate::discovery) subsystem and have each other's
+//!   entries in their local catalogs. Subscriptions from unknown consumers are
+//!   rejected with a `PeerUnknown` error. That consumer should re-sync its
+//!   local catalog with the producer and retry the subscription.
 
 use {
 	crate::{
 		discovery::Discovery,
-		network::{LocalNode, ProtocolProvider},
+		network::{
+			LocalNode,
+			ProtocolProvider,
+			link::{self, Protocol},
+		},
 		primitives::UniqueId,
 	},
 	accept::Acceptor,
@@ -91,9 +106,6 @@ impl Streams {
 
 /// Internal construction API
 impl Streams {
-	/// ALPN identifier for the streams protocol.
-	const ALPN: &'static [u8] = b"/mosaik/streams/1.0";
-
 	/// Internally used by [`super::NetworkBuilder`] to create a new Streams
 	/// subsystem instance as part of the overall [`super::Network`] instance.
 	pub(crate) fn new(
@@ -115,4 +127,9 @@ impl ProtocolProvider for Streams {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
 		protocols.accept(Self::ALPN, Acceptor::new(self))
 	}
+}
+
+impl link::Protocol for Streams {
+	/// ALPN identifier for the streams protocol.
+	const ALPN: &'static [u8] = b"/mosaik/streams/1.0";
 }

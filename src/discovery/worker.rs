@@ -18,7 +18,12 @@ use {
 		task::{Context, Poll},
 	},
 	futures::{FutureExt, StreamExt},
-	iroh::{Watcher, endpoint::Connection, protocol::DynProtocolHandler},
+	iroh::{
+		EndpointAddr,
+		Watcher,
+		endpoint::Connection,
+		protocol::DynProtocolHandler,
+	},
 	std::io,
 	tokio::{
 		sync::{
@@ -39,6 +44,7 @@ use {
 /// This struct is instantiated by the `WorkerLoop::spawn` method and is held
 /// by the `Discovery` struct.
 pub(super) struct Handle {
+	pub local: LocalNode,
 	pub catalog: watch::Sender<Catalog>,
 	pub events: broadcast::Receiver<Event>,
 	pub commands: UnboundedSender<WorkerCommand>,
@@ -57,18 +63,6 @@ impl Handle {
 			))
 			.ok();
 		let _ = rx.await;
-	}
-
-	/// Sends a command to update the local peer entry using the provided update
-	/// function.
-	pub fn update_local_peer_entry(
-		&self,
-		update: impl FnOnce(PeerEntry) -> PeerEntry + Send + 'static,
-	) {
-		self
-			.commands
-			.send(WorkerCommand::UpdateLocalPeerEntry(Box::new(update)))
-			.expect("Discovery worker loop is down");
 	}
 }
 
@@ -111,7 +105,7 @@ impl WorkerLoop {
 		let announce = Announce::new(local.clone(), &config, catalog.subscribe());
 
 		let worker = Self {
-			local,
+			local: local.clone(),
 			sync,
 			announce,
 			catalog: catalog.clone(),
@@ -141,6 +135,7 @@ impl WorkerLoop {
 
 		// Return the handle to interact with the worker loop
 		Handle {
+			local,
 			catalog,
 			events: events_rx,
 			commands: commands_tx,
@@ -220,9 +215,6 @@ impl WorkerLoop {
 				self.announce.dial(peers);
 				let _ = resp.send(());
 			}
-			WorkerCommand::UpdateLocalPeerEntry(update_fn) => {
-				self.update_local_peer_entry(update_fn);
-			}
 			WorkerCommand::AcceptCatalogSync(connection) => {
 				let peer_id = connection.remote_id();
 				if let Err(e) = self.sync.protocol().accept(connection).await {
@@ -269,9 +261,9 @@ impl WorkerLoop {
 							);
 
 							// Trigger a full catalog sync with the newly discovered peer
-							self
-								.syncs
-								.spawn(self.sync.sync_with(*signed_peer_entry.id()));
+							self.syncs.spawn(
+								self.sync.sync_with(signed_peer_entry.address().clone()),
+							);
 
 							self
 								.events
@@ -311,10 +303,10 @@ impl WorkerLoop {
 	/// through the public api.
 	fn on_manual_sync_request(
 		&mut self,
-		peer_id: PeerId,
+		peer: EndpointAddr,
 		done: oneshot::Sender<Result<(), Error>>,
 	) {
-		let sync_fut = self.sync.sync_with(peer_id);
+		let sync_fut = self.sync.sync_with(peer);
 		self.syncs.spawn(async move {
 			match sync_fut.await {
 				Ok(()) => {
@@ -366,9 +358,6 @@ pub(super) enum WorkerCommand {
 	/// Dial a peer with the given `PeerId`s
 	DialPeers(Vec<PeerId>, oneshot::Sender<()>),
 
-	/// Update the local peer entry using the provided `PeerEntry` update function
-	UpdateLocalPeerEntry(Box<dyn FnOnce(PeerEntry) -> PeerEntry + Send>),
-
 	/// Accept an incoming `CatalogSync` protocol connection from a remote peer
 	AcceptCatalogSync(Connection),
 
@@ -376,5 +365,5 @@ pub(super) enum WorkerCommand {
 	AcceptAnnounce(Connection),
 
 	/// Initiates a catalog sync with the given `PeerId`
-	SyncWith(PeerId, oneshot::Sender<Result<(), Error>>),
+	SyncWith(EndpointAddr, oneshot::Sender<Result<(), Error>>),
 }

@@ -3,10 +3,11 @@
 use {
 	crate::{
 		discovery::{announce::Announce, worker::WorkerCommand},
-		network::{LocalNode, PeerId},
+		network::{LocalNode, PeerId, link::Protocol},
 		primitives::IntoIterOrSingle,
 	},
 	iroh::{
+		EndpointAddr,
 		endpoint::Connection,
 		protocol::{AcceptError, ProtocolHandler, RouterBuilder},
 	},
@@ -91,7 +92,7 @@ impl Discovery {
 	/// This async method resolves when the sync is complete or fails.
 	pub async fn sync_with(
 		&self,
-		peer_id: impl Into<PeerId>,
+		peer_id: impl Into<EndpointAddr>,
 	) -> Result<(), Error> {
 		let peer_id = peer_id.into();
 		let (tx, rx) = oneshot::channel();
@@ -167,7 +168,24 @@ impl Discovery {
 		&self,
 		update: impl FnOnce(PeerEntry) -> PeerEntry + Send + 'static,
 	) {
-		self.0.update_local_peer_entry(update);
+		self.0.catalog.send_modify(|catalog| {
+			let local_entry = catalog.local().clone();
+			let updated_entry = update(local_entry.into());
+			let signed_updated_entry = updated_entry
+				.sign(self.0.local.secret_key())
+				.expect("signing updated local peer entry failed.");
+
+			tracing::trace!(
+				info = ?signed_updated_entry,
+				network = %self.0.local.network_id(),
+				"Updating local peer entry in catalog"
+			);
+
+			assert!(
+				catalog.upsert_signed(signed_updated_entry).is_ok(),
+				"local peer info versioning error. this is a bug."
+			);
+		});
 	}
 }
 

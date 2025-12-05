@@ -1,7 +1,6 @@
-use {
-	crate::network::PeerId,
-	iroh::endpoint::{ConnectError, ConnectionError},
-	n0_error::Meta,
+use crate::network::{
+	PeerId,
+	link::{AcceptError, OpenError, RecvError, SendError},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -19,24 +18,20 @@ pub enum Error {
 	PeerIdChanged(PeerId, PeerId),
 
 	#[error("Connection error: {0}")]
-	Connection(#[from] ConnectError),
+	Open(#[from] OpenError),
+
+	#[error("Accept error: {0}")]
+	Accept(#[from] AcceptError),
 
 	#[error("I/O error: {0}")]
 	Io(#[from] std::io::Error),
 
-	#[error("Serialization error: {0}")]
-	Decode(#[from] bincode::error::DecodeError),
+	#[error("Recv error: {0}")]
+	Recv(#[from] RecvError),
+
+	#[error("Send error: {0}")]
+	Send(#[from] SendError),
 
 	#[error("Operation Cancelled")]
 	Cancelled,
-}
-
-impl From<ConnectionError> for Error {
-	#[track_caller]
-	fn from(err: ConnectionError) -> Self {
-		Error::Connection(ConnectError::Connection {
-			source: err,
-			meta: Meta::default(),
-		})
-	}
 }
