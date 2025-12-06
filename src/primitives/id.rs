@@ -50,6 +50,18 @@ impl From<&UniqueId> for [u8; 32] {
 	}
 }
 
+impl PartialEq<&UniqueId> for UniqueId {
+	fn eq(&self, other: &&UniqueId) -> bool {
+		self.0 == other.0
+	}
+}
+
+impl PartialEq<UniqueId> for &UniqueId {
+	fn eq(&self, other: &UniqueId) -> bool {
+		self.0 == other.0
+	}
+}
+
 impl FromStr for UniqueId {
 	type Err = Infallible;
 

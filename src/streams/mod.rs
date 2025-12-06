@@ -133,3 +133,13 @@ impl link::Protocol for Streams {
 	/// ALPN identifier for the streams protocol.
 	const ALPN: &'static [u8] = b"/mosaik/streams/1.0";
 }
+
+link::make_close_reason!(
+	/// A remote consumer is trying to subscribe to a string that is not in the
+	/// producer's catalog. Indicates that the consumer should re-sync its
+	/// catalog and retry the subscription.
+	struct UnknownPeer, 501);
+
+link::make_close_reason!(
+	/// The requested stream was not found on the producer node.
+	struct StreamNotFound, 502);

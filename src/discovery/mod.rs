@@ -149,7 +149,7 @@ impl Discovery {
 /// Internal construction API
 impl Discovery {
 	pub(crate) fn new(local: LocalNode, config: Config) -> Self {
-		Self(Arc::new(WorkerLoop::spawn(local, config)))
+		Self(WorkerLoop::spawn(local, config))
 	}
 }
 
@@ -174,12 +174,6 @@ impl Discovery {
 			let signed_updated_entry = updated_entry
 				.sign(self.0.local.secret_key())
 				.expect("signing updated local peer entry failed.");
-
-			tracing::trace!(
-				info = ?signed_updated_entry,
-				network = %self.0.local.network_id(),
-				"Updating local peer entry in catalog"
-			);
 
 			assert!(
 				catalog.upsert_signed(signed_updated_entry).is_ok(),

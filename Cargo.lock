@@ -6165,7 +6165,6 @@ dependencies = [
  "serde",
  "sha3",
  "slotmap",
- "strum 0.27.2",
  "thiserror 2.0.17",
  "tokio",
  "tokio-stream",

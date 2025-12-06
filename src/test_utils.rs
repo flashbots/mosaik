@@ -21,9 +21,10 @@ fn init_test_logging() {
 			"hickory_",
 			"hyper_util",
 			"portmapper",
-			"reqwest::connect",
+			"reqwest",
 			"events.net.relay.connected",
 			"netwatch",
+			"mio",
 		];
 
 		let _ = tracing_subscriber::registry()

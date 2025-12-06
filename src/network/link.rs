@@ -9,26 +9,10 @@ use {
 	bytes::{Buf, BufMut, BytesMut},
 	core::{fmt, marker::PhantomData},
 	futures::{SinkExt, StreamExt},
-	iroh::{
-		EndpointAddr,
-		endpoint::{
-			ApplicationClose,
-			ConnectError,
-			ConnectingError,
-			Connection,
-			ConnectionError,
-			ReadError,
-			RecvStream,
-			SendStream,
-			VarInt,
-			WriteError,
-		},
-		protocol::AcceptError as IrohAcceptError,
-	},
+	iroh::{EndpointAddr, endpoint::*, protocol::AcceptError as IrohAcceptError},
 	n0_error::Meta,
 	serde::{Serialize, de::DeserializeOwned},
 	std::io,
-	strum::{AsRefStr, FromRepr, IntoStaticStr},
 	tokio::io::{Join, join},
 	tokio_util::{
 		codec::{Framed, LengthDelimitedCodec},
@@ -39,21 +23,26 @@ use {
 /// Protocol trait for defining ALPN identifiers for network protocols.
 ///
 /// This trait ensures that a given [`Link`] instance is always associated with
-/// a specific ALPN identifier.
+/// a specific application-level protocol and uses the correct ALPN identifier.
 pub trait Protocol {
 	const ALPN: &'static [u8];
 }
 
 /// Represents a transport level open bidirectional stream between two peers
-/// using a well-known protocol.
+/// using a specific application-level protocol.
 ///
 /// Notes:
 ///
-/// - This is where the framing semantics are defined. We use [`Framed`] with
-///   [`LengthDelimitedCodec`] to frame individual messages.
-///
 /// - A link can be instantiated either by accepting an incoming connection or
 ///   by opening an outgoing connection to a remote peer.
+///
+/// - This is where the framing semantics are defined. We use [`Framed`] with
+///   [`LengthDelimitedCodec`] to frame individual messages on the wire.
+///
+/// - All data sent through the link is serialized and deserialized using
+///   [`bincode`] with the standard configuration. Any failure to deserialize
+///   incoming data results in closing the link as it is considered a protocol
+///   violation.
 ///
 /// - All operations are cancellable via the attached cancellation token. An
 ///   external token can be provided when accepting or opening a link, or a
@@ -81,19 +70,17 @@ impl<P: Protocol> Link<P> {
 	///
 	/// Note: the peer that calls `open` must send the first message before the
 	/// peer that `accept`s can begin accepting the connection.
-	pub async fn accept_with_cancel_token(
+	pub async fn accept_with_cancel(
 		connection: Connection,
 		cancel: CancellationToken,
 	) -> Result<Self, AcceptError> {
 		// reject any connection that does not match the expected typed ALPN
-		if P::ALPN != connection.alpn().as_ref() {
+		if P::ALPN != connection.alpn() {
 			let alpn = connection.alpn().to_vec();
 
 			// close the connection with invalid alpn reason, the remote peer should
 			// receive this reason as part of the application close frame.
-			if let Some(reason) =
-				close_connection(&connection, SystemReason::InvalidAlpn).await
-			{
+			if let Some(reason) = close_connection(&connection, InvalidAlpn).await {
 				// the connection actually failed before we could send the close frame
 				// return the transport error instead of invalid alpn
 				return Err(reason.into());
@@ -109,7 +96,7 @@ impl<P: Protocol> Link<P> {
 		let Some(accept_result) =
 			cancel.run_until_cancelled(connection.accept_bi()).await
 		else {
-			close_connection(&connection, SystemReason::Cancelled).await;
+			close_connection(&connection, Cancelled).await;
 			return Err(AcceptError::Cancelled);
 		};
 
@@ -132,8 +119,9 @@ impl<P: Protocol> Link<P> {
 	///
 	/// Note: the peer that calls `open` must send the first message before the
 	/// peer that `accept`s can begin accepting the connection.
+	#[allow(unused)]
 	pub async fn accept(connection: Connection) -> Result<Self, AcceptError> {
-		Self::accept_with_cancel_token(connection, CancellationToken::new()).await
+		Self::accept_with_cancel(connection, CancellationToken::new()).await
 	}
 
 	/// Initiates a new outgoing connection to a remote peer, opens a
@@ -144,7 +132,7 @@ impl<P: Protocol> Link<P> {
 	///
 	/// Note: the peer that calls `open` must send the first message before the
 	/// peer that `accept`s can begin accepting the connection.
-	pub async fn open_with_cancel_token(
+	pub async fn open_with_cancel(
 		local: &LocalNode,
 		remote: impl Into<EndpointAddr>,
 		cancel: CancellationToken,
@@ -160,14 +148,14 @@ impl<P: Protocol> Link<P> {
 		let Some(open_result) =
 			cancel.run_until_cancelled(connection.open_bi()).await
 		else {
-			close_connection(&connection, SystemReason::Cancelled).await;
+			close_connection(&connection, Cancelled).await;
 			return Err(OpenError::Cancelled);
 		};
 
 		let (tx, rx) = match open_result {
 			Ok(streams) => streams,
 			Err(err) => {
-				close_connection(&connection, SystemReason::Cancelled).await;
+				close_connection(&connection, Cancelled).await;
 				return Err(err.into());
 			}
 		};
@@ -191,14 +179,16 @@ impl<P: Protocol> Link<P> {
 	///
 	/// Note: the peer that calls `open` must send the first message before the
 	/// peer that `accept`s can begin accepting the connection.
+	#[allow(unused)]
 	pub async fn open(
 		local: &LocalNode,
 		remote: impl Into<EndpointAddr>,
 	) -> Result<Self, OpenError> {
-		Self::open_with_cancel_token(local, remote, CancellationToken::new()).await
+		Self::open_with_cancel(local, remote, CancellationToken::new()).await
 	}
 
 	/// Returns the ALPN identifier for this link.
+	#[expect(clippy::unused_self)]
 	pub fn alpn(&self) -> &[u8] {
 		P::ALPN
 	}
@@ -214,6 +204,7 @@ impl<P: Protocol> Link<P> {
 	}
 
 	/// Returns `true` if the link has been cancelled.
+	#[expect(unused)]
 	pub fn is_cancelled(&self) -> bool {
 		self.cancel.is_cancelled()
 	}
@@ -223,15 +214,15 @@ impl<P: Protocol> Link<P> {
 	pub async fn recv<D: DeserializeOwned>(&mut self) -> Result<D, RecvError> {
 		let Some(frame) = self.cancel.run_until_cancelled(self.stream.next()).await
 		else {
-			close_connection(&self.connection, SystemReason::Cancelled).await;
+			close_connection(&self.connection, Cancelled).await;
 			return Err(RecvError::Cancelled);
 		};
 
 		let Some(read_result) = frame else {
 			let Some(reason) =
-				close_connection(&self.connection, SystemReason::UnexpectedClose).await
+				close_connection(&self.connection, UnexpectedClose).await
 			else {
-				return Err(SystemReason::UnexpectedClose.into());
+				return Err(RecvError::closed(UnexpectedClose));
 			};
 			return Err(reason.into());
 		};
@@ -249,8 +240,7 @@ impl<P: Protocol> Link<P> {
 		let decoded = match decode_from_std_read(&mut reader, standard()) {
 			Ok(datum) => datum,
 			Err(err) => {
-				close_connection(&self.connection, SystemReason::ProtocolViolation)
-					.await;
+				close_connection(&self.connection, ProtocolViolation).await;
 				return Err(RecvError::Decode(err));
 			}
 		};
@@ -270,12 +260,12 @@ impl<P: Protocol> Link<P> {
 	) -> Result<(), SendError> {
 		let mut writer = BytesMut::new().writer();
 		if let Err(e) = encode_into_std_write(datum, &mut writer, standard()) {
-			close_connection(&self.connection, SystemReason::ProtocolViolation).await;
+			close_connection(&self.connection, ProtocolViolation).await;
 			return Err(e.into());
 		}
 		let fut = self.stream.send(writer.into_inner().freeze());
 		let Some(send_result) = self.cancel.run_until_cancelled(fut).await else {
-			close_connection(&self.connection, SystemReason::Cancelled).await;
+			close_connection(&self.connection, Cancelled).await;
 			return Err(SendError::Cancelled);
 		};
 
@@ -297,7 +287,7 @@ impl<P: Protocol> Link<P> {
 	pub async fn close(
 		mut self,
 		reason: impl Into<ApplicationClose>,
-	) -> Result<(), ConnectionError> {
+	) -> Result<(), CloseError> {
 		// flush any pending outgoing data before closing and receive any incoming
 		// close frames.
 		let _ = self.stream.flush().await;
@@ -306,7 +296,7 @@ impl<P: Protocol> Link<P> {
 		// link already closed, return the existing reason as sent by the remote
 		// peer or generated by the network layer
 		if let Some(reason) = self.connection().close_reason() {
-			return Err(reason);
+			return Err(CloseError::AlreadyClosed(reason));
 		}
 
 		// otherwise send the close frame to the remote peer
@@ -315,25 +305,34 @@ impl<P: Protocol> Link<P> {
 
 		// await the link closure confirmation and return any error reason
 		// other than locally closed.
-		let close_result = self.connection().closed().await;
-		if close_result != ConnectionError::LocallyClosed {
-			return Err(close_result);
-		}
+		let close_result = self
+			.cancel
+			.run_until_cancelled(self.connection().closed())
+			.await;
 
-		Ok(())
+		match close_result {
+			// We don't know the state of the connection as it was cancelled.
+			None => Err(CloseError::Cancelled),
+			// the connection was open and it was closed successfully by this peer.
+			Some(ConnectionError::LocallyClosed) => Ok(()),
+			// the connection closed for some other reason than locally closed.
+			Some(reason) => Err(CloseError::UnexpectedReason(reason)),
+		}
 	}
 
 	/// Awaits the link closure and returns the closure result if the link was
 	/// closed for a reason not indicating success.
 	pub async fn closed(self) -> Result<(), ConnectionError> {
-		match self.connection.closed().await {
-			ConnectionError::LocallyClosed => Ok(()),
-			ConnectionError::ApplicationClosed(reason)
-				if reason == SystemReason::Completed =>
-			{
+		match self
+			.cancel
+			.run_until_cancelled(self.connection.closed())
+			.await
+		{
+			None | Some(ConnectionError::LocallyClosed) => Ok(()),
+			Some(ConnectionError::ApplicationClosed(reason)) if reason == Success => {
 				Ok(())
 			}
-			err => Err(err),
+			Some(err) => Err(err),
 		}
 	}
 }
@@ -343,67 +342,44 @@ impl<P: Protocol> Link<P> {
 /// existing closure error is returned.
 async fn close_connection(
 	connection: &Connection,
-	reason: SystemReason,
+	reason: impl Into<ApplicationClose>,
 ) -> Option<ConnectionError> {
-	connection.close(reason.error_code(), reason.reason());
+	let reason = reason.into();
+	connection.close(reason.error_code, &reason.reason);
 	match connection.closed().await {
 		ConnectionError::LocallyClosed => None,
 		err => Some(err),
 	}
 }
 
-/// Errors that can occur when receiving data from a link.
+/// Errors that can occur when working with a link.
+///
+/// This error type covers all operations on a link, including opening,
+/// accepting, sending, and receiving data. It also includes a `Cancelled`
+/// variant to indicate that an operation was cancelled.
 #[derive(Debug, thiserror::Error)]
-pub enum RecvError {
-	#[error("Read error: {0:?}")]
-	Io(#[from] ReadError),
+pub enum LinkError {
+	#[error("Connection error: {0}")]
+	Open(OpenError),
 
-	/// This error indicates that the data was read successfully but failed to
-	/// deserialize it into a typed structure as set in [`Link::recv_as`].
-	#[error("Decode error: {0:?}")]
-	Decode(#[from] DecodeError),
+	#[error("Connection error: {0}")]
+	Accept(AcceptError),
 
-	#[error("Unknown error: {0}")]
-	Unknown(#[from] io::Error),
+	#[error("Receive error: {0}")]
+	Recv(RecvError),
+
+	#[error("Send error: {0}")]
+	Write(SendError),
+
+	#[error("Link closed with unexpected reason: {0}")]
+	Close(CloseError),
 
 	#[error("Operation cancelled")]
 	Cancelled,
 }
 
-impl RecvError {
-	/// If the connection was closed with an application-level close frame,
-	/// returns the associated `ApplicationClose` reason. Otherwise returns
-	/// `None`.
-	pub fn close_reason(&self) -> Option<&ApplicationClose> {
-		match self {
-			RecvError::Io(ReadError::ConnectionLost(
-				ConnectionError::ApplicationClosed(reason),
-			)) => Some(reason),
-			_ => None,
-		}
-	}
-
-	/// Returns `true` if the error indicates that the operation was locally
-	/// cancelled.
-	pub fn is_cancelled(&self) -> bool {
-		matches!(self, RecvError::Cancelled)
-	}
-}
-
-impl From<ConnectionError> for RecvError {
-	fn from(err: ConnectionError) -> Self {
-		RecvError::Io(ReadError::ConnectionLost(err))
-	}
-}
-
-impl From<SystemReason> for RecvError {
-	fn from(val: SystemReason) -> Self {
-		RecvError::Io(ReadError::ConnectionLost(
-			ConnectionError::ApplicationClosed(val.into()),
-		))
-	}
-}
-
+/// Errors that occur on the connection initiating side when opening a link
+/// to a remote peer.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
 	#[error("io error: {0}")]
@@ -431,15 +407,25 @@ pub enum AcceptError {
 	Cancelled,
 }
 
-impl From<AcceptError> for IrohAcceptError {
-	fn from(err: AcceptError) -> Self {
-		match err {
-			AcceptError::Io(e) => e,
-			error => IrohAcceptError::from_err(error),
-		}
-	}
+/// Errors that can occur when receiving data from a link.
+#[derive(Debug, thiserror::Error)]
+pub enum RecvError {
+	#[error("Read error: {0:?}")]
+	Io(#[from] ReadError),
+
+	/// This error indicates that the data was read successfully but failed to
+	/// deserialize it into a typed structure as set in [`Link::recv_as`].
+	#[error("Decode error: {0:?}")]
+	Decode(#[from] DecodeError),
+
+	#[error("Unknown error: {0}")]
+	Unknown(#[from] io::Error),
+
+	#[error("Operation cancelled")]
+	Cancelled,
 }
 
+/// Errors that can occur when sending data over a link.
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
 	#[error("encoder error: {0}")]
@@ -455,38 +441,170 @@ pub enum SendError {
 	Cancelled,
 }
 
+/// Errors that can occur when closing a link.
 #[derive(Debug, thiserror::Error)]
-pub enum LinkError {
-	#[error("Connection error: {0}")]
-	Open(OpenError),
+pub enum CloseError {
+	#[error("Connection already closed: {0}")]
+	AlreadyClosed(ConnectionError),
 
-	#[error("Connection error: {0}")]
-	Accept(AcceptError),
-
-	#[error("Receive error: {0}")]
-	Recv(RecvError),
-
-	#[error("Send error: {0}")]
-	Write(SendError),
+	#[error("Connection closed with unexpected reason: {0}")]
+	UnexpectedReason(ConnectionError),
 
 	#[error("Operation cancelled")]
 	Cancelled,
+}
+
+impl AcceptError {
+	/// If the connection was closed with an application-level close frame,
+	/// returns the associated `ApplicationClose` reason. Otherwise returns
+	/// `None`.
+	pub fn close_reason(&self) -> Option<&ApplicationClose> {
+		match self {
+			AcceptError::Io(
+				IrohAcceptError::Connecting {
+					source:
+						ConnectingError::ConnectionError {
+							source: ConnectionError::ApplicationClosed(reason),
+							..
+						},
+					..
+				}
+				| IrohAcceptError::Connection {
+					source: ConnectionError::ApplicationClosed(reason),
+					..
+				},
+			) => Some(reason),
+			_ => None,
+		}
+	}
+
+	/// Returns `true` if the error indicates that the operation was locally
+	/// cancelled.
+	pub fn is_cancelled(&self) -> bool {
+		matches!(self, AcceptError::Cancelled)
+	}
+}
+
+impl From<CloseError> for AcceptError {
+	fn from(err: CloseError) -> Self {
+		match err {
+			CloseError::Cancelled => AcceptError::Cancelled,
+			error @ CloseError::UnexpectedReason(_) => {
+				AcceptError::Io(IrohAcceptError::from_err(error))
+			}
+			CloseError::AlreadyClosed(_) => {
+				AcceptError::Io(IrohAcceptError::from_err(err))
+			}
+		}
+	}
+}
+
+impl From<ApplicationClose> for RecvError {
+	fn from(val: ApplicationClose) -> Self {
+		RecvError::Io(ReadError::ConnectionLost(
+			ConnectionError::ApplicationClosed(val),
+		))
+	}
+}
+
+impl RecvError {
+	pub fn closed(reason: impl Into<ApplicationClose>) -> Self {
+		RecvError::from(reason.into())
+	}
+
+	/// If the connection was closed with an application-level close frame,
+	/// returns the associated `ApplicationClose` reason. Otherwise returns
+	/// `None`.
+	pub fn close_reason(&self) -> Option<&ApplicationClose> {
+		match self {
+			RecvError::Io(ReadError::ConnectionLost(
+				ConnectionError::ApplicationClosed(reason),
+			)) => Some(reason),
+			_ => None,
+		}
+	}
+
+	/// Returns `true` if the error indicates that the operation was locally
+	/// cancelled.
+	pub fn is_cancelled(&self) -> bool {
+		matches!(self, RecvError::Cancelled)
+	}
+}
+
+impl From<ConnectionError> for RecvError {
+	fn from(err: ConnectionError) -> Self {
+		RecvError::Io(ReadError::ConnectionLost(err))
+	}
+}
+
+impl SendError {
+	/// If the connection was closed with an application-level close frame,
+	/// returns the associated `ApplicationClose` reason. Otherwise returns
+	/// `None`.
+	pub fn close_reason(&self) -> Option<&ApplicationClose> {
+		match self {
+			SendError::Io(WriteError::ConnectionLost(
+				ConnectionError::ApplicationClosed(reason),
+			)) => Some(reason),
+			_ => None,
+		}
+	}
+
+	/// Returns `true` if the error indicates that the operation was locally
+	/// cancelled.
+	pub fn is_cancelled(&self) -> bool {
+		matches!(self, SendError::Cancelled)
+	}
+}
+
+impl From<AcceptError> for IrohAcceptError {
+	fn from(err: AcceptError) -> Self {
+		match err {
+			AcceptError::Io(e) => e,
+			error => IrohAcceptError::from_err(error),
+		}
+	}
+}
+
+impl CloseError {
+	pub fn close_reason(&self) -> Option<&ApplicationClose> {
+		match self {
+			CloseError::UnexpectedReason(ConnectionError::ApplicationClosed(
+				reason,
+			)) => Some(reason),
+			_ => None,
+		}
+	}
+
+	/// Returns `true` if the error indicates that the operation was locally
+	/// cancelled.
+	pub fn is_cancelled(&self) -> bool {
+		matches!(self, CloseError::Cancelled)
+	}
 }
 
 impl LinkError {
 	/// Returns `true` if the error indicates that the operation was locally
 	/// cancelled.
 	pub fn is_cancelled(&self) -> bool {
-		matches!(self, LinkError::Cancelled)
+		match self {
+			LinkError::Open(err) => err.is_cancelled(),
+			LinkError::Accept(err) => err.is_cancelled(),
+			LinkError::Recv(err) => err.is_cancelled(),
+			LinkError::Write(err) => err.is_cancelled(),
+			LinkError::Close(err) => err.is_cancelled(),
+			LinkError::Cancelled => true,
+		}
 	}
 
 	pub fn close_reason(&self) -> Option<&ApplicationClose> {
 		match self {
+			LinkError::Accept(err) => err.close_reason(),
 			LinkError::Open(err) => err.close_reason(),
-			// LinkError::Accept(err) => err.close_reason(),
 			LinkError::Recv(err) => err.close_reason(),
-			// LinkError::Write(err) => err.close_reason(),
-			_ => None,
+			LinkError::Write(err) => err.close_reason(),
+			LinkError::Close(err) => err.close_reason(),
+			LinkError::Cancelled => None,
 		}
 	}
 }
@@ -495,7 +613,7 @@ impl From<OpenError> for LinkError {
 	fn from(err: OpenError) -> Self {
 		match err {
 			OpenError::Cancelled => LinkError::Cancelled,
-			error => LinkError::Open(error),
+			error @ OpenError::Io(_) => LinkError::Open(error),
 		}
 	}
 }
@@ -525,31 +643,6 @@ impl From<SendError> for LinkError {
 			error => LinkError::Write(error),
 		}
 	}
-}
-
-#[derive(
-	Debug, Clone, Copy, IntoStaticStr, AsRefStr, FromRepr, thiserror::Error,
-)]
-#[repr(u32)]
-pub enum SystemReason {
-	/// Protocol ran to completion successfully.
-	#[error("success")]
-	Completed = 10,
-
-	/// The accepting socket was expecting a different protocol ALPN.
-	#[error("invalid alpn")]
-	InvalidAlpn = 100,
-
-	#[error("operation cancelled")]
-	Cancelled = 200,
-
-	#[error("unexpected close")]
-	UnexpectedClose = 300,
-
-	/// The remote peer sent a message that violates the protocol, e.g.
-	/// deserialization of its contents by the recipient failed.
-	#[error("protocol violation")]
-	ProtocolViolation = 400,
 }
 
 impl From<ConnectionError> for OpenError {
@@ -618,44 +711,61 @@ impl<P: Protocol> fmt::Display for Link<P> {
 	}
 }
 
-impl SystemReason {
-	pub fn error_code(self) -> VarInt {
-		VarInt::from(self as u32)
-	}
+macro_rules! make_close_reason {
+	($(#[$meta:meta])* $vis:vis struct $name:ident, $code:expr) => {
+		$(#[$meta])*
+		#[derive(Debug, Clone, Copy)]
+		$vis struct $name;
 
-	pub fn reason(self) -> &'static [u8] {
-		let bytes: &'static str = self.into();
-		bytes.as_bytes()
-	}
+		const _: () = {
+			#[automatically_derived]
+			impl From<$name> for iroh::endpoint::ApplicationClose {
+				fn from(_: $name) -> Self {
+					iroh::endpoint::ApplicationClose {
+						error_code: iroh::endpoint::VarInt::from($code as u32),
+						reason: stringify!($name).into(),
+					}
+				}
+			}
+
+			#[automatically_derived]
+			impl PartialEq<iroh::endpoint::ApplicationClose> for $name {
+				fn eq(&self, other: &iroh::endpoint::ApplicationClose) -> bool {
+					other.error_code == iroh::endpoint::VarInt::from($code as u32)
+				}
+			}
+
+			#[automatically_derived]
+			impl PartialEq<$name> for iroh::endpoint::ApplicationClose {
+				fn eq(&self, _: &$name) -> bool {
+					self.error_code == iroh::endpoint::VarInt::from($code as u32)
+				}
+			}
+		};
+	};
 }
 
-impl From<SystemReason> for &'static [u8] {
-	fn from(val: SystemReason) -> Self {
-		let bytes: &'static str = val.into();
-		bytes.as_bytes()
-	}
-}
+pub(crate) use make_close_reason;
 
-impl From<SystemReason> for ApplicationClose {
-	fn from(val: SystemReason) -> Self {
-		let reason: &'static [u8] = val.into();
-		ApplicationClose {
-			error_code: VarInt::from(val as u32),
-			reason: reason.into(),
-		}
-	}
-}
+// Standardized application-level close reasons for links and protocols in
+// mosaik. Close reasons 0-199 are reserved for mosaik internal use.
 
-impl PartialEq<ApplicationClose> for SystemReason {
-	fn eq(&self, other: &ApplicationClose) -> bool {
-		let this_code = VarInt::from(*self as u32);
-		let this_reason = self.as_ref();
-		this_code == other.error_code && this_reason == other.reason
-	}
-}
+make_close_reason!(
+	/// Protocol ran to completion successfully.
+	pub(crate) struct Success, 0);
 
-impl PartialEq<SystemReason> for ApplicationClose {
-	fn eq(&self, other: &SystemReason) -> bool {
-		other == self
-	}
-}
+make_close_reason!(
+	/// The accepting socket was expecting a different protocol ALPN.
+	pub(crate) struct InvalidAlpn, 100);
+
+make_close_reason!(
+	/// Operation was cancelled.
+	pub(crate) struct Cancelled, 101);
+
+make_close_reason!(
+	/// The connection was closed unexpectedly.
+	pub(crate) struct UnexpectedClose, 102);
+
+make_close_reason!(
+	/// The remote peer sent a message that violates the protocol.
+	pub(crate) struct ProtocolViolation, 103);

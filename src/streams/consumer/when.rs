@@ -2,6 +2,7 @@ use {
 	super::worker::ActiveReceivers,
 	crate::primitives::{IntoIterOrSingle, Tag},
 	core::{
+		fmt,
 		pin::Pin,
 		task::{Context, Poll},
 	},
@@ -57,6 +58,31 @@ pub struct SubscriptionCondition {
 	required_tags: BTreeSet<Tag>,
 	was_met: bool,
 	changed_fut: ReusableBoxFuture<'static, ()>,
+}
+
+impl Clone for SubscriptionCondition {
+	fn clone(&self) -> Self {
+		let mut receiver = self.active.clone();
+		Self {
+			active: receiver.clone(),
+			min_producers: self.min_producers,
+			required_tags: self.required_tags.clone(),
+			was_met: false,
+			changed_fut: ReusableBoxFuture::new(Box::pin(async move {
+				let _ = receiver.changed().await;
+			})),
+		}
+	}
+}
+
+impl fmt::Debug for SubscriptionCondition {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("SubscriptionCondition")
+			.field("min_producers", &self.min_producers)
+			.field("required_tags", &self.required_tags)
+			.field("is_condition_met", &self.is_condition_met())
+			.finish_non_exhaustive()
+	}
 }
 
 // Public API

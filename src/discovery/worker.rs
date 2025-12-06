@@ -13,18 +13,14 @@ use {
 		network::{LocalNode, PeerId},
 		primitives::{IntoIterOrSingle, Short},
 	},
-	core::{
-		pin::Pin,
-		task::{Context, Poll},
-	},
-	futures::{FutureExt, StreamExt},
+	futures::StreamExt,
 	iroh::{
 		EndpointAddr,
 		Watcher,
 		endpoint::Connection,
 		protocol::DynProtocolHandler,
 	},
-	std::io,
+	std::{io, sync::Arc},
 	tokio::{
 		sync::{
 			broadcast,
@@ -32,7 +28,7 @@ use {
 			oneshot,
 			watch,
 		},
-		task::{JoinError, JoinHandle, JoinSet},
+		task::JoinSet,
 	},
 };
 
@@ -48,7 +44,6 @@ pub(super) struct Handle {
 	pub catalog: watch::Sender<Catalog>,
 	pub events: broadcast::Receiver<Event>,
 	pub commands: UnboundedSender<WorkerCommand>,
-	pub task: JoinHandle<Result<(), Error>>,
 }
 
 impl Handle {
@@ -64,13 +59,38 @@ impl Handle {
 			.ok();
 		let _ = rx.await;
 	}
-}
 
-impl Future for Handle {
-	type Output = Result<Result<(), Error>, JoinError>;
+	/// Updates the local peer entry using the provided update function.
+	///
+	/// If the update results in a change to the local entry contents, it is
+	/// re-signed and broadcasted to the network which respectively updates their
+	/// catalogues.
+	///
+	/// This api is not intended to be used directly by users of the discovery
+	/// system, but rather by higher-level abstractions that manage the local
+	/// peer's state.
+	pub(crate) fn update_local_entry(
+		&self,
+		update: impl FnOnce(PeerEntry) -> PeerEntry + Send + 'static,
+	) {
+		self.catalog.send_modify(|catalog| {
+			let local_entry = catalog.local().clone();
+			let updated_entry = update(local_entry.into());
+			let signed_updated_entry = updated_entry
+				.sign(self.local.secret_key())
+				.expect("signing updated local peer entry failed.");
 
-	fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-		self.get_mut().task.poll_unpin(cx)
+			tracing::trace!(
+				info = %Short(&signed_updated_entry),
+				network = %self.local.network_id(),
+				"Updating local peer entry in catalog",
+			);
+
+			assert!(
+				catalog.upsert_signed(signed_updated_entry).is_ok(),
+				"local peer info versioning error. this is a bug."
+			);
+		});
 	}
 }
 
@@ -82,10 +102,9 @@ impl Future for Handle {
 ///
 /// Interactions with the worker loop are done through the [`Handle`] struct.
 pub(super) struct WorkerLoop {
-	local: LocalNode,
+	handle: Arc<Handle>,
 	sync: CatalogSync,
 	announce: Announce,
-	catalog: watch::Sender<Catalog>,
 	events: broadcast::Sender<Event>,
 	syncs: JoinSet<Result<(), Error>>,
 	commands: UnboundedReceiver<WorkerCommand>,
@@ -96,7 +115,7 @@ impl WorkerLoop {
 	/// Returns a handle to interact with the worker loop. This is called from
 	/// the `Discovery::new` method.
 	#[expect(clippy::needless_pass_by_value)]
-	pub(super) fn spawn(local: LocalNode, config: Config) -> Handle {
+	pub(super) fn spawn(local: LocalNode, config: Config) -> Arc<Handle> {
 		let catalog = watch::Sender::new(Catalog::new(&local, &config));
 		let (commands_tx, commands_rx) = unbounded_channel();
 		let (events_tx, events_rx) = broadcast::channel(config.events_backlog);
@@ -104,19 +123,25 @@ impl WorkerLoop {
 		let sync = CatalogSync::new(local.clone(), catalog.clone());
 		let announce = Announce::new(local.clone(), &config, catalog.subscribe());
 
+		let handle = Arc::new(Handle {
+			local,
+			catalog,
+			events: events_rx,
+			commands: commands_tx,
+		});
+
 		let worker = Self {
-			local: local.clone(),
+			handle: Arc::clone(&handle),
 			sync,
 			announce,
-			catalog: catalog.clone(),
 			events: events_tx,
 			syncs: JoinSet::new(),
 			commands: commands_rx,
 		};
 
 		// spawn the worker loop
-		let task = tokio::spawn(async move {
-			let local = worker.local.clone();
+		tokio::spawn(async move {
+			let local = worker.handle.local.clone();
 			let result = worker.run().await;
 
 			if let Err(ref e) = result {
@@ -134,13 +159,7 @@ impl WorkerLoop {
 		});
 
 		// Return the handle to interact with the worker loop
-		Handle {
-			local,
-			catalog,
-			events: events_rx,
-			commands: commands_tx,
-			task,
-		}
+		handle
 	}
 }
 
@@ -148,19 +167,18 @@ impl WorkerLoop {
 	async fn run(mut self) -> Result<(), Error> {
 		// wait for the network to be online and have all its protocols installed
 		// and addresses resolved
-		self.local.online().await;
+		self.handle.local.online().await;
 
 		// watch for local address changes, this will also trigger the first
 		// local peer entry update
-		let mut addr_change = self.local.endpoint().watch_addr().stream();
-
+		let mut addr_change = self.handle.local.endpoint().watch_addr().stream();
 		loop {
 			tokio::select! {
 				// Network graceful termination signal
-				() = self.local.termination().cancelled() => {
+				() = self.handle.local.termination().cancelled() => {
 					tracing::trace!(
-						peer_id = %self.local.id(),
-						network = %self.local.network_id(),
+						peer_id = %self.handle.local.id(),
+						network = %self.handle.local.network_id(),
 						"worker loop terminating"
 					);
 					return Ok(());
@@ -173,7 +191,8 @@ impl WorkerLoop {
 
 				// Catalog sync protocol events
 				Some(event) = self.sync.events().recv() => {
-					tracing::trace!(event = ?event, "catalog sync event");
+					tracing::trace!(event = %Short(&event), "catalog sync event");
+					self.on_catalog_sync_event(&event);
 					self.events.send(event).ok();
 				}
 
@@ -187,7 +206,7 @@ impl WorkerLoop {
 					if let Err(e) = result {
 						tracing::warn!(
 							error = %e,
-							network = %self.local.network_id(),
+							network = %self.handle.local.network_id(),
 							"Catalog Sync task failed"
 						);
 					}
@@ -196,7 +215,7 @@ impl WorkerLoop {
 				// observe local transport-level address changes
 				Some(addr) = addr_change.next() => {
 					tracing::trace!(addr = ?addr, "Local node address updated");
-					self.update_local_peer_entry(|entry| {
+					self.handle.update_local_entry(move |entry| {
 						entry.update_address(addr.clone())
 							.expect("peer id changed for local node.")
 					});
@@ -221,7 +240,7 @@ impl WorkerLoop {
 					tracing::warn!(
 						error = %e,
 						peer_id = %peer_id,
-						network = %self.local.network_id(),
+						network = %self.handle.local.network_id(),
 						"Failed to accept catalog sync connection"
 					);
 				}
@@ -232,7 +251,7 @@ impl WorkerLoop {
 					tracing::warn!(
 						error = %e,
 						peer_id = %peer_id,
-						network = %self.local.network_id(),
+						network = %self.handle.local.network_id(),
 						"Failed to accept announce connection"
 					);
 				}
@@ -250,13 +269,13 @@ impl WorkerLoop {
 		match event {
 			announce::Event::PeerEntryReceived(signed_peer_entry) => {
 				// Update the catalog with the received peer entry
-				self.catalog.send_if_modified(|catalog| {
+				self.handle.catalog.send_if_modified(|catalog| {
 					let incoming_version = signed_peer_entry.update_version();
 					match catalog.upsert_signed(signed_peer_entry) {
 						UpsertResult::New(signed_peer_entry) => {
 							tracing::debug!(
 								info = %Short(signed_peer_entry),
-								network = %self.local.network_id(),
+								network = %self.handle.local.network_id(),
 								"new peer discovered"
 							);
 
@@ -274,7 +293,7 @@ impl WorkerLoop {
 						UpsertResult::Updated(signed_peer_entry) => {
 							tracing::debug!(
 								info = %Short(signed_peer_entry),
-								network = %self.local.network_id(),
+								network = %self.handle.local.network_id(),
 								"peer info updated"
 							);
 							self
@@ -286,7 +305,7 @@ impl WorkerLoop {
 						UpsertResult::Rejected(signed_peer_entry) => {
 							tracing::trace!(
 								current = ?signed_peer_entry,
-								network = %self.local.network_id(),
+								network = %self.handle.local.network_id(),
 								incoming_version = %incoming_version,
 								current_version = %signed_peer_entry.update_version(),
 								"stale peer update rejected"
@@ -296,6 +315,15 @@ impl WorkerLoop {
 					}
 				});
 			}
+		}
+	}
+
+	fn on_catalog_sync_event(&mut self, event: &Event) {
+		match event {
+			Event::PeerDiscovered(entry) | Event::PeerUpdated(entry) => {
+				self.announce.observe(entry);
+			}
+			Event::PeerDeparted(_) => {}
 		}
 	}
 
@@ -316,40 +344,9 @@ impl WorkerLoop {
 				Err(e) => {
 					let wrapped = io::Error::other(e.to_string());
 					let _ = done.send(Err(e));
-					Err(wrapped.into())
+					Err(Error::Other(wrapped.into()))
 				}
 			}
-		});
-	}
-
-	/// Updates the local peer entry using the provided update function.
-	///
-	/// The effects of this update are:
-	/// - The local peer entry in the catalog is updated.
-	/// - The catalog watch channel is notified of the change.
-	/// - The announcement protocol will pick up the change and broadcast the
-	///   updated entry immediately to all peers.
-	fn update_local_peer_entry(
-		&mut self,
-		update: impl FnOnce(PeerEntry) -> PeerEntry,
-	) {
-		self.catalog.send_modify(|catalog| {
-			let local_entry = catalog.local().clone();
-			let updated_entry = update(local_entry.into());
-			let signed_updated_entry = updated_entry
-				.sign(self.local.secret_key())
-				.expect("signing updated local peer entry failed.");
-
-			tracing::trace!(
-				info = ?signed_updated_entry,
-				network = %self.local.network_id(),
-				"Updating local peer entry in catalog"
-			);
-
-			assert!(
-				catalog.upsert_signed(signed_updated_entry).is_ok(),
-				"local peer info versioning error. this is a bug."
-			);
 		});
 	}
 }

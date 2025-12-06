@@ -4,10 +4,11 @@ use {
 		discovery::Discovery,
 		network::link::{Link, Protocol},
 		primitives::Short,
+		streams::{StreamNotFound, UnknownPeer},
 	},
 	core::fmt,
 	iroh::{
-		endpoint::{ApplicationClose, Connection},
+		endpoint::Connection,
 		protocol::{AcceptError, ProtocolHandler},
 	},
 	n0_error::Meta,
@@ -63,7 +64,8 @@ impl fmt::Debug for Acceptor {
 
 impl ProtocolHandler for Acceptor {
 	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
-		let mut link = Link::accept(connection).await?;
+		let cancel = self.sinks.local.termination().clone();
+		let mut link = Link::accept_with_cancel(connection, cancel).await?;
 		let remote_peer_id = link.remote_id();
 		let catalog = self.discovery.catalog();
 		let Some(info) = catalog.get(&remote_peer_id) else {
@@ -73,17 +75,20 @@ impl ProtocolHandler for Acceptor {
 			);
 
 			// Close the link with a reason before returning error
-			let reason: ApplicationClose = UnknownPeer.into();
-			link.close(reason.clone()).await?;
+			link
+				.close(UnknownPeer)
+				.await
+				.map_err(|e| AcceptError::from_err(e))?;
+
 			return Err(AcceptError::NotAllowed {
 				meta: Meta::default(),
 			});
 		};
 
-		tracing::info!(
+		tracing::trace!(
 			consumer_id = %Short(&remote_peer_id),
-			consumer_info = ?info,
-			"Accepted new consumer connection",
+			consumer_info = %Short(info),
+			"new consumer connection",
 		);
 
 		// Receive the consumer's handshake message
@@ -95,7 +100,7 @@ impl ProtocolHandler for Acceptor {
 					consumer_id = %Short(&remote_peer_id),
 					error = %e,
 					"Failed to receive consumer handshake",
-				)
+				);
 			})
 			.map_err(AcceptError::from_err)?;
 
@@ -108,8 +113,11 @@ impl ProtocolHandler for Acceptor {
 			);
 
 			// Close the link with a reason before returning error
-			let reason: ApplicationClose = StreamNotFound.into();
-			link.close(reason.clone()).await?;
+			link
+				.close(StreamNotFound)
+				.await
+				.map_err(AcceptError::from_err)?;
+
 			return Err(AcceptError::NotAllowed {
 				meta: Meta::default(),
 			});
@@ -148,34 +156,8 @@ impl ConsumerHandshake {
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct StartStream(pub StreamId);
 
-macro_rules! make_close_reason {
-	($code:expr, $name:ident) => {
-		#[derive(Debug, Clone, Copy)]
-		pub(super) struct $name;
-		const _: () = {
-			impl From<$name> for iroh::endpoint::ApplicationClose {
-				fn from(_: $name) -> Self {
-					iroh::endpoint::ApplicationClose {
-						error_code: iroh::endpoint::VarInt::from($code as u32),
-						reason: stringify!($name).into(),
-					}
-				}
-			}
-
-			impl PartialEq<iroh::endpoint::ApplicationClose> for $name {
-				fn eq(&self, other: &iroh::endpoint::ApplicationClose) -> bool {
-					other.error_code == iroh::endpoint::VarInt::from($code as u32)
-				}
-			}
-
-			impl PartialEq<$name> for iroh::endpoint::ApplicationClose {
-				fn eq(&self, _: &$name) -> bool {
-					self.error_code == iroh::endpoint::VarInt::from($code as u32)
-				}
-			}
-		};
-	};
+impl StartStream {
+	pub const fn stream_id(&self) -> &StreamId {
+		&self.0
+	}
 }
-
-make_close_reason!(0x1001, UnknownPeer);
-make_close_reason!(0x1002, StreamNotFound);

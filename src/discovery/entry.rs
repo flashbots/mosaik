@@ -231,6 +231,25 @@ impl PeerEntry {
 	}
 }
 
+impl From<&PeerEntry> for PeerId {
+	fn from(entry: &PeerEntry) -> Self {
+		*entry.id()
+	}
+}
+
+impl fmt::Display for Short<&PeerEntry> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(
+			f,
+			"PeerEntry[v{}]({}, tags: {}, streams: {})",
+			Short(self.0.update_version()),
+			Short(self.0.id()),
+			FmtIter::<Short<_>, _>::new(&self.0.tags),
+			FmtIter::<Short<_>, _>::new(&self.0.streams),
+		)
+	}
+}
+
 impl fmt::Debug for Pretty<'_, PeerEntry> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		writeln!(f, "PeerEntry:")?;
@@ -312,6 +331,12 @@ impl SignedPeerEntry {
 	}
 }
 
+impl From<&SignedPeerEntry> for PeerId {
+	fn from(entry: &SignedPeerEntry) -> Self {
+		*entry.id()
+	}
+}
+
 /// Ensure that deserialization of `SignedPeerEntry` always verifies the
 /// signature and it is not possible to create an invalid instance of this type.
 impl<'de> Deserialize<'de> for SignedPeerEntry {
@@ -339,6 +364,14 @@ impl From<&SignedPeerEntry> for PeerEntry {
 	}
 }
 
+impl fmt::Debug for Pretty<'_, SignedPeerEntry> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "SignedPeerEntry:")?;
+		writeln!(f, "  entry: {:?}", Pretty(&self.0.0))?;
+		writeln!(f, "  signature: {}", Abbreviated(self.1.to_bytes()))
+	}
+}
+
 impl fmt::Display for Short<&SignedPeerEntry> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
@@ -349,12 +382,6 @@ impl fmt::Display for Short<&SignedPeerEntry> {
 			FmtIter::<Short<_>, _>::new(&self.0.tags),
 			FmtIter::<Short<_>, _>::new(&self.0.streams),
 		)
-	}
-}
-
-impl fmt::Display for Pretty<'_, SignedPeerEntry> {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "Signed{:?}", Pretty(&self.0.0))
 	}
 }
 

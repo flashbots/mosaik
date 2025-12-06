@@ -10,11 +10,10 @@ use {
 			link::{Link, LinkError, RecvError},
 		},
 		primitives::Short,
-		streams::accept::{
-			ConsumerHandshake,
-			StartStream,
+		streams::{
 			StreamNotFound,
 			UnknownPeer,
+			accept::{ConsumerHandshake, StartStream},
 		},
 	},
 	backoff::backoff::Backoff,
@@ -236,6 +235,7 @@ impl<D: Datum> Receiver<D> {
 	/// carries the link along with it for further receives or reconnections.
 	///
 	/// The first instance of this future is created by [`connect`].
+	#[expect(clippy::unused_self)]
 	fn make_next_recv_future(
 		&self,
 		mut link: Link<Streams>,
@@ -272,14 +272,22 @@ impl<D: Datum> Receiver<D> {
 			// attempt to establish a new connection to the remote producer
 			let mut link = self
 				.local
-				.connect_with_cancel_token::<Streams>(peer_addr.clone(), cancel.clone())
+				.connect_with_cancel::<Streams>(peer_addr.clone(), cancel.clone())
 				.await?;
 
 			// Send the consumer handshake to the producer
 			link.send(&ConsumerHandshake::new::<D>(criteria)).await?;
 
 			// await the producer's handshake response
-			let _start = link.recv::<StartStream>().await?;
+			let start = link.recv::<StartStream>().await?;
+			if start.stream_id() != D::stream_id() {
+				tracing::warn!(
+					stream_id = %D::stream_id(),
+					producer_id = %Short(&peer_addr.id),
+					"producer responded with invalid start stream handshake",
+				);
+				return Err(LinkError::Recv(RecvError::closed(StreamNotFound)));
+			}
 
 			Ok(link)
 		};
@@ -398,7 +406,7 @@ impl<D: Datum> Receiver<D> {
 					producer_id = %Short(self.peer.id()),
 				);
 			}
-		};
+		}
 
 		Box::pin(self.connect()).await;
 	}

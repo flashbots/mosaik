@@ -111,6 +111,7 @@ impl LocalNode {
 	/// defined by the [`Link`] type.
 	///
 	/// Gets cancelled when the network is shutting down.
+	#[allow(unused)]
 	pub(crate) fn connect<P: Protocol>(
 		&self,
 		remote: impl Into<EndpointAddr>,
@@ -118,7 +119,7 @@ impl LocalNode {
 		let local = self.clone();
 		let remote = remote.into();
 		let cancel = self.termination().clone();
-		async move { Link::open_with_cancel_token(&local, remote, cancel).await }
+		async move { Link::open_with_cancel(&local, remote, cancel).await }
 	}
 
 	/// Establishes a new outgoing connection to a remote peer on the protocol
@@ -127,14 +128,14 @@ impl LocalNode {
 	/// defined by the [`Link`] type.
 	///
 	/// Gets cancelled when the provided cancellation token is triggered.
-	pub(crate) fn connect_with_cancel_token<P: Protocol>(
+	pub(crate) fn connect_with_cancel<P: Protocol>(
 		&self,
 		remote: impl Into<EndpointAddr>,
 		cancel: CancellationToken,
 	) -> impl Future<Output = Result<Link<P>, OpenError>> + Send + 'static {
 		let local = self.clone();
 		let remote = remote.into();
-		async move { Link::open_with_cancel_token(&local, remote, cancel).await }
+		async move { Link::open_with_cancel(&local, remote, cancel).await }
 	}
 }
 

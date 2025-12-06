@@ -1,6 +1,7 @@
 use {
 	super::{Catalog, Config, Error, PeerEntryVersion, SignedPeerEntry},
 	crate::{
+		discovery::PeerEntry,
 		network::{LocalNode, PeerId, link::Protocol},
 		primitives::{Pretty, Short, UnboundedChannel},
 	},
@@ -9,6 +10,7 @@ use {
 		serde::{decode_from_std_read, encode_to_vec},
 	},
 	bytes::Buf,
+	core::sync::atomic::{AtomicUsize, Ordering},
 	futures::StreamExt,
 	iroh::protocol::ProtocolHandler,
 	iroh_gossip::{
@@ -22,6 +24,7 @@ use {
 		},
 	},
 	serde::{Deserialize, Serialize},
+	std::sync::Arc,
 	tokio::sync::{
 		mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
 		watch,
@@ -69,6 +72,7 @@ pub(super) struct Announce {
 	gossip: Gossip,
 	events: UnboundedReceiver<Event>,
 	dials: UnboundedSender<Vec<PeerId>>,
+	neighbors_count: Arc<AtomicUsize>,
 }
 
 impl Protocol for Announce {
@@ -99,6 +103,7 @@ impl Announce {
 		let dials = unbounded_channel();
 		let cancel = local.termination().clone();
 		let last_own_version = catalog.borrow().local().update_version();
+		let neighbors_count = Arc::new(AtomicUsize::new(0));
 
 		let driver = WorkerLoop {
 			config: config.clone(),
@@ -109,6 +114,7 @@ impl Announce {
 			events: events.0,
 			dials: dials.1,
 			last_own_version,
+			neighbors_count: Arc::clone(&neighbors_count),
 			messages_in: UnboundedChannel::default(),
 			messages_out: UnboundedChannel::default(),
 		};
@@ -131,6 +137,7 @@ impl Announce {
 			gossip,
 			events: events.1,
 			dials: dials.0,
+			neighbors_count,
 		}
 	}
 
@@ -145,6 +152,17 @@ impl Announce {
 	/// Dials the given peer address to initiate a discovery exchange.
 	pub fn dial(&self, peers: Vec<PeerId>) {
 		self.dials.send(peers).ok();
+	}
+
+	/// A hint to observe a peer.
+	///
+	/// This is useful when a peer does not have any connected gossip neighbors
+	/// but it does a full catalog sync with another peer or learns in any other
+	/// way about another peer and there are new potential peers to connect to.
+	pub fn observe(&self, peer: &PeerEntry) {
+		if self.neighbors_count.load(Ordering::SeqCst) == 0 {
+			self.dial(vec![*peer.id()]);
+		}
 	}
 
 	/// Returns the protocol listener instance responsible for accepting incoming
@@ -164,6 +182,7 @@ struct WorkerLoop {
 	last_own_version: PeerEntryVersion,
 	messages_in: UnboundedChannel<AnnouncementMessage>,
 	messages_out: UnboundedChannel<AnnouncementMessage>,
+	neighbors_count: Arc<AtomicUsize>,
 	dials: UnboundedReceiver<Vec<PeerId>>,
 }
 
@@ -252,6 +271,7 @@ impl WorkerLoop {
 					network = %self.local.network_id(),
 					"Gossip topic connection closed, re-joining"
 				);
+				self.neighbors_count.store(0, Ordering::SeqCst);
 				self.rejoin_topic(topic_tx, topic_rx).await?;
 			}
 			Some(Err(e)) => {
@@ -282,7 +302,11 @@ impl WorkerLoop {
 
 		match event {
 			GossipEvent::NeighborUp(_) => {
+				self.neighbors_count.fetch_add(1, Ordering::SeqCst);
 				self.broadcast_self_info();
+			}
+			GossipEvent::NeighborDown(_) => {
+				self.neighbors_count.fetch_sub(1, Ordering::SeqCst);
 			}
 			GossipEvent::Received(message) => {
 				let Ok(decoded) =
@@ -298,7 +322,9 @@ impl WorkerLoop {
 
 				self.on_message_received(decoded);
 			}
-			_ => {}
+			GossipEvent::Lagged => {
+				self.neighbors_count.store(0, Ordering::SeqCst);
+			}
 		}
 	}
 
@@ -336,7 +362,7 @@ impl WorkerLoop {
 
 		tracing::debug!(
 			network = %self.local.network_id(),
-			entry = %Pretty(&entry),
+			entry = ?Pretty(&entry),
 			"broadcasting local peer info update"
 		);
 

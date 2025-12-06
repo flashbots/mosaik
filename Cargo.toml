@@ -115,7 +115,6 @@ im = { version = "15.1.0", features = ["serde"] }
 parking_lot = "0.12"
 semver = { version = "1.0", features = ["serde"] }
 dashmap = "6.1"
-strum = { version = "0.27", features = ["derive"] }
 slotmap = "1.0"
 derive_builder = "0.20.2"
 backoff = { version = "0.4", features = ["futures", "tokio"] }

@@ -12,9 +12,8 @@ use {
 
 mod config;
 pub(crate) mod error;
-mod local;
-
 pub(crate) mod link;
+mod local;
 
 pub use {
 	config::{NetworkBuilder, NetworkConfig},

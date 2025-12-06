@@ -18,17 +18,17 @@ use {
 pub(in crate::streams) struct Sinks {
 	/// The local node instance of the network associated with this streams
 	/// subsystem.
-	pub(super) local: LocalNode,
+	pub local: LocalNode,
 
 	/// Configuration for the streams subsystem.
-	pub(super) config: Arc<Config>,
+	pub config: Arc<Config>,
 
 	/// The discovery system used to announce newly created streams.
-	pub(super) discovery: Discovery,
+	pub discovery: Discovery,
 
 	/// Map of all active fanout sinks by stream id that have producers
 	/// associated with them.
-	active: Arc<DashMap<StreamId, SinkHandle>>,
+	pub active: Arc<DashMap<StreamId, SinkHandle>>,
 }
 
 impl Sinks {

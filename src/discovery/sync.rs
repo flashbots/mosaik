@@ -3,7 +3,7 @@ use {
 	crate::{
 		network::{
 			LocalNode,
-			link::{Link, Protocol, SystemReason},
+			link::{Link, LinkError, Protocol, Success},
 		},
 		primitives::{Short, UnboundedChannel},
 	},
@@ -108,18 +108,26 @@ impl CatalogSync {
 			);
 
 			// Establish a direct connection with remote peer on the catalog sync ALPN
-			let mut link = local.connect::<CatalogSync>(peer.clone()).await?;
+			let cancel = local.termination().clone();
+			let mut link = local
+				.connect_with_cancel::<CatalogSync>(peer.clone(), cancel)
+				.await
+				.map_err(LinkError::from)?;
 
 			// Send our local catalog snapshot to the remote peer
-			let local_snapshot = { (&*catalog.borrow()).clone() };
+			let local_snapshot = { (*catalog.borrow()).clone() };
 			let local_snapshot = CatalogSnapshot::from(&local_snapshot);
-			link.send(&local_snapshot).await.inspect_err(|e| {
-				tracing::warn!(
-					peer = %Short(&peer.id),
-					error = %e,
-					"failed to send local catalog snapshot",
-				)
-			})?;
+			link
+				.send(&local_snapshot)
+				.await
+				.inspect_err(|e| {
+					tracing::warn!(
+						peer = %Short(&peer.id),
+						error = %e,
+						"failed to send local catalog snapshot",
+					);
+				})
+				.map_err(LinkError::from)?;
 
 			// Await the remote peer's catalog snapshot
 			// [`SignedPeerEntry`] will implicitly verify the signatures of each
@@ -132,9 +140,9 @@ impl CatalogSync {
 						peer = %Short(&peer.id),
 						error = %e,
 						"failed to receive remote catalog snapshot",
-					)
+					);
 				})
-				.map_err(Error::Recv)?;
+				.map_err(LinkError::from)?;
 
 			// Merge the remote snapshot into the local catalog and emit events
 			// that reflect the changes made.
@@ -169,15 +177,7 @@ impl CatalogSync {
 			// end of sync, the initiator is responsible for
 			// initiating the close of the connection, and the
 			// acceptor will await stream closure.
-			link.close(SystemReason::Completed).await.map_err(|e| {
-				Error::Accept(
-					AcceptError::Connection {
-						source: e,
-						meta: Default::default(),
-					}
-					.into(),
-				)
-			})?;
+			link.close(Success).await.map_err(LinkError::Close)?;
 
 			Ok(())
 		}
@@ -195,6 +195,7 @@ impl ProtocolHandler for CatalogSync {
 		&self,
 		connection: Connection,
 	) -> impl Future<Output = Result<(), AcceptError>> + Send {
+		let cancel = self.local.termination().clone();
 		let catalog = self.catalog.clone();
 
 		async move {
@@ -205,15 +206,16 @@ impl ProtocolHandler for CatalogSync {
 			);
 
 			// Accept the incoming link for the catalog sync protocol
-			let mut link = Link::<CatalogSync>::accept(connection)
-				.await
-				.inspect_err(|e| {
-					tracing::debug!(
-						error = %e,
-						peer = %Short(&remote_id),
-						"failed to accept incoming catalog sync link",
-					)
-				})?;
+			let mut link =
+				Link::<CatalogSync>::accept_with_cancel(connection, cancel)
+					.await
+					.inspect_err(|e| {
+						tracing::debug!(
+							error = %e,
+							peer = %Short(&remote_id),
+							"failed to accept incoming catalog sync link",
+						);
+					})?;
 
 			// The acceptor awaits the remote peer's catalog snapshot message first.
 			// [`SignedPeerEntry`] will implicitly verify the signatures of each
@@ -226,7 +228,7 @@ impl ProtocolHandler for CatalogSync {
 						peer = %Short(&remote_id),
 						error = %e,
 						"failed to receive remote catalog snapshot",
-					)
+					);
 				})
 				.map_err(AcceptError::from_err)?;
 
@@ -241,7 +243,7 @@ impl ProtocolHandler for CatalogSync {
 						peer = %Short(&link.remote_id()),
 						error = %e,
 						"failed to send local catalog snapshot",
-					)
+					);
 				})
 				.map_err(AcceptError::from_err)?;
 			drop(local_snapshot);
