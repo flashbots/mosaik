@@ -107,11 +107,18 @@ impl SubscriptionCondition {
 	///
 	/// When combined with `to_at_least`, the condition is met when there are at
 	/// least that many producers with the given tags.
-	pub fn with_tags<V>(mut self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
+	pub fn with_tags<V>(self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
 		let tags: BTreeSet<Tag> = tags.iterator().into_iter().collect();
-		self.predicates.push(Arc::new(move |peer: &PeerEntry| {
-			tags.is_subset(peer.tags())
-		}));
+		self.with_predicate(move |peer: &PeerEntry| tags.is_subset(peer.tags()))
+	}
+
+	/// Specifies a custom predicate that must be met by producers for the
+	/// condition to be considered met.
+	pub fn with_predicate<F>(mut self, predicate: F) -> Self
+	where
+		F: Fn(&PeerEntry) -> bool + Send + Sync + 'static,
+	{
+		self.predicates.push(Arc::new(predicate));
 		self
 	}
 

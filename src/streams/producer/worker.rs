@@ -202,11 +202,13 @@ impl<D: Datum> WorkerLoop<D> {
 
 		for (_, subscription) in self.active.drain() {
 			let peer_id = subscription.link.remote_id();
-			if let Err(e) = subscription.link.close(GracefulShutdown).await {
+			if let Err(reason) = subscription.link.close(GracefulShutdown).await
+				&& !reason.is_cancelled()
+			{
 				tracing::debug!(
 					stream_id = %Short(D::stream_id()),
 					consumer_id = %Short(peer_id),
-					error = %e,
+					reason = %reason,
 					"error closing subscription link",
 				);
 			}

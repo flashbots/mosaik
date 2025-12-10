@@ -5,7 +5,7 @@ use {
 };
 
 /// Discovery system public API events.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Event {
 	/// A new peer has been discovered.
 	PeerDiscovered(PeerEntry),

@@ -410,12 +410,12 @@ pub enum AcceptError {
 /// Errors that can occur when receiving data from a link.
 #[derive(Debug, thiserror::Error)]
 pub enum RecvError {
-	#[error("Read error: {0:?}")]
+	#[error("Read error: {0}")]
 	Io(#[from] ReadError),
 
 	/// This error indicates that the data was read successfully but failed to
 	/// deserialize it into a typed structure as set in [`Link::recv_as`].
-	#[error("Decode error: {0:?}")]
+	#[error("Decode error: {0}")]
 	Decode(#[from] DecodeError),
 
 	#[error("Unknown error: {0}")]
@@ -442,7 +442,7 @@ pub enum SendError {
 }
 
 /// Errors that can occur when closing a link.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum CloseError {
 	#[error("Connection already closed: {0}")]
 	AlreadyClosed(ConnectionError),
