@@ -1,9 +1,10 @@
 use {
 	backoff::{SystemClock, exponential::ExponentialBackoffBuilder},
-	core::time::Duration,
+	core::{task::Poll, time::Duration},
 	futures::{SinkExt, StreamExt},
-	mosaik::*,
+	mosaik::{test_utils::poll_once, *},
 	serde::{Deserialize, Serialize},
+	tokio::time::timeout,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -143,25 +144,88 @@ async fn consumer_subscription_conditions() -> anyhow::Result<()> {
 	n1.discovery().dial(n0.local().id()).await;
 	n2.discovery().dial(n0.local().id()).await;
 
-	// 1 producer and 1 consumer
-	let _p0 = n0.streams().produce::<Data1>();
+	// 1 consumer, 0 producers
 	let c1 = n1.streams().consume::<Data1>();
 
-	// consumer waits until at least 1 producer is available
-	let condition1 = c1.when().subscribed();
+	let mut condition1 = c1.when().subscribed();
+	let mut condition2 = c1.when().subscribed().to_at_least(2);
+	let mut condition3 = condition2.clone().not(); // inverse of condition2
 
-	condition1.clone().await;
+	assert!(!condition1.is_condition_met());
+	assert!(!condition2.is_condition_met());
+	assert_eq!(poll_once(&mut condition1), Poll::Pending);
+	assert_eq!(poll_once(&mut condition2), Poll::Pending);
+
+	// 1 consumer, 1 producer
+	let _p0 = n0.streams().produce::<Data1>();
+
+	// should resolve because we have 1 producer now
+	timeout(Duration::from_secs(3), &mut condition1)
+		.await
+		.expect("timeout waiting for condition1");
 	tracing::debug!("consumer subscribed with at least 1 producer");
-	assert!(condition1.is_condition_met());
 
-	// 2 producers and 1 consumer
+	assert!(condition1.is_condition_met());
+	assert!(!condition2.is_condition_met());
+	assert!(condition3.is_condition_met());
+	assert_eq!(poll_once(&mut condition2), Poll::Pending);
+
+	// 1 consumer, 2 producers
 	let _p2 = n2.streams().produce::<Data1>();
-	tokio::time::sleep(Duration::from_millis(2000)).await;
-	let condition2 = c1.when().subscribed().to_at_least(2);
 
-	condition2.clone().await;
+	// should resolve because we have 2 producers now
+	timeout(Duration::from_secs(3), &mut condition2)
+		.await
+		.expect("timeout waiting for condition2");
 	tracing::debug!("consumer subscribed with at least 2 producers");
-	assert!(condition2.is_condition_met());
+
 	assert!(condition1.is_condition_met());
+	assert!(condition2.is_condition_met());
+	assert!(!condition3.is_condition_met());
+
+	// clones resolve immediately if the condition is met
+	let mut cond1_clone = condition1.clone();
+	assert_eq!(poll_once(&mut cond1_clone), Poll::Ready(()));
+
+	let mut cond2_clone = condition2.clone();
+	assert_eq!(poll_once(&mut cond2_clone), Poll::Ready(()));
+
+	// if we drop one producer, condition2 should go back to pending
+	assert!(condition2.is_condition_met());
+	assert!(!condition3.is_condition_met());
+
+	assert_eq!(poll_once(&mut condition3.clone()), Poll::Pending);
+
+	tracing::debug!("dropping n2");
+	drop(n2);
+
+	timeout(Duration::from_secs(3), &mut condition3)
+		.await
+		.expect("timeout waiting for inverse condition2");
+
+	tracing::debug!("consumer no longer subscribed with at least 2 producers");
+
+	assert!(!condition2.is_condition_met());
+	assert!(condition3.is_condition_met());
+	assert_eq!(poll_once(&mut condition2.clone()), Poll::Pending);
+
+	assert!(condition3.is_condition_met());
+	assert_eq!(poll_once(&mut condition3.clone()), Poll::Ready(()));
+
+	let n3 = Network::new(network_id).await?;
+	n3.discovery().dial(n0.local().id()).await;
+
+	let _p3 = n3.streams().produce::<Data1>();
+
+	timeout(Duration::from_secs(3), &mut condition2)
+		.await
+		.expect("timeout waiting for condition2 after n3 producer");
+	tracing::debug!("consumer subscribed with at least 2 producers again");
+
+	assert!(condition2.is_condition_met());
+	assert!(!condition3.is_condition_met());
+	assert_eq!(poll_once(&mut condition2.clone()), Poll::Ready(()));
+	assert_eq!(poll_once(&mut condition3.clone()), Poll::Pending);
+
 	Ok(())
 }

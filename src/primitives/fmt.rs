@@ -16,6 +16,12 @@ trait FmtWrapper<T> {
 #[derive(Deref, AsRef)]
 pub struct Pretty<'a, T>(pub &'a T);
 
+impl<'a, T> Pretty<'a, T> {
+	pub fn iter<I: IntoIterator<Item = T>>(iter: I) -> FmtIter<Pretty<'a, T>, I> {
+		FmtIter::new(iter)
+	}
+}
+
 /// A wrapper type that formats the inner value as a shortened hex string.
 pub struct Short<T>(pub T);
 impl<T: AsRef<[u8]>> fmt::Display for Short<T> {
@@ -32,6 +38,12 @@ impl<T: AsRef<[u8]>> fmt::Display for Short<T> {
 impl<T> FmtWrapper<T> for Short<T> {
 	fn wrap(value: T) -> Self {
 		Short(value)
+	}
+}
+
+impl<T> Short<T> {
+	pub fn iter<I: IntoIterator<Item = T>>(iter: I) -> FmtIter<Short<T>, I> {
+		FmtIter::new(iter)
 	}
 }
 

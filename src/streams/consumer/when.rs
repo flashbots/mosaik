@@ -1,13 +1,16 @@
 use {
 	super::worker::ActiveReceivers,
-	crate::primitives::{IntoIterOrSingle, Tag},
+	crate::{
+		discovery::PeerEntry,
+		primitives::{IntoIterOrSingle, Tag},
+	},
 	core::{
 		fmt,
 		pin::Pin,
 		task::{Context, Poll},
 	},
 	futures::FutureExt,
-	std::collections::BTreeSet,
+	std::{collections::BTreeSet, sync::Arc},
 	tokio::sync::watch,
 	tokio_util::sync::ReusableBoxFuture,
 };
@@ -36,7 +39,8 @@ impl When {
 			active: self.0.clone(),
 			min_producers: 1,
 			was_met: false,
-			required_tags: BTreeSet::new(),
+			is_inverse: false,
+			predicates: Vec::new(),
 			changed_fut: ReusableBoxFuture::new(Box::pin(async move {
 				let _ = receiver.changed().await;
 			})),
@@ -55,8 +59,9 @@ impl When {
 pub struct SubscriptionCondition {
 	active: watch::Receiver<ActiveReceivers>,
 	min_producers: usize,
-	required_tags: BTreeSet<Tag>,
+	predicates: Vec<Arc<PeerPredicate>>,
 	was_met: bool,
+	is_inverse: bool,
 	changed_fut: ReusableBoxFuture<'static, ()>,
 }
 
@@ -66,8 +71,9 @@ impl Clone for SubscriptionCondition {
 		Self {
 			active: receiver.clone(),
 			min_producers: self.min_producers,
-			required_tags: self.required_tags.clone(),
+			predicates: self.predicates.clone(),
 			was_met: false,
+			is_inverse: self.is_inverse,
 			changed_fut: ReusableBoxFuture::new(Box::pin(async move {
 				let _ = receiver.changed().await;
 			})),
@@ -79,7 +85,7 @@ impl fmt::Debug for SubscriptionCondition {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("SubscriptionCondition")
 			.field("min_producers", &self.min_producers)
-			.field("required_tags", &self.required_tags)
+			.field("predicates", &self.predicates.len())
 			.field("is_condition_met", &self.is_condition_met())
 			.finish_non_exhaustive()
 	}
@@ -102,22 +108,32 @@ impl SubscriptionCondition {
 	/// When combined with `to_at_least`, the condition is met when there are at
 	/// least that many producers with the given tags.
 	pub fn with_tags<V>(mut self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
-		self.required_tags = tags.iterator().into_iter().collect();
+		let tags: BTreeSet<Tag> = tags.iterator().into_iter().collect();
+		self.predicates.push(Arc::new(move |peer: &PeerEntry| {
+			tags.is_subset(peer.tags())
+		}));
 		self
 	}
 
-	/// Checks whether the condition is currently met.
+	/// Checks the number of connected producers that meet our predicates.
 	pub fn is_condition_met(&self) -> bool {
 		let active = self.active.borrow();
 		let matching_producers = active
 			.values()
 			.filter(|handle| {
 				handle.is_connected()
-					&& self.required_tags.is_subset(handle.peer().tags())
+					&& self.predicates.iter().all(|pred| pred(handle.peer()))
 			})
 			.count();
 
-		matching_producers >= self.min_producers
+		(matching_producers >= self.min_producers) != self.is_inverse
+	}
+
+	/// Inverts the condition, so that it resolves when the condition is not met.
+	pub fn not(self) -> Self {
+		let mut cloned = self.clone();
+		cloned.is_inverse = !cloned.is_inverse;
+		cloned
 	}
 }
 
@@ -154,3 +170,5 @@ impl Future for SubscriptionCondition {
 		}
 	}
 }
+
+type PeerPredicate = dyn Fn(&PeerEntry) -> bool + Send + Sync;

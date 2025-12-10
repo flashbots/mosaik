@@ -769,3 +769,7 @@ make_close_reason!(
 make_close_reason!(
 	/// The remote peer sent a message that violates the protocol.
 	pub(crate) struct ProtocolViolation, 103);
+
+make_close_reason!(
+	/// Graceful shutdown initiated.
+	pub(crate) struct GracefulShutdown, 104);

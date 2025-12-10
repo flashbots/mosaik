@@ -1,3 +1,8 @@
+use core::{
+	pin::Pin,
+	task::{Context, Poll, Waker},
+};
+
 #[cfg(feature = "test-utils")]
 #[ctor::ctor]
 fn init_test_logging() {
@@ -45,4 +50,13 @@ fn init_test_logging() {
 			std::process::abort();
 		}));
 	}
+}
+
+pub fn poll_once<T, F>(f: &mut F) -> Poll<T>
+where
+	F: Future<Output = T> + Unpin,
+{
+	let waker = Waker::noop();
+	let mut context = Context::from_waker(waker);
+	Pin::new(f).poll(&mut context)
 }

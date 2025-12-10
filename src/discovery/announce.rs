@@ -203,8 +203,9 @@ impl WorkerLoop {
 			tokio::select! {
 				// Network is terminating, exit the loop
 				() = self.cancel.cancelled() => {
-					tracing::debug!(
+					tracing::trace!(
 						network = %self.local.network_id(),
+						peer_id = %Short(&self.local.id()),
 						"Discovery announcement protocol terminating"
 					);
 					return Ok(());
@@ -333,7 +334,7 @@ impl WorkerLoop {
 		match message {
 			AnnouncementMessage::OwnEntryUpdate(entry) => {
 				tracing::trace!(
-						info = ?entry,
+						info = %Short(&entry),
 						network = %self.local.network_id(),
 						"received peer entry update announcement"
 				);
@@ -424,7 +425,8 @@ impl WorkerLoop {
 			let neighbor_count = topic_rx.neighbors().count();
 			tracing::trace!(
 				network = %self.local.network_id(),
-				"broadcasted announcement message to {neighbor_count} neighbors"
+				neighbors = neighbor_count,
+				"broadcasted announcement message"
 			);
 		}
 		Ok(())
@@ -433,7 +435,7 @@ impl WorkerLoop {
 	async fn dial_peers(&self, peers: Vec<PeerId>, topic_tx: &mut GossipSender) {
 		tracing::debug!(
 			network = %self.local.network_id(),
-			peers = ?peers,
+			peers = %Short::iter(&peers),
 			"Dialing peers"
 		);
 

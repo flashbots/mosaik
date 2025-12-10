@@ -7,7 +7,7 @@ use {
 		discovery::{Discovery, PeerEntry},
 		network::{
 			LocalNode,
-			link::{Link, LinkError, RecvError},
+			link::{GracefulShutdown, Link, LinkError, RecvError},
 		},
 		primitives::Short,
 		streams::{
@@ -388,6 +388,11 @@ impl<D: Datum> Receiver<D> {
 							"failed to sync catalog with producer",
 						);
 					});
+			}
+			// the connection was closed gracefully by the producer because it is
+			// shutting down. Don't attempt to reconnect.
+			(_, Some(reason)) if reason == GracefulShutdown => {
+				unrecoverable!("producer is shutting down", "none");
 			}
 			(e, Some(reason)) if reason == StreamNotFound => {
 				// the reason why we are not reconnecting on this error is because

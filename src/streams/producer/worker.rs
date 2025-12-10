@@ -5,7 +5,10 @@ use {
 		Sinks,
 		When,
 	},
-	crate::{network::link::Link, primitives::Short},
+	crate::{
+		network::link::{GracefulShutdown, Link},
+		primitives::Short,
+	},
 	core::any::Any,
 	slotmap::DenseSlotMap,
 	std::sync::Arc,
@@ -140,10 +143,7 @@ impl<D: Datum> WorkerLoop<D> {
 				// this stream is terminated due to all producers being dropped
 				// or an unrecoverable error.
 				() = self.cancel.cancelled() => {
-					tracing::info!(
-						stream_id = %D::stream_id(),
-						"Shutting down stream fanout sink worker",
-					);
+					self.shutdown().await;
 					break;
 				}
 
@@ -190,6 +190,27 @@ impl<D: Datum> WorkerLoop<D> {
 
 		let subscription = Subscription { link, criteria };
 		self.active.insert(subscription);
+	}
+
+	/// Gracefully shuts down the worker loop by closing all active
+	/// subscriptions.
+	async fn shutdown(&mut self) {
+		tracing::debug!(
+			stream_id = %Short(D::stream_id()),
+			"terminating stream producer",
+		);
+
+		for (_, subscription) in self.active.drain() {
+			let peer_id = subscription.link.remote_id();
+			if let Err(e) = subscription.link.close(GracefulShutdown).await {
+				tracing::debug!(
+					stream_id = %Short(D::stream_id()),
+					consumer_id = %Short(peer_id),
+					error = %e,
+					"error closing subscription link",
+				);
+			}
+		}
 	}
 }
 

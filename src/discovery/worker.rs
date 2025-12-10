@@ -179,7 +179,7 @@ impl WorkerLoop {
 					tracing::trace!(
 						peer_id = %self.handle.local.id(),
 						network = %self.handle.local.network_id(),
-						"worker loop terminating"
+						"discovery protocol terminating"
 					);
 					return Ok(());
 				}
@@ -304,7 +304,7 @@ impl WorkerLoop {
 						}
 						UpsertResult::Rejected(signed_peer_entry) => {
 							tracing::trace!(
-								current = ?signed_peer_entry,
+								current = %Short(signed_peer_entry),
 								network = %self.handle.local.network_id(),
 								incoming_version = %incoming_version,
 								current_version = %signed_peer_entry.update_version(),
