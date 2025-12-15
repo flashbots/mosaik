@@ -1,6 +1,6 @@
 use {
 	super::Error,
-	crate::{StreamId, network::PeerId, primitives::*},
+	crate::{NetworkId, StreamId, network::PeerId, primitives::*},
 	bincode::{config::standard, serde::encode_into_std_write},
 	core::fmt,
 	derive_more::{AsRef, Debug, Deref, Into},
@@ -75,6 +75,7 @@ impl PeerEntryVersion {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PeerEntry {
 	protocol: Version,
+	network: NetworkId,
 	version: PeerEntryVersion,
 	address: EndpointAddr,
 	tags: BTreeSet<Tag>,
@@ -90,6 +91,11 @@ impl PeerEntry {
 	/// verify signatures made by the peer.
 	pub const fn id(&self) -> &PeerId {
 		&self.address.id
+	}
+
+	/// The network id this peer is associated with.
+	pub const fn network_id(&self) -> &NetworkId {
+		&self.network
 	}
 
 	/// The `mosaik` version used by the peer.
@@ -143,8 +149,9 @@ impl PeerEntry {
 	/// and streams. There is no public API to create a [`PeerEntry`] directly. It
 	/// is intended to be created by the discovery system when the network is
 	/// booting.
-	pub(crate) fn new(address: EndpointAddr) -> Self {
+	pub(crate) fn new(network: NetworkId, address: EndpointAddr) -> Self {
 		Self {
+			network,
 			address,
 			tags: BTreeSet::new(),
 			streams: BTreeSet::new(),
@@ -254,6 +261,7 @@ impl fmt::Debug for Pretty<'_, PeerEntry> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		writeln!(f, "PeerEntry:")?;
 		writeln!(f, "  id: {}", self.id())?;
+		writeln!(f, "  network: {}", self.network_id())?;
 		writeln!(
 			f,
 			"  ips: {:#?}",
@@ -393,9 +401,10 @@ mod tests {
 
 	#[test]
 	fn signed_peer_entry_with_invalid_signature_fails_to_deserialize() {
+		let network_id = NetworkId::random();
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
-		let entry = PeerEntry::new(address);
+		let entry = PeerEntry::new(network_id, address);
 		let signed = entry.sign(&secret).unwrap();
 
 		// Serialize the valid signed entry
@@ -419,9 +428,11 @@ mod tests {
 
 	#[test]
 	fn signed_peer_entry_with_modified_entry_fails_to_deserialize() {
+		let network_id = NetworkId::random();
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
-		let entry = PeerEntry::new(address.clone()).add_tags(Tag::from("original"));
+		let entry = PeerEntry::new(network_id, address.clone())
+			.add_tags(Tag::from("original"));
 		let signed = entry.sign(&secret).unwrap();
 
 		// Get the signature from valid signed entry
@@ -429,7 +440,7 @@ mod tests {
 
 		// Create modified entry with different tags
 		let modified_entry =
-			PeerEntry::new(address).add_tags(Tag::from("modified"));
+			PeerEntry::new(network_id, address).add_tags(Tag::from("modified"));
 
 		// Manually construct modified entry but original signature
 		let invalid_signed = SignedPeerEntry(modified_entry, signature);
@@ -448,9 +459,10 @@ mod tests {
 
 	#[test]
 	fn valid_signed_peer_entry_deserializes_successfully() {
+		let network_id = NetworkId::random();
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
-		let entry = PeerEntry::new(address);
+		let entry = PeerEntry::new(network_id, address);
 		let signed = entry.sign(&secret).unwrap();
 
 		let serialized = encode_to_vec(&signed, standard())
@@ -465,9 +477,10 @@ mod tests {
 
 	#[test]
 	fn version_increments_on_add_tags() {
+		let network_id = NetworkId::random();
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
-		let entry = PeerEntry::new(address);
+		let entry = PeerEntry::new(network_id, address);
 		let initial_version = entry.update_version();
 
 		let updated = entry.add_tags(Tag::from("test"));
@@ -480,9 +493,10 @@ mod tests {
 
 	#[test]
 	fn version_increments_on_remove_tags() {
+		let network_id = NetworkId::random();
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
-		let entry = PeerEntry::new(address).add_tags(Tag::from("test"));
+		let entry = PeerEntry::new(network_id, address).add_tags(Tag::from("test"));
 		let initial_version = entry.update_version();
 
 		let updated = entry.remove_tags("test");
@@ -495,9 +509,10 @@ mod tests {
 
 	#[test]
 	fn version_increments_on_add_streams() {
+		let network_id = NetworkId::random();
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
-		let entry = PeerEntry::new(address);
+		let entry = PeerEntry::new(network_id, address);
 		let initial_version = entry.update_version();
 
 		let updated = entry.add_streams(StreamId::from("test-stream"));
@@ -510,10 +525,11 @@ mod tests {
 
 	#[test]
 	fn version_increments_on_remove_streams() {
+		let network_id = NetworkId::random();
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
-		let entry =
-			PeerEntry::new(address).add_streams(StreamId::from("test-stream"));
+		let entry = PeerEntry::new(network_id, address)
+			.add_streams(StreamId::from("test-stream"));
 		let initial_version = entry.update_version();
 
 		let updated = entry.remove_streams(StreamId::from("test-stream"));
@@ -526,9 +542,10 @@ mod tests {
 
 	#[test]
 	fn version_increments_on_update_address() {
+		let network_id = NetworkId::random();
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
-		let entry = PeerEntry::new(address.clone());
+		let entry = PeerEntry::new(network_id, address.clone());
 		let initial_version = entry.update_version();
 
 		let updated = entry.update_address(address).unwrap();
@@ -541,9 +558,10 @@ mod tests {
 
 	#[test]
 	fn version_increments_monotonically_on_multiple_changes() {
+		let network_id = NetworkId::random();
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
-		let entry = PeerEntry::new(address.clone());
+		let entry = PeerEntry::new(network_id, address.clone());
 		let v0 = entry.update_version();
 
 		let entry = entry.add_tags(Tag::from("tag1"));
@@ -565,9 +583,10 @@ mod tests {
 
 	#[test]
 	fn is_newer_than_returns_correct_result() {
+		let network_id = NetworkId::random();
 		let secret = SecretKey::generate(&mut rand::rng());
 		let address = EndpointAddr::from(secret.public());
-		let entry1 = PeerEntry::new(address);
+		let entry1 = PeerEntry::new(network_id, address);
 		let entry2 = entry1.clone().add_tags(Tag::from("test"));
 
 		assert!(

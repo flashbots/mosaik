@@ -1,8 +1,9 @@
 use {
 	super::{Criteria, Datum, StreamId, Streams, producer::Sinks},
 	crate::{
+		NetworkId,
 		discovery::Discovery,
-		network::link::{Link, Protocol},
+		network::link::{DifferentNetwork, Link, Protocol},
 		primitives::Short,
 		streams::{StreamNotFound, UnknownPeer},
 	},
@@ -104,6 +105,27 @@ impl ProtocolHandler for Acceptor {
 			})
 			.map_err(AcceptError::from_err)?;
 
+		// ensure that the consumer is connecting to the correct network
+		if handshake.network_id != self.sinks.local.network_id() {
+			tracing::debug!(
+				consumer_id = %Short(peer.id()),
+				stream_id = %Short(handshake.stream_id),
+				expected_network = %Short(self.sinks.local.network_id()),
+				received_network = %Short(handshake.network_id),
+				"Consumer connected to wrong network",
+			);
+
+			// Close the link with a reason before returning error
+			link
+				.close(DifferentNetwork)
+				.await
+				.map_err(AcceptError::from_err)?;
+
+			return Err(AcceptError::NotAllowed {
+				meta: Meta::default(),
+			});
+		}
+
 		// Lookup the fanout sink for the requested stream id
 		let Some(sink) = self.sinks.open(handshake.stream_id) else {
 			tracing::debug!(
@@ -133,6 +155,9 @@ impl ProtocolHandler for Acceptor {
 /// Handshake sent by consumers when connecting to a producer's stream sink.
 #[derive(Debug, Serialize, Deserialize)]
 pub(super) struct ConsumerHandshake {
+	/// The network id the consumer is connecting to.
+	network_id: NetworkId,
+
 	/// The stream id the consumer wishes to subscribe to.
 	stream_id: StreamId,
 
@@ -142,9 +167,10 @@ pub(super) struct ConsumerHandshake {
 
 impl ConsumerHandshake {
 	/// Creates a new [`ConsumerHandshake`] instance.
-	pub fn new<D: Datum>(criteria: Criteria) -> Self {
+	pub fn new<D: Datum>(network_id: NetworkId, criteria: Criteria) -> Self {
 		let stream_id = D::stream_id();
 		Self {
+			network_id,
 			stream_id,
 			criteria,
 		}
@@ -154,10 +180,14 @@ impl ConsumerHandshake {
 /// Handshake response sent by producers to consumers upon successful
 /// initiation of a stream.
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct StartStream(pub StreamId);
+pub(super) struct StartStream(pub NetworkId, pub StreamId);
 
 impl StartStream {
 	pub const fn stream_id(&self) -> &StreamId {
+		&self.1
+	}
+
+	pub const fn network_id(&self) -> &NetworkId {
 		&self.0
 	}
 }

@@ -38,6 +38,6 @@ async fn by_tag() -> anyhow::Result<()> {
 	c0.when().subscribed().to_at_least(2).await;
 	tracing::info!("consumer subscribed");
 
-	core::future::pending::<()>().await;
+	// core::future::pending::<()>().await;
 	Ok(())
 }

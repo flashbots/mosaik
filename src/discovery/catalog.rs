@@ -1,6 +1,9 @@
 use {
 	super::{Config, Event, PeerEntry, SignedPeerEntry},
-	crate::network::{LocalNode, PeerId},
+	crate::{
+		NetworkId,
+		network::{LocalNode, PeerId},
+	},
 };
 
 /// A catalog of discovered nodes and their associated peer info.
@@ -53,6 +56,9 @@ pub struct Catalog {
 	///
 	/// This is used to exclude the local node from queries.
 	local_id: PeerId,
+
+	/// The network id this catalog is associated with.
+	network_id: NetworkId,
 
 	/// Entries with valid signatures by their authors.
 	///
@@ -169,7 +175,13 @@ impl Catalog {
 	///
 	/// Inserting the local peer entry is not allowed and always returns `false`.
 	pub(super) fn insert_unsigned(&mut self, entry: PeerEntry) -> bool {
+		// Do not override the local peer entry
 		if entry.id() == &self.local_id {
+			return false;
+		}
+
+		// Do not insert if entry belongs to a different network
+		if entry.network_id() != self.network_id {
 			return false;
 		}
 
@@ -215,6 +227,10 @@ pub enum UpsertResult<'a> {
 	/// The insertion was rejected because the existing entry had an equal or
 	/// higher version number.
 	Rejected(&'a SignedPeerEntry),
+
+	/// The insertion was rejected because the entry belonged to a different
+	/// network.
+	DifferentNetwork(NetworkId),
 }
 
 impl UpsertResult<'_> {
@@ -240,7 +256,7 @@ impl Catalog {
 	/// Creates a new catalog instance with the local node's peer entry as the
 	/// first and only entry.
 	pub(super) fn new(local: &LocalNode, config: &Config) -> Self {
-		let local_entry = PeerEntry::new(local.addr().clone())
+		let local_entry = PeerEntry::new(*local.network_id(), local.addr().clone())
 			.add_tags(config.tags.clone())
 			.sign(local.secret_key())
 			.expect("signing local peer entry failed.");
@@ -250,6 +266,7 @@ impl Catalog {
 
 		Self {
 			local_id: local.id(),
+			network_id: *local.network_id(),
 			signed,
 			unsigned: im::OrdMap::new(),
 		}
@@ -266,10 +283,16 @@ impl Catalog {
 		&mut self,
 		entry: SignedPeerEntry,
 	) -> UpsertResult<'_> {
+		// Reject entries from different networks
+		if entry.network_id() != self.network_id {
+			return UpsertResult::DifferentNetwork(*entry.network_id());
+		}
+
 		let peer_id = *entry.id();
 		self.unsigned.remove(entry.id());
 		match self.signed.entry(peer_id) {
 			im::ordmap::Entry::Occupied(mut existing) => {
+				// Update only if the new entry is newer
 				if entry.is_newer_than(existing.get()) {
 					existing.insert(entry);
 					UpsertResult::Updated(
@@ -359,7 +382,7 @@ impl Catalog {
 					UpsertResult::Updated(entry) => {
 						events.push(Event::PeerUpdated(entry.clone().into_unsigned()));
 					}
-					UpsertResult::Rejected(_) => {}
+					_ => {}
 				}
 			}
 		}

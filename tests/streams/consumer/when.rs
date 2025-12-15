@@ -6,7 +6,7 @@ use {
 };
 
 #[tokio::test]
-async fn basic() -> anyhow::Result<()> {
+async fn smoke() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 	let n0 = Network::new(network_id).await?;
 	let n1 = Network::new(network_id).await?;

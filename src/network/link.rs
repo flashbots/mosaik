@@ -770,24 +770,28 @@ pub(crate) use make_close_reason;
 
 make_close_reason!(
 	/// Protocol ran to completion successfully.
-	pub(crate) struct Success, 0);
+	pub(crate) struct Success, 200);
+
+make_close_reason!(
+	/// Graceful shutdown initiated.
+	pub(crate) struct GracefulShutdown, 204);
 
 make_close_reason!(
 	/// The accepting socket was expecting a different protocol ALPN.
 	pub(crate) struct InvalidAlpn, 100);
 
 make_close_reason!(
+	/// The remote peer is on a different network.
+	pub(crate) struct DifferentNetwork, 101);
+
+make_close_reason!(
 	/// Operation was cancelled.
-	pub(crate) struct Cancelled, 101);
+	pub(crate) struct Cancelled, 102);
 
 make_close_reason!(
 	/// The connection was closed unexpectedly.
-	pub(crate) struct UnexpectedClose, 102);
+	pub(crate) struct UnexpectedClose, 103);
 
 make_close_reason!(
 	/// The remote peer sent a message that violates the protocol.
-	pub(crate) struct ProtocolViolation, 103);
-
-make_close_reason!(
-	/// Graceful shutdown initiated.
-	pub(crate) struct GracefulShutdown, 104);
+	pub(crate) struct ProtocolViolation, 400);

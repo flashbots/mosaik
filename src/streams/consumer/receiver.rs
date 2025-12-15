@@ -1,16 +1,18 @@
 use {
-	super::{super::Streams, Datum, builder::ConsumerConfig},
 	crate::{
+		Datum,
 		discovery::{Discovery, PeerEntry},
 		network::{
 			LocalNode,
-			link::{GracefulShutdown, Link, LinkError, RecvError},
+			link::{DifferentNetwork, GracefulShutdown, Link, LinkError, RecvError},
 		},
 		primitives::Short,
 		streams::{
 			StreamNotFound,
+			Streams,
 			UnknownPeer,
 			accept::{ConsumerHandshake, StartStream},
+			consumer::builder::ConsumerConfig,
 		},
 	},
 	backoff::backoff::Backoff,
@@ -267,10 +269,29 @@ impl<D: Datum> Receiver<D> {
 				.await?;
 
 			// Send the consumer handshake to the producer
-			link.send(&ConsumerHandshake::new::<D>(criteria)).await?;
+			link
+				.send(&ConsumerHandshake::new::<D>(
+					*self.local.network_id(),
+					criteria,
+				))
+				.await?;
 
 			// await the producer's handshake response
 			let start = link.recv::<StartStream>().await?;
+
+			// confirm that the producer is on the correct network
+			if start.network_id() != *self.local.network_id() {
+				tracing::warn!(
+					stream_id = %D::stream_id(),
+					producer_id = %Short(&peer_addr.id),
+					expected_network = %Short(self.local.network_id()),
+					received_network = %Short(start.network_id()),
+					"producer responded with invalid network id in start stream handshake",
+				);
+				return Err(LinkError::Recv(RecvError::closed(DifferentNetwork)));
+			}
+
+			// confirm that the producer is producing the requested stream
 			if start.stream_id() != D::stream_id() {
 				tracing::warn!(
 					stream_id = %D::stream_id(),

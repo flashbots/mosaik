@@ -312,6 +312,14 @@ impl WorkerLoop {
 							);
 							false
 						}
+						UpsertResult::DifferentNetwork(peer_network) => {
+							tracing::trace!(
+								peer_network = %Short(peer_network),
+								this_network = %Short(self.handle.local.network_id()),
+								"peer entry from different network rejected"
+							);
+							false
+						}
 					}
 				});
 			}

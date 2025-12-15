@@ -144,12 +144,12 @@ link::make_close_reason!(
 	/// A remote consumer is trying to subscribe to a string that is not in the
 	/// producer's catalog. Indicates that the consumer should re-sync its
 	/// catalog and retry the subscription.
-	struct UnknownPeer, 501);
+	struct UnknownPeer, 10_401);
 
 link::make_close_reason!(
 	/// The requested stream was not found on the producer node.
-	struct StreamNotFound, 502);
+	struct StreamNotFound, 10_404);
 
 link::make_close_reason!(
 	/// The remote peer is not allowed to subscribe to the requested stream.
-	struct NotAllowed, 503);
+	struct NotAllowed, 10_403);

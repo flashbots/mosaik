@@ -236,7 +236,7 @@ impl<D: Datum> WorkerLoop<D> {
 		);
 
 		let mut link = link;
-		let start_stream = StartStream(D::stream_id());
+		let start_stream = StartStream(self.config.network_id, D::stream_id());
 
 		if let Err(e) = link.send(&start_stream).await {
 			tracing::error!(

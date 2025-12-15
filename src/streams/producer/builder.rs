@@ -3,7 +3,7 @@ use {
 		super::{Datum, Streams},
 		Producer,
 	},
-	crate::discovery::PeerEntry,
+	crate::{NetworkId, discovery::PeerEntry},
 	core::marker::PhantomData,
 };
 
@@ -30,15 +30,9 @@ pub(in crate::streams) struct ProducerConfig {
 	/// Sets a predicate function that is used to determine whether to
 	/// accept or reject incoming consumer connections.
 	pub accept_if: Box<dyn FnMut(&PeerEntry) -> bool + Send + Sync>,
-}
 
-impl Default for ProducerConfig {
-	fn default() -> Self {
-		Self {
-			buffer_size: 1024,
-			accept_if: Box::new(|_| true),
-		}
-	}
+	/// The network id this producer is associated with.
+	pub network_id: NetworkId,
 }
 
 /// Configurable builder for assembling a new producer instances for a specific
@@ -93,7 +87,11 @@ impl<'s, D: Datum> Builder<'s, D> {
 	pub(in crate::streams) fn new(streams: &'s Streams) -> Self {
 		Self {
 			streams,
-			config: ProducerConfig::default(),
+			config: ProducerConfig {
+				buffer_size: 1024,
+				accept_if: Box::new(|_| true),
+				network_id: *streams.local.network_id(),
+			},
 			_marker: PhantomData,
 		}
 	}

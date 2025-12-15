@@ -1,6 +1,7 @@
 use {
 	super::{Catalog, Config, Error, PeerEntryVersion, SignedPeerEntry},
 	crate::{
+		NetworkId,
 		discovery::PeerEntry,
 		network::{LocalNode, PeerId, link::Protocol},
 		primitives::{Pretty, Short, UnboundedChannel},
@@ -75,6 +76,7 @@ pub enum Event {
 ///   are generated based on the changes to the current state of the catalog.
 pub(super) struct Announce {
 	gossip: Gossip,
+	network_id: NetworkId,
 	events: UnboundedReceiver<Event>,
 	dials: UnboundedSender<(Vec<PeerId>, oneshot::Sender<()>)>,
 	neighbors_count: Arc<AtomicUsize>,
@@ -100,6 +102,7 @@ impl Announce {
 		config: &Config,
 		catalog: watch::Receiver<Catalog>,
 	) -> Self {
+		let network_id = *local.network_id();
 		let gossip = Gossip::builder()
 			.alpn(Self::ALPN)
 			.spawn(local.endpoint().clone());
@@ -141,6 +144,7 @@ impl Announce {
 
 		Self {
 			gossip,
+			network_id,
 			events: events.1,
 			dials: dials.0,
 			neighbors_count,
@@ -168,6 +172,11 @@ impl Announce {
 	/// but it does a full catalog sync with another peer or learns in any other
 	/// way about another peer and there are new potential peers to connect to.
 	pub fn observe(&self, peer: &PeerEntry) {
+		// Ignore peers from different networks
+		if peer.network_id() != self.network_id {
+			return;
+		}
+
 		if self.neighbors_count.load(Ordering::SeqCst) == 0 {
 			let (tx, _) = oneshot::channel::<()>();
 			self.dials.send((vec![*peer.id()], tx)).ok();
@@ -360,6 +369,15 @@ impl WorkerLoop {
 						network = %self.local.network_id(),
 						"received peer entry update announcement"
 				);
+
+				if entry.network_id() != self.local.network_id() {
+					tracing::trace!(
+						peer_network = %Short(entry.network_id()),
+						this_network = %Short(self.local.network_id()),
+						"received peer entry from different network, ignoring"
+					);
+					return;
+				}
 
 				// Update local state or catalog as needed
 				let _ = self.events.send(Event::PeerEntryReceived(entry));
