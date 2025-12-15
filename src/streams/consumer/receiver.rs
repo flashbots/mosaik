@@ -1,8 +1,5 @@
 use {
-	super::{
-		super::{Config, Criteria, Streams},
-		Datum,
-	},
+	super::{super::Streams, Datum, builder::ConsumerConfig},
 	crate::{
 		discovery::{Discovery, PeerEntry},
 		network::{
@@ -36,8 +33,8 @@ use {
 ///   [`CloseReason::UnknownPeer`] the consumer should trigger a catalog sync
 ///   with the producer and retry the subscription again.
 pub(super) struct Receiver<D: Datum> {
-	/// Configuration for the streams subsystem.
-	config: Arc<Config>,
+	/// Configuration for this consumer.
+	config: Arc<ConsumerConfig>,
 
 	/// Discovery system handle used to trigger catalog syncs with producers that
 	/// are not recognizing this consumer.
@@ -50,9 +47,6 @@ pub(super) struct Receiver<D: Datum> {
 	/// The remote producer peer entry snapshot as known at the time of worker
 	/// creation.
 	peer: Arc<PeerEntry>,
-
-	/// The stream subscription criteria for this consumer.
-	criteria: Criteria,
 
 	/// Channel for sending received data to the consumer handle for the public
 	/// api to consume.
@@ -72,7 +66,8 @@ pub(super) struct Receiver<D: Datum> {
 	/// policy.
 	next_recv: ReusableBoxFuture<'static, (Result<D, LinkError>, Link<Streams>)>,
 
-	/// Backoff policy for reconnecting to the remote producer.
+	/// Backoff policy for reconnecting to the remote producer on recoverable
+	/// errors that is currently being applied since the last successful receive.
 	backoff: Option<Box<dyn Backoff + Send + Sync + 'static>>,
 }
 
@@ -133,14 +128,11 @@ impl<D: Datum> Receiver<D> {
 		discovery: &Discovery,
 		cancel: &CancellationToken,
 		data_tx: &mpsc::UnboundedSender<D>,
-		config: &Arc<Config>,
-		criteria: &Criteria,
+		config: Arc<ConsumerConfig>,
 	) -> ReceiverHandle {
 		let local = local.clone();
 		let cancel = cancel.child_token();
 		let data_tx = data_tx.clone();
-		let config = Arc::clone(config);
-		let criteria = criteria.clone();
 		let discovery = discovery.clone();
 		let peer = Arc::new(peer);
 		let next_recv = ReusableBoxFuture::new(pending());
@@ -149,7 +141,6 @@ impl<D: Datum> Receiver<D> {
 		let worker = Receiver {
 			config,
 			local,
-			criteria,
 			discovery,
 			data_tx,
 			state_tx,
@@ -258,7 +249,7 @@ impl<D: Datum> Receiver<D> {
 		}
 
 		let cancel = &self.cancel;
-		let criteria = self.criteria.clone();
+		let criteria = self.config.criteria.clone();
 		let peer_addr = self.peer.address();
 
 		let result = async {
@@ -298,7 +289,7 @@ impl<D: Datum> Receiver<D> {
 				tracing::info!(
 					stream_id = %D::stream_id(),
 					producer_id = %Short(&self.peer.id()),
-					criteria = ?self.criteria,
+					criteria = ?self.config.criteria,
 					"connected to stream producer",
 				);
 
@@ -341,7 +332,7 @@ impl<D: Datum> Receiver<D> {
 				tracing::warn!(
 					stream_id = %D::stream_id(),
 					producer_id = %Short(&self.peer.id()),
-					criteria = ?self.criteria,
+					criteria = ?self.config.criteria,
 					error = %$e,
 					$msg,
 				);
@@ -428,7 +419,7 @@ impl<D: Datum> Receiver<D> {
 					tracing::debug!(
 						stream_id = %D::stream_id(),
 						producer_id = %Short(&self.peer.id()),
-						criteria = ?self.criteria,
+						criteria = ?self.config.criteria,
 						"exhausted all reconnection attempts, terminating",
 					);
 
@@ -441,7 +432,7 @@ impl<D: Datum> Receiver<D> {
 				tracing::debug!(
 					stream_id = %D::stream_id(),
 					producer_id = %Short(&self.peer.id()),
-					criteria = ?self.criteria,
+					criteria = ?self.config.criteria,
 					"waiting {duration:?} before reconnecting",
 				);
 

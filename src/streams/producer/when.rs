@@ -7,6 +7,7 @@ use {
 	std::collections::BTreeSet,
 };
 
+#[derive(Clone)]
 pub struct When;
 
 impl When {

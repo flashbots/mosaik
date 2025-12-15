@@ -241,7 +241,7 @@ impl fmt::Display for Short<&PeerEntry> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
-			"PeerEntry[v{}]({}, tags: {}, streams: {})",
+			"PeerEntry[#{}]({}, tags: {}, streams: {})",
 			Short(self.0.update_version()),
 			Short(self.0.id()),
 			FmtIter::<Short<_>, _>::new(&self.0.tags),
@@ -366,8 +366,7 @@ impl From<&SignedPeerEntry> for PeerEntry {
 
 impl fmt::Debug for Pretty<'_, SignedPeerEntry> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "SignedPeerEntry:")?;
-		writeln!(f, "  entry: {:?}", Pretty(&self.0.0))?;
+		writeln!(f, "Signed{:?}", Pretty(&self.0.0))?;
 		writeln!(f, "  signature: {}", Abbreviated(self.1.to_bytes()))
 	}
 }
@@ -376,7 +375,7 @@ impl fmt::Display for Short<&SignedPeerEntry> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
-			"SignedPeerEntry[v{}]({}, tags: {}, streams: {})",
+			"SignedPeerEntry[#{}]({}, tags: {}, streams: {})",
 			Short(self.0.update_version()),
 			Short(self.0.id()),
 			FmtIter::<Short<_>, _>::new(&self.0.tags),

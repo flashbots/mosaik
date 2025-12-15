@@ -1,8 +1,9 @@
 //! Stream Producers
 
 use {
-	crate::Datum,
+	crate::{Datum, StreamId},
 	core::{
+		fmt::Debug,
 		pin::Pin,
 		task::{Context, Poll},
 	},
@@ -21,8 +22,8 @@ mod worker;
 pub(super) use sink::Sinks;
 /// Public API
 pub use {
-	builder::Builder,
-	error::{Error, SendError},
+	builder::{Builder, Error as BuilderError},
+	error::{Error, ProducerError},
 	when::When,
 };
 
@@ -36,9 +37,16 @@ pub use {
 ///
 /// - Producers implement [`Sink`] for sending datum of type `D` to the
 ///   underlying stream.
+#[derive(Clone)]
 pub struct Producer<D: Datum> {
 	status: When,
 	chan: PollSender<D>,
+}
+
+impl<D: Datum> Debug for Producer<D> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "Producer<{}>", D::stream_id())
+	}
 }
 
 impl<D: Datum> Producer<D> {
@@ -49,6 +57,11 @@ impl<D: Datum> Producer<D> {
 		}
 	}
 
+	/// The stream id associated with this producer.
+	pub fn stream_id(&self) -> StreamId {
+		D::stream_id()
+	}
+
 	/// Access to the producer's status information.
 	pub const fn when(&self) -> &When {
 		&self.status
@@ -56,7 +69,7 @@ impl<D: Datum> Producer<D> {
 }
 
 impl<D: Datum> Sink<D> for Producer<D> {
-	type Error = SendError<D>;
+	type Error = ProducerError<D>;
 
 	fn poll_ready(
 		self: Pin<&mut Self>,
@@ -66,7 +79,7 @@ impl<D: Datum> Sink<D> for Producer<D> {
 			.get_mut()
 			.chan
 			.poll_ready_unpin(cx)
-			.map_err(|e| SendError::Closed(e.into_inner()))
+			.map_err(|e| ProducerError::Closed(e.into_inner()))
 	}
 
 	fn start_send(self: Pin<&mut Self>, item: D) -> Result<(), Self::Error> {
@@ -74,7 +87,7 @@ impl<D: Datum> Sink<D> for Producer<D> {
 			.get_mut()
 			.chan
 			.start_send_unpin(item)
-			.map_err(|e| SendError::Closed(e.into_inner()))
+			.map_err(|e| ProducerError::Closed(e.into_inner()))
 	}
 
 	fn poll_flush(
@@ -85,7 +98,7 @@ impl<D: Datum> Sink<D> for Producer<D> {
 			.get_mut()
 			.chan
 			.poll_flush_unpin(cx)
-			.map_err(|e| SendError::Closed(e.into_inner()))
+			.map_err(|e| ProducerError::Closed(e.into_inner()))
 	}
 
 	fn poll_close(
@@ -96,6 +109,6 @@ impl<D: Datum> Sink<D> for Producer<D> {
 			.get_mut()
 			.chan
 			.poll_close_unpin(cx)
-			.map_err(|e| SendError::Closed(e.into_inner()))
+			.map_err(|e| ProducerError::Closed(e.into_inner()))
 	}
 }

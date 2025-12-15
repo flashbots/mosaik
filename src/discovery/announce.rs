@@ -10,7 +10,10 @@ use {
 		serde::{decode_from_std_read, encode_to_vec},
 	},
 	bytes::Buf,
-	core::sync::atomic::{AtomicUsize, Ordering},
+	core::{
+		sync::atomic::{AtomicUsize, Ordering},
+		time::Duration,
+	},
 	futures::StreamExt,
 	iroh::protocol::ProtocolHandler,
 	iroh_gossip::{
@@ -23,10 +26,12 @@ use {
 			GossipTopic,
 		},
 	},
+	rand::Rng,
 	serde::{Deserialize, Serialize},
 	std::sync::Arc,
 	tokio::sync::{
 		mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+		oneshot,
 		watch,
 	},
 	tokio_util::sync::CancellationToken,
@@ -71,7 +76,7 @@ pub enum Event {
 pub(super) struct Announce {
 	gossip: Gossip,
 	events: UnboundedReceiver<Event>,
-	dials: UnboundedSender<Vec<PeerId>>,
+	dials: UnboundedSender<(Vec<PeerId>, oneshot::Sender<()>)>,
 	neighbors_count: Arc<AtomicUsize>,
 }
 
@@ -117,6 +122,7 @@ impl Announce {
 			neighbors_count: Arc::clone(&neighbors_count),
 			messages_in: UnboundedChannel::default(),
 			messages_out: UnboundedChannel::default(),
+			announce_interval: tokio::time::interval(config.announce_interval),
 		};
 
 		// Spawn the worker loop task
@@ -150,8 +156,10 @@ impl Announce {
 	}
 
 	/// Dials the given peer address to initiate a discovery exchange.
-	pub fn dial(&self, peers: Vec<PeerId>) {
-		self.dials.send(peers).ok();
+	pub async fn dial(&self, peers: Vec<PeerId>) {
+		let (tx, rx) = oneshot::channel::<()>();
+		self.dials.send((peers, tx)).ok();
+		let _ = rx.await;
 	}
 
 	/// A hint to observe a peer.
@@ -161,7 +169,8 @@ impl Announce {
 	/// way about another peer and there are new potential peers to connect to.
 	pub fn observe(&self, peer: &PeerEntry) {
 		if self.neighbors_count.load(Ordering::SeqCst) == 0 {
-			self.dial(vec![*peer.id()]);
+			let (tx, _) = oneshot::channel::<()>();
+			self.dials.send((vec![*peer.id()], tx)).ok();
 		}
 	}
 
@@ -183,7 +192,8 @@ struct WorkerLoop {
 	messages_in: UnboundedChannel<AnnouncementMessage>,
 	messages_out: UnboundedChannel<AnnouncementMessage>,
 	neighbors_count: Arc<AtomicUsize>,
-	dials: UnboundedReceiver<Vec<PeerId>>,
+	dials: UnboundedReceiver<(Vec<PeerId>, oneshot::Sender<()>)>,
+	announce_interval: tokio::time::Interval,
 }
 
 impl WorkerLoop {
@@ -236,8 +246,13 @@ impl WorkerLoop {
 				}
 
 				// Manual dial request
-				Some(peers) = self.dials.recv() => {
-					self.dial_peers(peers, &mut topic_tx).await;
+				Some((peers, tx)) = self.dials.recv() => {
+					self.dial_peers(peers, &mut topic_tx, tx).await;
+				}
+
+				// Periodic announcement tick
+				_ = self.announce_interval.tick() => {
+					self.on_periodic_announce_tick();
 				}
 			}
 		}
@@ -294,20 +309,27 @@ impl WorkerLoop {
 	/// This method handles the happy-path gossip events, such as new neighbors
 	/// joining and messages being received.
 	fn on_gossip_event(&mut self, event: GossipEvent) {
-		tracing::trace!(
-			network = %self.local.network_id(),
-			peer_id = %Short(&self.local.id()),
-			event = ?event,
-			"Received gossip event"
-		);
-
 		match event {
-			GossipEvent::NeighborUp(_) => {
+			GossipEvent::NeighborUp(id) => {
 				self.neighbors_count.fetch_add(1, Ordering::SeqCst);
-				self.broadcast_self_info();
+				tracing::trace!(
+					network = %self.local.network_id(),
+					peer_id = %Short(&id),
+					neighbors = self.neighbors_count.load(Ordering::SeqCst),
+					"New gossip neighbor connected"
+				);
+
+				// Broadcast our own info to the new neighbor
+				self.broadcast_self_info(false);
 			}
-			GossipEvent::NeighborDown(_) => {
+			GossipEvent::NeighborDown(id) => {
 				self.neighbors_count.fetch_sub(1, Ordering::SeqCst);
+				tracing::trace!(
+					network = %self.local.network_id(),
+					peer_id = %Short(&id),
+					neighbors = self.neighbors_count.load(Ordering::SeqCst),
+					"Gossip neighbor disconnected"
+				);
 			}
 			GossipEvent::Received(message) => {
 				let Ok(decoded) =
@@ -349,7 +371,7 @@ impl WorkerLoop {
 	fn on_catalog_update(&mut self) {
 		let current_local_version = self.catalog.borrow().local().update_version();
 		if current_local_version > self.last_own_version {
-			self.broadcast_self_info();
+			self.broadcast_self_info(false);
 			self.last_own_version = current_local_version;
 		}
 	}
@@ -358,14 +380,25 @@ impl WorkerLoop {
 	///
 	/// If the local node is not connected to at least one gossip neighbor, this
 	/// function returns early without broadcasting.
-	fn broadcast_self_info(&self) {
+	///
+	/// We distinguish between periodic and immediate broadcasts for logging
+	/// purposes.
+	fn broadcast_self_info(&self, is_periodic: bool) {
 		let entry = self.catalog.borrow().local().clone();
 
-		tracing::debug!(
-			network = %self.local.network_id(),
-			entry = ?Pretty(&entry),
-			"broadcasting local peer info update"
-		);
+		if is_periodic {
+			tracing::trace!(
+				network = %self.local.network_id(),
+				entry = ?Pretty(&entry),
+				"periodic broadcast of local peer info"
+			);
+		} else {
+			tracing::debug!(
+				network = %self.local.network_id(),
+				entry = ?Pretty(&entry),
+				"broadcast of local peer info"
+			);
+		}
 
 		self
 			.messages_out
@@ -432,7 +465,12 @@ impl WorkerLoop {
 		Ok(())
 	}
 
-	async fn dial_peers(&self, peers: Vec<PeerId>, topic_tx: &mut GossipSender) {
+	async fn dial_peers(
+		&self,
+		peers: Vec<PeerId>,
+		topic_tx: &mut GossipSender,
+		tx: oneshot::Sender<()>,
+	) {
 		tracing::debug!(
 			network = %self.local.network_id(),
 			peers = %Short::iter(&peers),
@@ -446,6 +484,8 @@ impl WorkerLoop {
 				"Failed to dial peers via gossip topic"
 			);
 		}
+
+		let _ = tx.send(());
 	}
 
 	/// This method is invoked when the gossip topic connection is closed.
@@ -459,6 +499,20 @@ impl WorkerLoop {
 		*topic_tx = new_topic_tx;
 		*topic_rx = new_topic_rx;
 		Ok(())
+	}
+
+	fn on_periodic_announce_tick(&mut self) {
+		// Broadcast our own info periodically
+		self.broadcast_self_info(true);
+
+		// Calculate next announce delay with jitter
+		let base = self.config.announce_interval;
+		let max_jitter = base.mul_f32(self.config.announce_jitter);
+		let jitter = rand::rng().random_range(Duration::ZERO..=max_jitter * 2);
+		let next_announce = (base + jitter).saturating_sub(max_jitter);
+
+		// Schedule the next announce with jitter
+		self.announce_interval.reset_after(next_announce);
 	}
 }
 

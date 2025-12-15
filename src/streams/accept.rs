@@ -68,7 +68,7 @@ impl ProtocolHandler for Acceptor {
 		let mut link = Link::accept_with_cancel(connection, cancel).await?;
 		let remote_peer_id = link.remote_id();
 		let catalog = self.discovery.catalog();
-		let Some(info) = catalog.get(&remote_peer_id) else {
+		let Some(peer) = catalog.get(&remote_peer_id) else {
 			tracing::debug!(
 				consumer_id = %Short(&remote_peer_id),
 				"unknown consumer peer",
@@ -86,8 +86,8 @@ impl ProtocolHandler for Acceptor {
 		};
 
 		tracing::trace!(
-			consumer_id = %Short(&remote_peer_id),
-			consumer_info = %Short(info),
+			consumer_id = %Short(peer.id()),
+			consumer_info = %Short(peer),
 			"new consumer connection",
 		);
 
@@ -97,7 +97,7 @@ impl ProtocolHandler for Acceptor {
 			.await
 			.inspect_err(|e| {
 				tracing::debug!(
-					consumer_id = %Short(&remote_peer_id),
+					consumer_id = %Short(peer.id()),
 					error = %e,
 					"Failed to receive consumer handshake",
 				);
@@ -107,7 +107,7 @@ impl ProtocolHandler for Acceptor {
 		// Lookup the fanout sink for the requested stream id
 		let Some(sink) = self.sinks.open(handshake.stream_id) else {
 			tracing::debug!(
-				consumer_id = %Short(&remote_peer_id),
+				consumer_id = %Short(peer.id()),
 				stream_id = %handshake.stream_id,
 				"Consumer requesting unavailable stream",
 			);
@@ -125,7 +125,7 @@ impl ProtocolHandler for Acceptor {
 
 		// pass the connection to the stream-specific [`SinkHandle`]
 		// to handle the initiation of the data stream with this remote consumer.
-		sink.accept(link, handshake.criteria);
+		sink.accept(link, handshake.criteria, peer.clone());
 		Ok(())
 	}
 }

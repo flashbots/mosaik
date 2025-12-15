@@ -3,6 +3,7 @@ use {
 	backoff::{ExponentialBackoff, backoff::Backoff},
 	core::fmt::Debug,
 	derive_builder::Builder,
+	std::sync::Arc,
 };
 
 /// Configuration options for the streams subsystem.
@@ -10,14 +11,12 @@ use {
 #[builder(pattern = "owned", setter(prefix = "with"))]
 #[builder_struct_attr(doc(hidden))]
 pub struct Config {
-	/// The size of the producer buffer.
-	#[builder(default = "1024")]
-	pub producer_buffer_size: usize,
-
-	/// The backoff policy for retrying stream connections.
+	/// The backoff policy for retrying stream subscription connections on
+	/// recoverable failures. This is the default policy used by consumers
+	/// unless overridden per-consumer via the consumer builder.
 	#[builder(
 		setter(custom),
-		default = "Box::new(|| Box::new(ExponentialBackoff::default()))"
+		default = "Arc::new(|| Box::new(ExponentialBackoff::default()))"
 	)]
 	pub backoff: BackoffFactory,
 }
@@ -36,8 +35,7 @@ impl ConfigBuilder {
 		mut self,
 		backoff: B,
 	) -> Self {
-		let backoff = backoff;
-		self.backoff = Some(Box::new(move || Box::new(backoff.clone())));
+		self.backoff = Some(Arc::new(move || Box::new(backoff.clone())));
 		self
 	}
 }
@@ -45,7 +43,6 @@ impl ConfigBuilder {
 impl core::fmt::Debug for Config {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		f.debug_struct("Config")
-			.field("producer_buffer_size", &self.producer_buffer_size)
 			.field("backoff", &"<backoff factory>")
 			.finish()
 	}
@@ -54,12 +51,11 @@ impl core::fmt::Debug for Config {
 impl core::fmt::Debug for ConfigBuilder {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		f.debug_struct("Config")
-			.field("producer_buffer_size", &self.producer_buffer_size)
 			.field("backoff", &"<backoff factory>")
 			.finish()
 	}
 }
 
-pub type BackoffFactory = Box<
+pub type BackoffFactory = Arc<
 	dyn Fn() -> Box<dyn Backoff + Send + Sync + 'static> + Send + Sync + 'static,
 >;

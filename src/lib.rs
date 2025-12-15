@@ -10,14 +10,9 @@ pub mod network;
 pub mod primitives;
 pub mod streams;
 
-pub use network::{Network, NetworkId, PeerId};
-
-#[cfg(feature = "test-utils")]
-pub mod test_utils;
-
-#[doc(hidden)]
 pub use {
 	futures,
 	iroh::{self, SecretKey, Signature},
+	network::{Network, NetworkId, PeerId},
 	streams::{Criteria, Datum, StreamId},
 };

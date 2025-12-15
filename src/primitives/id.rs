@@ -27,8 +27,17 @@ pub type Tag = UniqueId;
 
 impl<T: AsRef<str>> From<T> for UniqueId {
 	fn from(s: T) -> Self {
-		let hash = Sha3_256::digest(s.as_ref());
-		UniqueId(hash.into())
+		let s = s.as_ref();
+		// if the string is already a 32-byte hex string, decode it directly
+		// otherwise, hash it to produce the unique id
+		match hex::decode(s) {
+			Ok(b) if b.len() == 32 => {
+				let mut array = [0u8; 32];
+				array.copy_from_slice(&b);
+				UniqueId(array)
+			}
+			_ => UniqueId(Sha3_256::digest(s).into()),
+		}
 	}
 }
 

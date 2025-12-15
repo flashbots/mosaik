@@ -231,7 +231,7 @@ impl WorkerLoop {
 	) -> Result<(), Error> {
 		match command {
 			WorkerCommand::DialPeers(peers, resp) => {
-				self.announce.dial(peers);
+				self.announce.dial(peers).await;
 				let _ = resp.send(());
 			}
 			WorkerCommand::AcceptCatalogSync(connection) => {

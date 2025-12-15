@@ -1,6 +1,7 @@
 use {
 	super::{
-		super::{Config, Datum, StreamId},
+		super::{Datum, StreamId},
+		builder::ProducerConfig,
 		worker::{Handle, WorkerLoop},
 	},
 	crate::{discovery::Discovery, network::LocalNode},
@@ -20,9 +21,6 @@ pub(in crate::streams) struct Sinks {
 	/// subsystem.
 	pub local: LocalNode,
 
-	/// Configuration for the streams subsystem.
-	pub config: Arc<Config>,
-
 	/// The discovery system used to announce newly created streams.
 	pub discovery: Discovery,
 
@@ -35,12 +33,10 @@ impl Sinks {
 	/// Creates a new empty Sinks map.
 	pub(in crate::streams) fn new(
 		local: LocalNode,
-		config: Arc<Config>,
 		discovery: Discovery,
 	) -> Self {
 		Self {
 			local,
-			config,
 			discovery,
 			active: Arc::new(DashMap::new()),
 		}
@@ -49,19 +45,19 @@ impl Sinks {
 
 impl Sinks {
 	/// Given a stream id, opens or creates the shared fanout sink for that
-	/// stream. If the sink already exists, it is returned. Otherwise, a new sink
-	/// is created and returned and advertised via the discovery system.
-	///
-	/// Each active stream id sink has a corresponding entry in the local node's
-	/// [`PeerEntry`](crate::discovery::PeerEntry) that is used to advertise the
-	/// stream to remote peers.
-	pub fn open_or_create<D: Datum>(&self) -> SinkHandle {
+	/// stream. If no sink for this stream id exists, a new one is created with
+	/// the builder's configuration. Otherwise an error is returned containing
+	/// the existing sink created using the original configuration.
+	pub fn create<D: Datum>(
+		&self,
+		config: ProducerConfig,
+	) -> Result<SinkHandle, SinkHandle> {
 		let stream_id = D::stream_id();
 		match self.active.entry(stream_id) {
 			Entry::Vacant(entry) => {
 				// Create a new fanout sink worker loop for this stream id
 				// and insert it into the active map, then return a handle to it.
-				let sink = WorkerLoop::<D>::spawn(self);
+				let sink = WorkerLoop::<D>::spawn(self, config);
 				let handle = entry.insert(sink.into()).clone();
 
 				// Update our local peer entry in discovery to include this stream id
@@ -70,9 +66,9 @@ impl Sinks {
 					.discovery
 					.update_local_entry(move |me| me.add_streams(stream_id));
 
-				handle.clone()
+				Ok(handle.clone())
 			}
-			Entry::Occupied(entry) => entry.get().clone(),
+			Entry::Occupied(entry) => Err(entry.get().clone()),
 		}
 	}
 

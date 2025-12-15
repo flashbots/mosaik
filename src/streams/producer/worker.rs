@@ -1,17 +1,27 @@
 use {
 	super::{
-		super::{Config, Criteria, Datum, StreamId, Streams, accept::StartStream},
+		super::{
+			Criteria,
+			Datum,
+			NotAllowed,
+			StreamId,
+			Streams,
+			accept::StartStream,
+		},
 		Producer,
 		Sinks,
 		When,
+		builder::ProducerConfig,
 	},
 	crate::{
+		discovery::PeerEntry,
 		network::link::{GracefulShutdown, Link},
-		primitives::Short,
+		primitives::{Bytes, Short},
 	},
-	core::any::Any,
+	bincode::{config::standard, serde::encode_to_vec},
+	core::{any::Any, cell::OnceCell},
+	futures::future::join_all,
 	slotmap::DenseSlotMap,
-	std::sync::Arc,
 	tokio::sync::mpsc,
 	tokio_util::sync::CancellationToken,
 };
@@ -38,7 +48,7 @@ pub(in crate::streams) struct Handle {
 	/// This is populated by the [`Acceptor`] when a remote peer requests to
 	/// subscribe to this stream and then passed to the worker loop to be added
 	/// as a new subscription.
-	accepted: mpsc::UnboundedSender<(Link<Streams>, Criteria)>,
+	accepted: mpsc::UnboundedSender<(Link<Streams>, Criteria, PeerEntry)>,
 }
 
 impl Handle {
@@ -46,13 +56,7 @@ impl Handle {
 	/// sink worker loop.
 	pub fn sender<D: Datum>(&self) -> Producer<D> {
 		// Validate that the stream id matches the expected datum type
-		assert_eq!(
-			self.stream_id,
-			D::stream_id(),
-			"StreamId mismatch: expected {}, got {}",
-			self.stream_id,
-			D::stream_id()
-		);
+		assert_eq!(self.stream_id, D::stream_id(), "StreamId mismatch");
 
 		// Downcast the type erased sender channel to the expected type
 		let data_tx = self
@@ -68,10 +72,15 @@ impl Handle {
 	/// By the time the connection is accepted, the [`Acceptor`] has already
 	/// decoded the handshake message and opened a transport-level stream with
 	/// the remote peer.
-	pub fn accept(&self, link: Link<Streams>, criteria: Criteria) {
+	pub fn accept(
+		&self,
+		link: Link<Streams>,
+		criteria: Criteria,
+		peer: PeerEntry,
+	) {
 		self
 			.accepted
-			.send((link, criteria))
+			.send((link, criteria, peer))
 			.expect("worker loop has shut down");
 	}
 }
@@ -84,8 +93,8 @@ impl Handle {
 /// There is an instance of this struct for each active stream id that has
 /// at least one producer associated with it.
 pub(super) struct WorkerLoop<D: Datum> {
-	/// Streams-wide configuration options of this node.
-	config: Arc<Config>,
+	/// Configuration for this producer sink.
+	config: ProducerConfig,
 
 	/// Cancellation token triggered when the worker loop should shut down.
 	/// This token is derived from the local node's termination token and will
@@ -104,18 +113,17 @@ pub(super) struct WorkerLoop<D: Datum> {
 	///
 	/// Remote peers that arrive here are past the handshake phase and have an
 	/// open transport-level stream.
-	accepted: mpsc::UnboundedReceiver<(Link<Streams>, Criteria)>,
+	accepted: mpsc::UnboundedReceiver<(Link<Streams>, Criteria, PeerEntry)>,
 }
 
 impl<D: Datum> WorkerLoop<D> {
 	/// Spawns a new fanout sink worker loop for the given stream id.
-	pub(super) fn spawn(sinks: &Sinks) -> Handle {
-		let config = Arc::clone(&sinks.config);
+	pub(super) fn spawn(sinks: &Sinks, config: ProducerConfig) -> Handle {
 		let cancel = sinks.local.termination().child_token();
 
 		let stream_id = D::stream_id();
 		let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
-		let (data_tx, data_rx) = mpsc::channel(config.producer_buffer_size);
+		let (data_tx, data_rx) = mpsc::channel(config.buffer_size);
 
 		let worker = WorkerLoop::<D> {
 			config,
@@ -149,14 +157,14 @@ impl<D: Datum> WorkerLoop<D> {
 
 				// Triggered when [`Acceptor`] accepts a new connection from a
 				// remote consumer
-				Some((link, criteria)) = self.accepted.recv() => {
-					self.accept(link, criteria).await;
+				Some((link, criteria, peer)) = self.accepted.recv() => {
+					self.accept(link, criteria, peer).await;
 				}
 
 				// Triggered when a new datum is produced for this stream
 				// by the public api via the [`Producer`] handle.
 				Some(datum) = self.data_rx.recv() => {
-					self.fanout(datum);
+					self.fanout(datum).await;
 				}
 			}
 		}
@@ -164,11 +172,62 @@ impl<D: Datum> WorkerLoop<D> {
 
 	/// Forwards the given datum to all active remote consumers that match the
 	/// criteria.
-	fn fanout(&mut self, _datum: D) {
-		tracing::warn!("implement producer fanout logic");
+	async fn fanout(&mut self, item: D) {
+		let bytes = OnceCell::<Bytes>::new();
+		let mut sends = Vec::with_capacity(self.active.len());
+		for (sub_id, subscription) in &mut self.active {
+			if subscription.criteria.matches(&item) {
+				let bytes = bytes.get_or_init(|| {
+					// Serialize the datum only once for all matching consumers,
+					// if there is at least one consumer with criteria that matches.
+					encode_to_vec(&item, standard())
+						.expect("Failed to serialize datum")
+						.into()
+				});
+
+				// SAFETY: `item` is properly serialized into `bytes` above.
+				let send_fut = unsafe { subscription.link.send_raw(bytes.clone()) };
+				sends.push(async move { (send_fut.await, sub_id) });
+			}
+		}
+
+		// Await all send operations to complete
+		let results = join_all(sends).await;
+		for (res, _) in results {
+			if let Err(reason) = res {
+				tracing::warn!(
+					stream_id = %Short(D::stream_id()),
+					reason = %reason,
+					"error sending datum to consumer",
+				);
+				// Remove the failed subscription
+				todo!()
+			}
+		}
 	}
 
-	async fn accept(&mut self, link: Link<Streams>, criteria: Criteria) {
+	async fn accept(
+		&mut self,
+		link: Link<Streams>,
+		criteria: Criteria,
+		peer: PeerEntry,
+	) {
+		// Check if we should accept this consumer based on the auth predicate
+		if !(self.config.accept_if)(&peer) {
+			tracing::debug!(
+				consumer_id = %Short(&link.remote_id()),
+				stream_id = %D::stream_id(),
+				criteria = ?criteria,
+				peer = %Short(&peer),
+				"rejected new consumer",
+			);
+
+			// Close the link with `NotAllowed` reason, this peer is not
+			// authorized to subscribe to this stream.
+			let _ = link.close(NotAllowed).await;
+			return;
+		}
+
 		tracing::info!(
 			consumer_id = %Short(&link.remote_id()),
 			stream_id = %D::stream_id(),
@@ -188,8 +247,11 @@ impl<D: Datum> WorkerLoop<D> {
 			return;
 		}
 
-		let subscription = Subscription { link, criteria };
-		self.active.insert(subscription);
+		self.active.insert(Subscription {
+			link,
+			criteria,
+			peer,
+		});
 	}
 
 	/// Gracefully shuts down the worker loop by closing all active
@@ -233,4 +295,8 @@ struct Subscription {
 
 	/// The stream subscription criteria for this consumer.
 	criteria: Criteria,
+
+	/// Snapshot of the remote consumer peer entry as known at the time of
+	/// subscription creation.
+	peer: PeerEntry,
 }

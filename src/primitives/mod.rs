@@ -5,10 +5,14 @@ mod fmt;
 mod id;
 mod iter;
 
+/// Public API re-exported byte types.
+pub use bytes::{Bytes, BytesMut};
+#[doc(hidden)]
+pub use fmt::*;
 /// Public API re-exported primitives.
 pub use id::{Tag, UniqueId};
 /// Internal primitives.
-pub(crate) use {channel::UnboundedChannel, fmt::*, iter::IntoIterOrSingle};
+pub(crate) use {channel::UnboundedChannel, iter::IntoIterOrSingle};
 
 /// Used internally as a sentinel type for generic parameters.
 #[doc(hidden)]

@@ -9,7 +9,7 @@ use {
 	},
 	core::net::SocketAddr,
 	derive_builder::Builder,
-	iroh::{Endpoint, protocol::Router},
+	iroh::{Endpoint, discovery::mdns::MdnsDiscoveryBuilder, protocol::Router},
 	std::collections::BTreeSet,
 };
 
@@ -17,14 +17,23 @@ use {
 #[derive(Debug, Builder)]
 #[builder(
 	pattern = "owned",
-	name = "NetworkBuilder",
-	setter(prefix = "with"),
-	build_fn(private, name = "compile")
+	name = NetworkBuilder,
+	setter(prefix = with),
+	build_fn(private, name = compile)
 )]
 pub struct NetworkConfig {
 	/// Creates a new network builder with the given network ID.
 	#[builder(setter(into))]
 	network_id: NetworkId,
+
+	/// Configures the use of relay servers for the network instance.
+	/// This affects the ability to traverse NATs and firewalls.
+	#[builder(default = "iroh::RelayMode::Default")]
+	relay_mode: iroh::RelayMode,
+
+	/// Enables mDNS discovery for local network peer discovery.
+	#[builder(default = "false")]
+	mdns_discovery: bool,
 
 	/// Sets the local address for the network instance.
 	/// This can be called multiple times to bind to multiple addresses.
@@ -110,8 +119,14 @@ impl NetworkBuilder {
 /// Internal helpers
 impl NetworkConfig {
 	async fn bind_endpoint(&self) -> Result<Endpoint, Error> {
-		let mut endpoint_builder =
-			Endpoint::builder().secret_key(self.secret_key.clone());
+		let mut endpoint_builder = Endpoint::builder()
+			.secret_key(self.secret_key.clone())
+			.relay_mode(self.relay_mode.clone());
+
+		if self.mdns_discovery {
+			endpoint_builder =
+				endpoint_builder.discovery(MdnsDiscoveryBuilder::default());
+		}
 
 		for addr in &self.addresses {
 			match addr {
@@ -123,6 +138,7 @@ impl NetworkConfig {
 				}
 			}
 		}
+
 		Ok(endpoint_builder.bind().await?)
 	}
 }

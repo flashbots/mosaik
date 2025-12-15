@@ -78,8 +78,15 @@ impl Streams {
 	///
 	/// For more advanced configuration, use [`Streams::producer`] to get a
 	/// [`producer::Builder`] that can be customized.
+	///
+	/// If a producer for the given datum type already exists, it is returned
+	/// instead of creating a new one and all the configuration set by the first
+	/// producer is retained.
 	pub fn produce<D: Datum>(&self) -> Producer<D> {
-		self.producer().build()
+		match producer::Builder::new(self).build() {
+			Ok(producer) => producer,
+			Err(producer::BuilderError::AlreadyExists(existing)) => existing,
+		}
 	}
 
 	/// Creates a new [`producer::Builder`] for the given data type `D` to
@@ -113,12 +120,11 @@ impl Streams {
 		discovery: Discovery,
 		config: Config,
 	) -> Self {
-		let config = Arc::new(config);
 		Self {
 			local: local.clone(),
-			config: Arc::clone(&config),
+			config: Arc::new(config),
 			discovery: discovery.clone(),
-			sinks: Arc::new(Sinks::new(local, config, discovery)),
+			sinks: Arc::new(Sinks::new(local, discovery)),
 		}
 	}
 }
@@ -143,3 +149,7 @@ link::make_close_reason!(
 link::make_close_reason!(
 	/// The requested stream was not found on the producer node.
 	struct StreamNotFound, 502);
+
+link::make_close_reason!(
+	/// The remote peer is not allowed to subscribe to the requested stream.
+	struct NotAllowed, 503);

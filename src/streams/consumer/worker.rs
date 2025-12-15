@@ -1,6 +1,6 @@
 use {
 	super::{
-		super::{Config, Criteria, Streams},
+		super::Streams,
 		Consumer,
 		Datum,
 		When,
@@ -10,6 +10,7 @@ use {
 		discovery::{Catalog, Discovery},
 		network::{LocalNode, PeerId},
 		primitives::Short,
+		streams::consumer::builder::ConsumerConfig,
 	},
 	core::pin::Pin,
 	futures::{Stream, StreamExt, future::JoinAll, stream::SelectAll},
@@ -27,14 +28,13 @@ pub(super) type ActiveReceivers = im::HashMap<PeerId, Arc<ReceiverHandle>>;
 /// Notes:
 /// - Individual worker tasks are spawned for each subscribed producer peer.
 pub(super) struct ConsumerWorker<D: Datum> {
-	/// Configuration for the streams subsystem.
-	config: Arc<Config>,
+	/// The consumer-specific configuration as assembled by
+	/// `Network::streams().consumer()`. If some configuration values are not
+	/// set, they default to the values from `Streams` config.
+	config: Arc<ConsumerConfig>,
 
 	/// A handle to the local node that is used to establish new connections.
 	local: LocalNode,
-
-	/// The stream subscription criteria for this consumer.
-	criteria: Criteria,
 
 	/// The discovery system handle used to monitor known peers that are
 	/// producing the desired stream and also to trigger catalog syncs when
@@ -61,9 +61,9 @@ impl<D: Datum> ConsumerWorker<D> {
 	/// receive data and query status.
 	///
 	/// The worker handle will terminate when the returned consumer is dropped.
-	pub fn spawn(streams: &Streams, criteria: Criteria) -> Consumer<D> {
+	pub fn spawn(config: ConsumerConfig, streams: &Streams) -> Consumer<D> {
+		let config = Arc::new(config);
 		let local = streams.local.clone();
-		let config = Arc::clone(&streams.config);
 		let cancel = local.termination().child_token();
 		let active = watch::Sender::new(ActiveReceivers::new());
 		let (data_tx, data_rx) = mpsc::unbounded_channel();
@@ -72,7 +72,6 @@ impl<D: Datum> ConsumerWorker<D> {
 			config,
 			local,
 			data_tx,
-			criteria,
 			discovery: streams.discovery.clone(),
 			cancel: cancel.clone(),
 			active: active.clone(),
@@ -130,6 +129,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		let stream_id = D::stream_id();
 
 		// identify all producers that are producing the desired stream id
+		// and satisfy the user-provided additional eligibility criteria.
 		let producers = latest
 			.peers()
 			.filter(|peer| peer.streams().contains(&stream_id));
@@ -144,6 +144,15 @@ impl<D: Datum> ConsumerWorker<D> {
 					"discovered new producer"
 				);
 
+				if !(self.config.only_from)(producer) {
+					tracing::debug!(
+						stream_id = %stream_id,
+						producer_id = %Short(producer.id()),
+						"skipping producer that does not satisfy eligibility criteria"
+					);
+					continue;
+				}
+
 				// spawn a new receiver worker for this producer
 				let receiver = Receiver::spawn(
 					producer.clone(),
@@ -151,16 +160,16 @@ impl<D: Datum> ConsumerWorker<D> {
 					&self.discovery,
 					&self.cancel,
 					&self.data_tx,
-					&self.config,
-					&self.criteria,
+					Arc::clone(&self.config),
 				);
 
 				// subscribe to the receiver's status updates
 				let peer_id = *producer.id();
-				let status_stream = WatchStream::new(receiver.state().clone());
-				self
-					.status_rx
-					.push(status_stream.map(move |state| (state, peer_id)).boxed());
+				self.status_rx.push(
+					WatchStream::new(receiver.state().clone())
+						.map(move |state| (state, peer_id))
+						.boxed(),
+				);
 
 				// track the active receiver handle, when workers terminate they will
 				// transition into the terminated state and be removed from the active
@@ -184,7 +193,7 @@ impl<D: Datum> ConsumerWorker<D> {
 			tracing::info!(
 				producer_id = %Short(&peer_id),
 				stream_id = %D::stream_id(),
-				criteria = ?self.criteria,
+				criteria = ?self.config.criteria,
 				"connection with producer terminated"
 			);
 		}
@@ -205,7 +214,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		tracing::debug!(
 			stream_id = %D::stream_id(),
 			producers_count = producers_count,
-			criteria = ?self.criteria,
+			criteria = ?self.config.criteria,
 			"consumer terminated"
 		);
 	}

@@ -1,6 +1,6 @@
 use {
 	super::{LocalNode, PeerId},
-	crate::primitives::Short,
+	crate::primitives::{Bytes, Short},
 	bincode::{
 		config::standard,
 		error::{DecodeError, EncodeError},
@@ -263,7 +263,25 @@ impl<P: Protocol> Link<P> {
 			close_connection(&self.connection, ProtocolViolation).await;
 			return Err(e.into());
 		}
-		let fut = self.stream.send(writer.into_inner().freeze());
+
+		// SAFETY: the bytes written into the writer are guaranteed to be
+		// well-formed bincode serialized `D`.
+		unsafe { self.send_raw(writer.into_inner().freeze()).await }
+	}
+
+	/// Sends raw bytes over the link without serialization.
+	///
+	/// It is the caller's responsibility to ensure that the bytes
+	/// are properly formatted according to the protocol's expectations.
+	///
+	/// This variant of `send` is unsafe because it is intended for advanced
+	/// use cases where the caller needs to optimize performance by avoiding
+	/// serialization overhead. Improper use may lead to protocol violations.
+	pub async unsafe fn send_raw(
+		&mut self,
+		bytes: Bytes,
+	) -> Result<(), SendError> {
+		let fut = self.stream.send(bytes);
 		let Some(send_result) = self.cancel.run_until_cancelled(fut).await else {
 			close_connection(&self.connection, Cancelled).await;
 			return Err(SendError::Cancelled);

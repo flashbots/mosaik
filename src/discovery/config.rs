@@ -3,12 +3,13 @@ use {
 		network::PeerId,
 		primitives::{IntoIterOrSingle, Tag},
 	},
+	core::time::Duration,
 	derive_builder::Builder,
 	serde::{Deserialize, Serialize},
 };
 
 /// Configuration options for the discovery subsystem.
-#[derive(Debug, Clone, Builder, Serialize, Deserialize, PartialEq, Hash)]
+#[derive(Debug, Clone, Builder, Serialize, Deserialize, PartialEq)]
 #[builder(pattern = "owned", setter(prefix = "with"), derive(Debug, Clone))]
 #[builder_struct_attr(doc(hidden))]
 pub struct Config {
@@ -24,6 +25,14 @@ pub struct Config {
 	/// A list of tags to advertise in the local peer entry on startup.
 	#[builder(default = "Vec::new()", setter(custom))]
 	pub tags: Vec<Tag>,
+
+	/// The interval at which to announce our presence to the network.
+	#[builder(default = "Duration::from_secs(15)")]
+	pub announce_interval: Duration,
+
+	/// The maximum jitter factor to apply to the announce interval.
+	#[builder(default = "0.5")]
+	pub announce_jitter: f32,
 }
 
 impl Config {

@@ -46,6 +46,15 @@ impl When {
 			})),
 		}
 	}
+
+	/// Returns a future that resolves when the consumer does not have any
+	/// subscriptions to producers. This can be customized and combined with other
+	/// conditions using the methods on the returned [`SubscriptionCondition`].
+	///
+	/// This is equivalent to calling `subscribed().not()`.
+	pub fn unsubscribed(&self) -> SubscriptionCondition {
+		self.subscribed().not()
+	}
 }
 /// A future that resolves when a consumer's status meets a certain condition.
 ///

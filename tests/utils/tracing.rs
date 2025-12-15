@@ -1,9 +1,3 @@
-use core::{
-	pin::Pin,
-	task::{Context, Poll, Waker},
-};
-
-#[cfg(feature = "test-utils")]
 #[ctor::ctor]
 fn init_test_logging() {
 	use tracing_subscriber::{filter::filter_fn, prelude::*};
@@ -18,7 +12,7 @@ fn init_test_logging() {
 		};
 
 		// disable noisy modules from dependencies
-		let prefix_blacklist: &[&'static str] = &[
+		let muted: &[&'static str] = &[
 			"iroh::",
 			"iroh_",
 			"rustls",
@@ -30,15 +24,23 @@ fn init_test_logging() {
 			"events.net.relay.connected",
 			"netwatch",
 			"mio",
+			"acto",
+			"swarm_discovery",
 		];
+
+		// disable disabling noisy modules tracing
+		let unmute = std::env::var("TEST_TRACE_UNMUTE")
+			.map(|val| val == "1" || val == "on" || val == "yes")
+			.unwrap_or(false);
 
 		let _ = tracing_subscriber::registry()
 			.with(tracing_subscriber::fmt::layer())
 			.with(filter_fn(move |metadata| {
 				metadata.level() <= &level
-					&& !prefix_blacklist
-						.iter()
-						.any(|prefix| metadata.target().starts_with(prefix))
+					&& (unmute
+						|| !muted
+							.iter()
+							.any(|prefix| metadata.target().starts_with(prefix)))
 			}))
 			.try_init();
 
@@ -50,13 +52,4 @@ fn init_test_logging() {
 			std::process::abort();
 		}));
 	}
-}
-
-pub fn poll_once<T, F>(f: &mut F) -> Poll<T>
-where
-	F: Future<Output = T> + Unpin,
-{
-	let waker = Waker::noop();
-	let mut context = Context::from_waker(waker);
-	Pin::new(f).poll(&mut context)
 }

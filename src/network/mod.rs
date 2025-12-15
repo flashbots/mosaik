@@ -18,6 +18,7 @@ mod local;
 pub use {
 	config::{NetworkBuilder, NetworkConfig},
 	error::Error as NetworkError,
+	iroh::RelayMode,
 	local::LocalNode,
 };
 

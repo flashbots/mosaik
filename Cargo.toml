@@ -65,7 +65,7 @@ chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
-iroh = "0.95"
+iroh = { version = "0.95", features = ["discovery-local-network"] }
 iroh-gossip = "0.95"
 iroh-blobs = "0.97"
 iroh-docs = "0.95"
@@ -86,8 +86,12 @@ exclude.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "mosaik"
+required-features = ["cli"]
+
 [features]
-test-utils = ["tracing-subscriber", "ctor"]
+cli = ["clap", "tracing-subscriber"]
 
 [dependencies]
 futures.workspace = true
@@ -107,7 +111,7 @@ thiserror.workspace = true
 tokio-stream.workspace = true
 n0-error.workspace = true
 
-derive_more = { version = "2.0", features = ["full"] }
+derive_more = { version = "2.1", features = ["full"] }
 sha3 = "0.10"
 hmac = "0.12"
 hex = "0.4"
@@ -115,14 +119,15 @@ im = { version = "15.1.0", features = ["serde"] }
 parking_lot = "0.12"
 semver = { version = "1.0", features = ["serde"] }
 dashmap = "6.1"
-slotmap = "1.0"
+slotmap = "1.1"
 derive_builder = "0.20.2"
 backoff = { version = "0.4", features = ["futures", "tokio"] }
 
-# optional dependencies for testing
+# CLI only dependencies
+clap = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
-ctor = { version = "0.6", optional = true }
 
 [dev-dependencies]
-mosaik = { workspace = true, features = ["test-utils"] }
 rblib = { workspace = true, features = ["test-utils"] }
+tracing-subscriber = { workspace = true }
+ctor = { version = "0.6" }
