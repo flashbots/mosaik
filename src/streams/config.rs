@@ -1,7 +1,7 @@
 pub use backoff;
 use {
-	backoff::{ExponentialBackoff, backoff::Backoff},
-	core::fmt::Debug,
+	backoff::{ExponentialBackoffBuilder, backoff::Backoff},
+	core::{fmt::Debug, time::Duration},
 	derive_builder::Builder,
 	std::sync::Arc,
 };
@@ -13,10 +13,13 @@ use {
 pub struct Config {
 	/// The backoff policy for retrying stream subscription connections on
 	/// recoverable failures. This is the default policy used by consumers
-	/// unless overridden per-consumer via the consumer builder.
+	/// unless overridden per-consumer via the consumer builder. The default
+	/// is an exponential backoff with a maximum elapsed time of 5 minutes.
 	#[builder(
 		setter(custom),
-		default = "Arc::new(|| Box::new(ExponentialBackoff::default()))"
+		default = "Arc::new(|| Box::new(ExponentialBackoffBuilder::default() \
+		           .with_max_elapsed_time(Some(Duration::from_secs(300))) \
+		           .build()))"
 	)]
 	pub backoff: BackoffFactory,
 }

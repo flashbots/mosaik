@@ -127,3 +127,55 @@ async fn manual_sync_trigger() -> anyhow::Result<()> {
 
 	Ok(())
 }
+
+#[tokio::test]
+async fn different_networks_are_isolated() -> anyhow::Result<()> {
+	let netid1 = NetworkId::random();
+	let netid2 = NetworkId::random();
+
+	let n0 = Network::new(netid1).await?;
+	let n1 = Network::new(netid1).await?;
+
+	let n2 = Network::new(netid2).await?;
+	let n3 = Network::new(netid2).await?;
+	let n4 = Network::new(netid2).await?;
+
+	// perform full mesh syncs within each network
+	sync_all(&[&n0, &n1, &n2, &n3, &n4]).await?;
+
+	// ensure that peers on the same network have each other in their catalogs,
+	// but peers on different networks do not appear in each other's catalogs
+	assert_eq!(n0.discovery().catalog().peers_count(), 1);
+	assert!(n0.discovery().catalog().get(&n1.local().id()).is_some());
+
+	assert_eq!(n1.discovery().catalog().peers_count(), 1);
+	assert!(n1.discovery().catalog().get(&n0.local().id()).is_some());
+
+	assert_eq!(n2.discovery().catalog().peers_count(), 2);
+	assert!(n2.discovery().catalog().get(&n3.local().id()).is_some());
+	assert!(n2.discovery().catalog().get(&n4.local().id()).is_some());
+
+	assert_eq!(n3.discovery().catalog().peers_count(), 2);
+	assert!(n3.discovery().catalog().get(&n2.local().id()).is_some());
+	assert!(n3.discovery().catalog().get(&n4.local().id()).is_some());
+
+	assert_eq!(n4.discovery().catalog().peers_count(), 2);
+	assert!(n4.discovery().catalog().get(&n2.local().id()).is_some());
+	assert!(n4.discovery().catalog().get(&n3.local().id()).is_some());
+
+	Ok(())
+}
+
+async fn sync_all(networks: &[&Network]) -> anyhow::Result<()> {
+	for i in 0..networks.len() {
+		for j in 0..networks.len() {
+			if i != j {
+				networks[i]
+					.discovery()
+					.sync_with(networks[j].local().id())
+					.await?;
+			}
+		}
+	}
+	Ok(())
+}
