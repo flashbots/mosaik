@@ -3,12 +3,11 @@ use {
 	core::{convert::Infallible, fmt, str::FromStr},
 	derive_more::Deref,
 	serde::{Deserialize, Deserializer, Serialize, de},
-	sha3::{Digest, Sha3_256},
 };
 
 /// This type is used to uniquely identify various entities in the Mosaik
 /// ecosystem such as streams, peers, and networks. It is represented as a
-/// 32-byte array, typically derived from a SHA3-256 hash of some preimage.
+/// 32-byte array, typically derived from a Blake3 hash of some preimage.
 ///
 /// All unique ids in Mosaik can be derived from strings and byte slices using
 /// the `From` trait implementations provided.
@@ -18,8 +17,8 @@ use {
 ///    represented as hex-encoded strings.
 ///  - when serialized to binary formats (e.g., bincode), `UniqueId`s are
 ///    represented as raw 32-byte arrays.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deref)]
-pub struct UniqueId([u8; 32]);
+#[derive(Clone, Copy, Deref)]
+pub struct UniqueId(blake3::Hash);
 
 /// A tag is an opaque 32-byte hash that can be used to label peers, networks,
 /// resources and other things. Its use is context dependent.
@@ -32,30 +31,52 @@ impl<T: AsRef<str>> From<T> for UniqueId {
 		// otherwise, hash it to produce the unique id
 		match hex::decode(s) {
 			Ok(b) if b.len() == 32 => {
-				let mut array = [0u8; 32];
-				array.copy_from_slice(&b);
-				UniqueId(array)
+				UniqueId(blake3::Hash::from_slice(&b).expect("slice is 32 bytes"))
 			}
-			_ => UniqueId(Sha3_256::digest(s).into()),
+			_ => UniqueId(blake3::hash(s.as_bytes())),
 		}
+	}
+}
+
+impl PartialEq for UniqueId {
+	fn eq(&self, other: &Self) -> bool {
+		self.0 == other.0
+	}
+}
+impl Eq for UniqueId {}
+
+impl PartialOrd for UniqueId {
+	fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+		Some(self.cmp(other))
+	}
+}
+impl Ord for UniqueId {
+	fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+		self.0.as_bytes().cmp(other.0.as_bytes())
+	}
+}
+
+impl core::hash::Hash for UniqueId {
+	fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+		self.0.as_bytes().hash(state);
 	}
 }
 
 impl AsRef<[u8]> for UniqueId {
 	fn as_ref(&self) -> &[u8] {
-		&self.0
+		self.0.as_bytes()
 	}
 }
 
 impl From<UniqueId> for [u8; 32] {
 	fn from(id: UniqueId) -> Self {
-		id.0
+		*id.0.as_bytes()
 	}
 }
 
 impl From<&UniqueId> for [u8; 32] {
 	fn from(id: &UniqueId) -> Self {
-		id.0
+		*id.0.as_bytes()
 	}
 }
 
@@ -81,13 +102,13 @@ impl FromStr for UniqueId {
 
 impl fmt::Debug for UniqueId {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}", hex::encode(self.0))
+		write!(f, "{}", self.0.to_hex())
 	}
 }
 
 impl fmt::Display for UniqueId {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}", Short(&self.0))
+		write!(f, "{}", Short(self.0.as_bytes()))
 	}
 }
 
@@ -97,7 +118,7 @@ impl Serialize for UniqueId {
 		S: serde::Serializer,
 	{
 		if serializer.is_human_readable() {
-			serializer.serialize_str(hex::encode(self.0).as_str())
+			serializer.serialize_str(self.0.to_hex().as_str())
 		} else {
 			self.0.serialize(serializer)
 		}
@@ -111,16 +132,12 @@ impl<'de> Deserialize<'de> for UniqueId {
 	{
 		if deserializer.is_human_readable() {
 			let s = String::deserialize(deserializer)?;
-			let bytes = hex::decode(s).map_err(de::Error::custom)?;
-			if bytes.len() != 32 {
-				return Err(de::Error::custom("invalid length for UniqueId"));
-			}
-			let mut array = [0u8; 32];
-			array.copy_from_slice(&bytes);
-			Ok(UniqueId(array))
+			Ok(UniqueId(
+				blake3::Hash::from_hex(&s).map_err(de::Error::custom)?,
+			))
 		} else {
 			let bytes = <[u8; 32]>::deserialize(deserializer)?;
-			Ok(UniqueId(bytes))
+			Ok(UniqueId(blake3::Hash::from_bytes(bytes)))
 		}
 	}
 }
@@ -128,11 +145,11 @@ impl<'de> Deserialize<'de> for UniqueId {
 impl UniqueId {
 	/// Returns the byte representation of the unique id.
 	pub fn as_bytes(&self) -> &[u8; 32] {
-		&self.0
+		self.0.as_bytes()
 	}
 
 	/// Generates a random unique id.
 	pub fn random() -> Self {
-		UniqueId(rand::random())
+		UniqueId(blake3::Hash::from_bytes(rand::random()))
 	}
 }

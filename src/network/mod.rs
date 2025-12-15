@@ -45,9 +45,9 @@ pub use {
 ///   This can be overridden by providing a specific port in the builder.
 ///
 /// - Mosaik networks are identified by a [`NetworkId`] which is a unique
-///   identifier (a sha3-256 hash of the network name). Nodes can only connect
-///   to other nodes that are part of the same network (i.e. have the same
-///   [`NetworkId`]).
+///   identifier (a blake3 hash of the network string name). Nodes can only
+///   connect to other nodes that are part of the same network (i.e. have the
+///   same [`NetworkId`]).
 pub struct Network {
 	/// The local node instance.
 	/// Maintains the transport layer endpoint and addresses.
@@ -76,7 +76,7 @@ pub struct Network {
 /// This type uniquely identifies a network by its name.
 ///
 /// On the protocol level this is represented by a gossip `TopicId` that is a
-/// 32-byte sha3-256 hash of the network name bytes.
+/// 32-byte blake3 hash of the network string name.
 pub type NetworkId = UniqueId;
 
 /// This type uniquely identifies a peer globally across all Mosaik networks.

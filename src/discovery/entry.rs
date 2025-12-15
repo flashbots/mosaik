@@ -121,14 +121,13 @@ impl PeerEntry {
 		self.version
 	}
 
-	/// Computes a SHA3-356 digest of the `PeerEntry`.
-	pub fn digest(&self) -> [u8; 32] {
-		use sha3::{Digest as _, Sha3_256};
-		let mut hasher = Sha3_256::new();
+	/// Computes a Blake3 digest of the `PeerEntry`.
+	pub fn digest(&self) -> blake3::Hash {
+		let mut hasher = blake3::Hasher::new();
 		#[expect(clippy::missing_panics_doc)]
 		encode_into_std_write(self, &mut hasher, standard())
 			.expect("Failed to encode PeerEntry for digest calculation");
-		hasher.finalize().into()
+		hasher.finalize()
 	}
 
 	/// Returns true if this [`PeerEntry`] is newer than the other based on the
@@ -225,7 +224,8 @@ impl PeerEntry {
 			return Err(Error::InvalidSecretKey(expected_id, actual_id));
 		}
 
-		let signature = secret.sign(&self.digest());
+		let digest = self.digest();
+		let signature = secret.sign(digest.as_bytes());
 
 		Ok(SignedPeerEntry(self, signature))
 	}
@@ -318,7 +318,7 @@ impl SignedPeerEntry {
 	/// valid.
 	fn is_signature_valid(&self) -> bool {
 		let digest = self.0.digest();
-		self.0.id().verify(&digest, &self.1).is_ok()
+		self.0.id().verify(digest.as_bytes(), &self.1).is_ok()
 	}
 
 	/// Verifies the signature of the `SignedPeerEntry`, returning an error if
