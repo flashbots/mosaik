@@ -87,7 +87,7 @@ pub(super) struct Receiver<D: Datum> {
 ///
 /// There should be only one instance of this worker handle per remote
 /// producer peer for a given consumer worker.
-pub struct ReceiverHandle {
+pub(super) struct ReceiverHandle {
 	/// Cancellation token for terminating the receiver worker associated with
 	/// this remote producer. This gets implicitly triggered when the parent
 	/// consumer worker is dropped or the network is shutting down.
@@ -450,6 +450,7 @@ impl<D: Datum> Receiver<D> {
 				// requested stream. If we reach this point it indicates a bug
 				// either in the discovery system or the producer's stream
 				// registration logic.
+				// todo: Revisit this decision later.
 				unrecoverable!("producer does not have the requested stream", e);
 			}
 			(e, Some(reason)) if reason == DifferentNetwork => {
@@ -570,6 +571,7 @@ impl Stats {
 			return None;
 		}
 
+		#[allow(clippy::missing_panics_doc)]
 		let connected_at = DateTime::<Utc>::from_timestamp_millis(ts).expect(
 			"stored connected_at timestamp should always be a valid datetime",
 		);

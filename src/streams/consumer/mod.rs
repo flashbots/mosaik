@@ -2,13 +2,16 @@
 
 use {
 	super::Datum,
-	crate::{primitives::Short, streams::consumer::receiver::ReceiverHandle},
+	crate::{
+		discovery::PeerEntry,
+		primitives::Short,
+		streams::consumer::receiver::ReceiverHandle,
+	},
 	core::{
 		fmt,
 		pin::Pin,
 		task::{Context, Poll},
 	},
-	derive_more::Deref,
 	futures::Stream,
 	std::sync::Arc,
 	tokio::sync::mpsc,
@@ -20,7 +23,11 @@ mod receiver;
 mod when;
 mod worker;
 
-pub use {builder::Builder, when::When};
+pub use {
+	builder::Builder,
+	receiver::{State, Stats},
+	when::When,
+};
 
 /// A local stream consumer handle that allows receiving data from a stream
 /// produced by a remote peer.
@@ -84,8 +91,32 @@ impl<D> Stream for Consumer<D> {
 	}
 }
 
-#[derive(Clone, Deref)]
+/// A handle representing an active subscription to a producer from a specific
+/// consumer instance.
+///
+/// This is used to inspect the state and stats of the subscription.
+#[derive(Clone)]
 pub struct Subscription(Arc<ReceiverHandle>);
+
+impl Subscription {
+	/// Returns the peer entry of the producer this subscription is connected to.
+	///
+	/// The state of the `PeerEntry` reflects the state of the producer at the
+	/// time the subscription was established.
+	pub fn peer(&self) -> &PeerEntry {
+		self.0.peer()
+	}
+
+	/// Returns the current state of the connection.
+	pub fn state(&self) -> State {
+		*self.0.state().borrow()
+	}
+
+	/// Returns the current snapshot of statistics of the subscription.
+	pub fn stats(&self) -> &Stats {
+		self.0.stats()
+	}
+}
 
 impl fmt::Debug for Subscription {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

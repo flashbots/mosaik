@@ -27,6 +27,8 @@ async fn by_tag() -> anyhow::Result<()> {
 
 	// This consumer will only attempt to subscribe to
 	// producers that have 'tag2' in their tags list.
+	// This represents any arbitrary authentication logic based on
+	// peer attributes.
 	let c0_1 = n0
 		.streams()
 		.consumer::<Data1>()
