@@ -31,7 +31,6 @@ mod accept;
 mod config;
 mod criteria;
 mod datum;
-mod when;
 
 // Streams submodules
 pub mod consumer;

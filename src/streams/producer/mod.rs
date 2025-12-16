@@ -1,7 +1,11 @@
 //! Stream Producers
 
 use {
-	super::{Datum, StreamId, status::StreamInfo},
+	super::{
+		Datum,
+		StreamId,
+		status::{ChannelInfo, When},
+	},
 	core::{
 		fmt::Debug,
 		pin::Pin,
@@ -15,7 +19,6 @@ use {
 mod builder;
 mod error;
 mod sink;
-mod when;
 mod worker;
 
 /// Internal API
@@ -24,7 +27,6 @@ pub(super) use sink::Sinks;
 pub use {
 	builder::{Builder, Error as BuilderError},
 	error::Error,
-	when::When,
 };
 
 /// a local stream producer handle for sending data to remote peers.
@@ -84,7 +86,7 @@ impl<D: Datum> Producer<D> {
 	/// consumer that is receiving data from this producer. The peer entry
 	/// stored here reflects the state of the consumer at the time the
 	/// subscription was established.
-	pub fn consumers(&self) -> impl Iterator<Item = StreamInfo> {
+	pub fn consumers(&self) -> impl Iterator<Item = ChannelInfo> {
 		// get the latest snapshot of active subscriptions info
 		// and release lock on the watch channel as soon as possible
 		let active = self.status.active.borrow().clone();

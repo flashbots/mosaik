@@ -1,5 +1,11 @@
 use {
-	crate::{Criteria, PeerId, StreamId, discovery::PeerEntry},
+	crate::{
+		Criteria,
+		PeerId,
+		StreamId,
+		discovery::PeerEntry,
+		primitives::UniqueId,
+	},
 	chrono::{DateTime, Utc},
 	core::{
 		fmt,
@@ -11,6 +17,10 @@ use {
 	std::sync::Arc,
 	tokio::sync::watch,
 };
+
+mod when;
+
+pub use when::When;
 
 /// Real-time statistics about an active stream subscription between a consumer
 /// and a producer pair.
@@ -137,7 +147,7 @@ pub enum State {
 /// Represents an active connection between one consumer and one producer.
 /// This is used to inspect snapshots of the connection state and statistics.
 #[derive(Debug, Clone)]
-pub struct StreamInfo {
+pub struct ChannelInfo {
 	pub(super) stream_id: StreamId,
 	pub(super) criteria: Criteria,
 	pub(super) producer_id: PeerId,
@@ -148,7 +158,7 @@ pub struct StreamInfo {
 }
 
 // Public API
-impl StreamInfo {
+impl ChannelInfo {
 	/// Returns the stream id of the stream this subscription is connected to.
 	pub const fn stream_id(&self) -> &StreamId {
 		&self.stream_id
@@ -199,3 +209,10 @@ impl StreamInfo {
 		self.state() == State::Connected
 	}
 }
+
+/// A map of the latest snapshot of active stream subscriptions.
+///
+/// This is used on both consumer and producer sides to track active streams.
+/// The key of this map is not exposed publicly, but is used internally by
+/// consumers and producers to track and map active subscriptions.
+pub(crate) type ActiveChannelsMap = im::HashMap<UniqueId, ChannelInfo>;

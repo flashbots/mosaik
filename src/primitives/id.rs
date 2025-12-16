@@ -148,6 +148,97 @@ impl UniqueId {
 		self.0.as_bytes()
 	}
 
+	/// Creates a unique id from the given u8 value.
+	pub fn from_u8(n: u8) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[31] = n;
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given u16 value.
+	pub fn from_u16(n: u16) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[30..32].copy_from_slice(&n.to_le_bytes());
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given u32 value.
+	pub fn from_u32(n: u32) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[28..32].copy_from_slice(&n.to_le_bytes());
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given u64 value.
+	pub fn from_u64(n: u64) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[24..32].copy_from_slice(&n.to_le_bytes());
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given u128 value.
+	pub fn from_u128(n: u128) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[16..32].copy_from_slice(&n.to_le_bytes());
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given i8 value.
+	pub fn from_i8(n: i8) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[31] = n.to_le_bytes()[0];
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given i16 value.
+	pub fn from_i16(n: i16) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[30..32].copy_from_slice(&n.to_le_bytes());
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given i32 value.
+	pub fn from_i32(n: i32) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[28..32].copy_from_slice(&n.to_le_bytes());
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given i64 value.
+	pub fn from_i64(n: i64) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[24..32].copy_from_slice(&n.to_le_bytes());
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given i128 value.
+	pub fn from_i128(n: i128) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[16..32].copy_from_slice(&n.to_le_bytes());
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given usize value.
+	pub fn from_usize(n: usize) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[32 - std::mem::size_of::<usize>()..32]
+			.copy_from_slice(&n.to_le_bytes());
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given isize value.
+	pub fn from_isize(n: isize) -> Self {
+		let mut bytes = [0u8; 32];
+		bytes[32 - std::mem::size_of::<isize>()..32]
+			.copy_from_slice(&n.to_le_bytes());
+		UniqueId(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given bytes.
+	pub fn from_bytes(bytes: impl Into<[u8; 32]>) -> Self {
+		UniqueId(blake3::Hash::from_bytes(bytes.into()))
+	}
+
 	/// Generates a random unique id.
 	pub fn random() -> Self {
 		UniqueId(blake3::Hash::from_bytes(rand::random()))

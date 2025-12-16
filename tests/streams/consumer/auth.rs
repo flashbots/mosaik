@@ -55,7 +55,7 @@ async fn by_tag() -> anyhow::Result<()> {
 	// that has the required tag. c0_2 should be subscribed to both p1 and p2
 	// because it has no restrictions.
 	timeout_s(2, c0_1.when().subscribed()).await?;
-	timeout_s(2, c0_2.when().subscribed().to_at_least(2)).await?;
+	timeout_s(2, c0_2.when().subscribed().minimum_of(2)).await?;
 
 	// verify that c0_1 is only subscribed to n1
 	let subs = c0_1.producers().collect::<Vec<_>>();

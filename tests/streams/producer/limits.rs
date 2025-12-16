@@ -44,7 +44,7 @@ async fn max_subs() -> anyhow::Result<()> {
 	tracing::debug!("Full cross-network catalog sync complete");
 
 	// wait for subscriptions to settle
-	timeout_s(3, prod.when().subscribed().by_at_least(MAX_CAPACITY)).await?;
+	timeout_s(3, prod.when().subscribed().minimum_of(MAX_CAPACITY)).await?;
 	tracing::debug!("Producer has reached max subscriptions");
 
 	// should have only 3 subscribers due to limit

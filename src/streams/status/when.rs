@@ -1,5 +1,5 @@
 use {
-	super::worker::ActiveReceivers,
+	super::ActiveChannelsMap,
 	crate::{
 		discovery::PeerEntry,
 		primitives::{IntoIterOrSingle, Tag},
@@ -15,62 +15,65 @@ use {
 	tokio_util::sync::ReusableBoxFuture,
 };
 
-/// Consumer status monitoring
+/// Awaits changes to the channel's status.
 ///
-/// This struct provides access to futures that can be used to await changes
-/// in the consumer's status, such as when it becomes subscribed to producers or
-/// disconnects from them.
+/// This struct provides access to a future that can be used to await when
+/// the channel becomes online and ready to interact with other peers or meets
+/// other subscription conditions.
+#[derive(Clone)]
 pub struct When {
-	/// A one-time set handle that is completed when the consumer worker loop is
-	/// initialized and ready to interact with other peers.
-	pub(super) ready: Arc<SetOnce<()>>,
+	/// A one-time set handle that is completed when the channel is
+	/// online and ready to interact with other peers.
+	pub(crate) ready: Arc<SetOnce<()>>,
 
-	/// Observer for the active receivers map.
-	pub(super) receivers: watch::Receiver<ActiveReceivers>,
+	/// Observer for the most recent version of the active subscriptions info.
+	pub(crate) active: watch::Receiver<ActiveChannelsMap>,
 }
 
 impl When {
-	/// Creates a new `When` instance from the given active receivers observer.
-	pub(super) fn new(
-		active: watch::Receiver<ActiveReceivers>,
+	/// Initialized by consumers and producers for each new stream subscription.
+	pub(crate) fn new(
+		active: watch::Receiver<ActiveChannelsMap>,
 		ready: Arc<SetOnce<()>>,
 	) -> Self {
-		Self {
-			ready,
-			receivers: active,
-		}
+		Self { ready, active }
 	}
 }
 
+// Public API
 impl When {
-	/// Returns a future that resolves when the consumer is ready to interact
-	/// with other peers and has completed its initial setup.
+	/// Returns a future that resolves when the consumer or producer is ready to
+	/// interact with other peers and has completed its initial setup.
 	///
-	/// Resolves immediately if the consumer is already up and running.
+	/// Resolves immediately if the consumer or producer is already up and
+	/// running.
 	pub async fn online(&self) {
 		self.ready.wait().await;
 	}
 
-	/// Returns a future that resolves when the consumer is subscribed to at least
-	/// one producer. This can be customized and combined with other conditions
-	/// using the methods on the returned [`SubscriptionCondition`].
+	/// Returns a future that resolves when the consumer or producer is subscribed
+	/// to at least one peer. This can be customized and combined with other
+	/// conditions using the methods on the returned [`SubscriptionCondition`].
 	pub fn subscribed(&self) -> SubscriptionCondition {
-		let mut receiver = self.receivers.clone();
+		let mut active = self.active.clone();
+		active.mark_changed();
+
 		SubscriptionCondition {
-			active: self.receivers.clone(),
-			min_producers: 1,
+			active: active.clone(),
+			min_peers: 1,
 			was_met: false,
 			is_inverse: false,
 			predicates: Vec::new(),
 			changed_fut: ReusableBoxFuture::new(Box::pin(async move {
-				let _ = receiver.changed().await;
+				let _ = active.changed().await;
 			})),
 		}
 	}
 
-	/// Returns a future that resolves when the consumer does not have any
-	/// subscriptions to producers. This can be customized and combined with other
-	/// conditions using the methods on the returned [`SubscriptionCondition`].
+	/// Returns a future that resolves when the consumer or producer does not have
+	/// any subscriptions. This can be customized and combined with
+	/// other conditions using the methods on the returned
+	/// [`SubscriptionCondition`].
 	///
 	/// This is equivalent to calling `subscribed().not()`.
 	pub fn unsubscribed(&self) -> SubscriptionCondition {
@@ -78,7 +81,8 @@ impl When {
 	}
 }
 
-/// A future that resolves when a consumer's status meets a certain condition.
+/// A future that resolves when a producer or consumer subscription status meets
+/// a certain condition.
 ///
 /// This future can be polled multiple times even after it has resolved once,
 /// and it will resolve again when the awaited condition transitions again from
@@ -88,47 +92,20 @@ impl When {
 /// the future will resolve on the next poll, then reset to awaiting state until
 /// the condition transitions from not met to met.
 pub struct SubscriptionCondition {
-	active: watch::Receiver<ActiveReceivers>,
-	min_producers: usize,
+	active: watch::Receiver<ActiveChannelsMap>,
+	min_peers: usize,
 	predicates: Vec<Arc<PeerPredicate>>,
 	was_met: bool,
 	is_inverse: bool,
 	changed_fut: ReusableBoxFuture<'static, ()>,
 }
 
-impl Clone for SubscriptionCondition {
-	fn clone(&self) -> Self {
-		let mut receiver = self.active.clone();
-		Self {
-			active: receiver.clone(),
-			min_producers: self.min_producers,
-			predicates: self.predicates.clone(),
-			was_met: false,
-			is_inverse: self.is_inverse,
-			changed_fut: ReusableBoxFuture::new(Box::pin(async move {
-				let _ = receiver.changed().await;
-			})),
-		}
-	}
-}
-
-impl fmt::Debug for SubscriptionCondition {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		f.debug_struct("SubscriptionCondition")
-			.field("min_producers", &self.min_producers)
-			.field("predicates", &self.predicates.len())
-			.field("is_condition_met", &self.is_condition_met())
-			.finish_non_exhaustive()
-	}
-}
-
 // Public API
 impl SubscriptionCondition {
 	/// Specifies that the future should resolve when there is at least the given
-	/// number of producers.
-	#[expect(clippy::wrong_self_convention)]
-	pub fn to_at_least(mut self, min: usize) -> Self {
-		self.min_producers = min;
+	/// number of peers.
+	pub fn minimum_of(mut self, min: usize) -> Self {
+		self.min_peers = min;
 		self
 	}
 
@@ -136,7 +113,7 @@ impl SubscriptionCondition {
 	/// producers that contain the given tags in their
 	/// [`PeerEntry`](crate::discovery::PeerEntry).
 	///
-	/// When combined with `to_at_least`, the condition is met when there are at
+	/// When combined with `minimum_of`, the condition is met when there are at
 	/// least that many producers with the given tags.
 	pub fn with_tags<V>(self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
 		let tags: BTreeSet<Tag> = tags.iterator().into_iter().collect();
@@ -153,10 +130,10 @@ impl SubscriptionCondition {
 		self
 	}
 
-	/// Checks the number of connected producers that meet our predicates.
+	/// Checks the minimum number of connected peers that meet our predicates.
 	pub fn is_condition_met(&self) -> bool {
 		let active = self.active.borrow();
-		let matching_producers = active
+		let matching_peers = active
 			.values()
 			.filter(|handle| {
 				handle.is_connected()
@@ -164,7 +141,7 @@ impl SubscriptionCondition {
 			})
 			.count();
 
-		(matching_producers >= self.min_producers) != self.is_inverse
+		(matching_peers >= self.min_peers) != self.is_inverse
 	}
 
 	/// Inverts the condition, so that it resolves when the condition is not met.
@@ -172,6 +149,33 @@ impl SubscriptionCondition {
 		let mut cloned = self.clone();
 		cloned.is_inverse = !cloned.is_inverse;
 		cloned
+	}
+}
+
+impl Clone for SubscriptionCondition {
+	fn clone(&self) -> Self {
+		let mut active = self.active.clone();
+		active.mark_changed();
+		Self {
+			active: active.clone(),
+			min_peers: self.min_peers,
+			predicates: self.predicates.clone(),
+			was_met: false,
+			is_inverse: self.is_inverse,
+			changed_fut: ReusableBoxFuture::new(Box::pin(async move {
+				let _ = active.changed().await;
+			})),
+		}
+	}
+}
+
+impl fmt::Debug for SubscriptionCondition {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("SubscriptionCondition")
+			.field("min_peers", &self.min_peers)
+			.field("predicates", &self.predicates.len())
+			.field("is_condition_met", &self.is_condition_met())
+			.finish_non_exhaustive()
 	}
 }
 

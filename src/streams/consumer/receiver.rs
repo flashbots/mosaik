@@ -15,6 +15,7 @@ use {
 			link::{DifferentNetwork, GracefulShutdown, Link, LinkError, RecvError},
 		},
 		primitives::Short,
+		streams::status::ChannelInfo,
 	},
 	backoff::backoff::Backoff,
 	core::{future::pending, ops::ControlFlow},
@@ -77,51 +78,6 @@ pub(super) struct Receiver<D: Datum> {
 	stats: Arc<Stats>,
 }
 
-/// Controls and observes the state of one stream receiver worker associated
-/// with a remote producer.
-///
-/// There should be only one instance of this worker handle per remote
-/// producer peer for a given consumer worker.
-pub(super) struct ReceiverHandle {
-	/// Cancellation token for terminating the receiver worker associated with
-	/// this remote producer. This gets implicitly triggered when the parent
-	/// consumer worker is dropped or the network is shutting down.
-	cancel: CancellationToken,
-
-	/// Observes changes to the receiver worker connection state.
-	pub(super) state: watch::Receiver<State>,
-
-	/// Snapshot of the remote producer peer entry as known at the time of
-	/// receiver worker creation.
-	pub(super) peer: Arc<PeerEntry>,
-
-	/// Statistics about this receiver worker.
-	pub(super) stats: Arc<Stats>,
-
-	/// Configuration for this consumer.
-	pub(super) config: Arc<ConsumerConfig>,
-}
-
-impl ReceiverHandle {
-	/// Terminates the receiver worker and waits for it to shut down.
-	pub fn terminate(&self) -> impl Future<Output = ()> + use<> {
-		// Fire off the cancellation signal
-		self.cancel.cancel();
-
-		// Wait for the worker to observe the cancellation and set its state to
-		// `Terminated`.
-		let mut state = self.state.clone();
-		async move {
-			let _ = state.wait_for(|s| *s == State::Terminated).await;
-		}
-	}
-
-	/// Returns the current state of the receiver worker.
-	pub fn is_connected(&self) -> bool {
-		*self.state.borrow() == State::Connected
-	}
-}
-
 impl<D: Datum> Receiver<D> {
 	/// Spawns a new receiver worker for the specified remote producer peer.
 	///
@@ -134,7 +90,7 @@ impl<D: Datum> Receiver<D> {
 		cancel: &CancellationToken,
 		data_tx: &mpsc::UnboundedSender<D>,
 		config: Arc<ConsumerConfig>,
-	) -> ReceiverHandle {
+	) -> ChannelInfo {
 		let local = local.clone();
 		let cancel = cancel.child_token();
 		let data_tx = data_tx.clone();
@@ -144,6 +100,17 @@ impl<D: Datum> Receiver<D> {
 		let next_recv = ReusableBoxFuture::new(pending());
 		let (state_tx, state) = watch::channel(State::Connecting);
 
+		// Construct the status signaling info for this receiver worker.
+		let channel_info = ChannelInfo {
+			stream_id: D::stream_id(),
+			criteria: config.criteria.clone(),
+			producer_id: *peer.id(),
+			consumer_id: local.id(),
+			stats: Arc::clone(&stats),
+			peer: Arc::clone(&peer),
+			state: state.clone(),
+		};
+
 		let worker = Receiver {
 			local,
 			discovery,
@@ -151,21 +118,15 @@ impl<D: Datum> Receiver<D> {
 			state_tx,
 			next_recv,
 			backoff: None,
-			cancel: cancel.clone(),
+			cancel: cancel.child_token(),
 			peer: Arc::clone(&peer),
 			stats: Arc::clone(&stats),
-			config: Arc::clone(&config),
+			config,
 		};
 
 		tokio::spawn(worker.run());
 
-		ReceiverHandle {
-			cancel,
-			state,
-			peer,
-			stats,
-			config,
-		}
+		channel_info
 	}
 }
 

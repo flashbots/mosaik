@@ -8,7 +8,7 @@ use {
 			StreamId,
 			Streams,
 			accept::StartStream,
-			status::StreamInfo,
+			status::ChannelInfo,
 		},
 		Producer,
 		Sinks,
@@ -19,8 +19,8 @@ use {
 		PeerId,
 		discovery::PeerEntry,
 		network::link::{GracefulShutdown, Link},
-		primitives::{Bytes, Short},
-		streams::status::{State, Stats},
+		primitives::{Bytes, Short, UniqueId},
+		streams::status::{ActiveChannelsMap, State, Stats},
 	},
 	bincode::{config::standard, serde::encode_to_vec},
 	core::{any::Any, cell::OnceCell},
@@ -60,7 +60,7 @@ pub(in crate::streams) struct Handle {
 	ready: Arc<SetOnce<()>>,
 
 	/// Observer for the active subscriptions info map.
-	active: watch::Receiver<im::HashMap<SubscriptionId, StreamInfo>>,
+	active: watch::Receiver<ActiveChannelsMap>,
 }
 
 impl Handle {
@@ -78,7 +78,7 @@ impl Handle {
 
 		Producer::new(
 			data_tx.clone(),
-			When::new(self.ready.clone(), self.active.clone()),
+			When::new(self.active.clone(), self.ready.clone()),
 		)
 	}
 
@@ -131,7 +131,7 @@ pub(super) struct WorkerLoop<D: Datum> {
 	///
 	/// This is used by public status APIs to get the current snapshot of
 	/// active subscriptions to this producer.
-	active_info: watch::Sender<im::HashMap<SubscriptionId, StreamInfo>>,
+	active_info: watch::Sender<ActiveChannelsMap>,
 
 	/// Incoming connections from remote consumers to be added as subscriptions.
 	///
@@ -327,7 +327,8 @@ impl<D: Datum> WorkerLoop<D> {
 		// Publish an updated snapshot of active subscriptions info
 		// for public status APIs.
 		self.active_info.send_modify(|active| {
-			active.insert(sub_id, StreamInfo {
+			let sub_id = UniqueId::from_u64(sub_id.0.as_ffi());
+			active.insert(sub_id, ChannelInfo {
 				stream_id: D::stream_id(),
 				criteria,
 				producer_id: self.local_id,
@@ -351,6 +352,7 @@ impl<D: Datum> WorkerLoop<D> {
 			// Remove subscription from the active info map and signal
 			// to status observers that the subscription is gone.
 			self.active_info.send_modify(|active| {
+				let sub_id = UniqueId::from_u64(sub_id.0.as_ffi());
 				active.remove(&sub_id);
 			});
 
@@ -375,7 +377,7 @@ slotmap::new_key_type! {
 	/// One remote node may have multiple subscriptions to the same stream
 	/// with different criteria. Each subscription is identified by a unique
 	/// [`SubscriptionId`] and is managed independently.
-	pub(super) struct SubscriptionId;
+	pub(crate) struct SubscriptionId;
 }
 
 /// Represents an active subscription from a remote consumer.

@@ -1,24 +1,24 @@
 //! Stream Consumers
 
 use {
-	super::{Datum, status::StreamInfo},
-	crate::PeerId,
+	super::{
+		Datum,
+		status::{ChannelInfo, When},
+	},
 	core::{
 		pin::Pin,
 		task::{Context, Poll},
 	},
 	futures::Stream,
-	std::sync::Arc,
 	tokio::sync::mpsc,
 	tokio_util::sync::DropGuard,
 };
 
 mod builder;
 mod receiver;
-mod when;
 mod worker;
 
-pub use {builder::Builder, when::When};
+pub use builder::Builder;
 
 /// A local stream consumer handle that allows receiving data from a stream
 /// produced by a remote peer.
@@ -36,7 +36,6 @@ pub use {builder::Builder, when::When};
 /// - Consumers implement [`Stream`] for receiving datum of type `D`.
 pub struct Consumer<D: Datum> {
 	status: When,
-	local_id: PeerId,
 	chan: mpsc::UnboundedReceiver<D>,
 	_abort: DropGuard,
 }
@@ -61,21 +60,12 @@ impl<D: Datum> Consumer<D> {
 	/// Returns an iterator over the currently connected producers for this
 	/// consumer. The `PeerEntry` values yielded by the iterator represent the
 	/// state of the peers at the time their subscription was established.
-	pub fn producers(&self) -> impl Iterator<Item = StreamInfo> {
+	pub fn producers(&self) -> impl Iterator<Item = ChannelInfo> {
 		// get current snapshot of active receivers, this clone is cheap
 		// because it is an `im::HashMap`, and we want to release the lock
 		// on the watch channel as soon as possible.
-		let receivers = self.status.receivers.borrow().clone();
-
-		receivers.into_iter().map(|(_, handle)| StreamInfo {
-			peer: Arc::clone(&handle.peer),
-			stats: Arc::clone(&handle.stats),
-			producer_id: *handle.peer.id(),
-			consumer_id: self.local_id,
-			stream_id: D::stream_id(),
-			criteria: handle.config.criteria.clone(),
-			state: handle.state.clone(),
-		})
+		let active = self.status.active.borrow().clone();
+		active.into_iter().map(|(_, info)| info)
 	}
 }
 

@@ -24,7 +24,7 @@ async fn smoke() -> anyhow::Result<()> {
 	let c1 = n1.streams().consume::<Data1>();
 
 	let mut condition1 = c1.when().subscribed();
-	let mut condition2 = c1.when().subscribed().to_at_least(2);
+	let mut condition2 = c1.when().subscribed().minimum_of(2);
 	let mut condition3 = condition2.clone().not(); // inverse of condition2
 	let condition4 = c1.when().unsubscribed(); // inverse of condition1
 

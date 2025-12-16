@@ -1,26 +1,27 @@
 use {
 	super::{
-		super::{Streams, status::State},
+		super::{
+			Streams,
+			status::{ActiveChannelsMap, State},
+		},
 		Consumer,
 		Datum,
 		When,
-		receiver::{Receiver, ReceiverHandle},
+		receiver::Receiver,
 	},
 	crate::{
 		discovery::{Catalog, Discovery},
 		network::{LocalNode, PeerId},
-		primitives::Short,
+		primitives::{Short, UniqueId},
 		streams::consumer::builder::ConsumerConfig,
 	},
 	core::pin::Pin,
-	futures::{Stream, StreamExt, future::JoinAll, stream::SelectAll},
+	futures::{Stream, StreamExt, stream::SelectAll},
 	std::sync::Arc,
 	tokio::sync::{SetOnce, mpsc, watch},
 	tokio_stream::wrappers::WatchStream,
 	tokio_util::sync::CancellationToken,
 };
-
-pub(super) type ActiveReceivers = im::HashMap<PeerId, Arc<ReceiverHandle>>;
 
 /// Worker task that manages the state of one consumer for a specific datum type
 /// `D` on the local node.
@@ -50,7 +51,7 @@ pub(super) struct ConsumerWorker<D: Datum> {
 	/// Active receive workers for connected producer peers.
 	/// This value can be observed to get the current snapshot of connected
 	/// producers.
-	active: watch::Sender<ActiveReceivers>,
+	active: watch::Sender<ActiveChannelsMap>,
 
 	/// Aggregated status streams from all active receiver workers.
 	status_rx: StateUpdatesStream,
@@ -69,7 +70,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		let config = Arc::new(config);
 		let local = streams.local.clone();
 		let cancel = local.termination().child_token();
-		let active = watch::Sender::new(ActiveReceivers::new());
+		let active = watch::Sender::new(ActiveChannelsMap::new());
 		let ready = Arc::new(SetOnce::new());
 		let (data_tx, data_rx) = mpsc::unbounded_channel();
 
@@ -88,7 +89,6 @@ impl<D: Datum> ConsumerWorker<D> {
 
 		Consumer {
 			chan: data_rx,
-			local_id: streams.local.id(),
 			status: When::new(active.subscribe(), ready),
 			_abort: cancel.drop_guard(),
 		}
@@ -110,7 +110,7 @@ impl<D: Datum> ConsumerWorker<D> {
 			tokio::select! {
 				// Triggered when the consumer is dropped or the network is shutting down
 				() = self.cancel.cancelled() => {
-					self.on_terminated().await;
+					self.on_terminated();
 					break;
 				}
 
@@ -147,7 +147,8 @@ impl<D: Datum> ConsumerWorker<D> {
 		for producer in producers {
 			// for each discovered producer, create a receive worker if it is not
 			// already in the active list of connected producers.
-			if !self.active.borrow().contains_key(producer.id()) {
+			let sub_id = UniqueId::from_bytes(*producer.id().as_bytes());
+			if !self.active.borrow().contains_key(&sub_id) {
 				tracing::debug!(
 					stream_id = %stream_id,
 					producer_id = %Short(producer.id()),
@@ -163,8 +164,8 @@ impl<D: Datum> ConsumerWorker<D> {
 					continue;
 				}
 
-				// spawn a new receiver worker for this producer
-				let receiver = Receiver::spawn(
+				// spawn a new receiver worker for this producer and track its status
+				let channel_info = Receiver::spawn(
 					producer.clone(),
 					&self.local,
 					&self.discovery,
@@ -176,7 +177,7 @@ impl<D: Datum> ConsumerWorker<D> {
 				// subscribe to the receiver's status updates
 				let peer_id = *producer.id();
 				self.status_rx.push(
-					WatchStream::new(receiver.state.clone())
+					WatchStream::new(channel_info.state.clone())
 						.map(move |state| (state, peer_id))
 						.boxed(),
 				);
@@ -185,7 +186,7 @@ impl<D: Datum> ConsumerWorker<D> {
 				// transition into the terminated state and be removed from the active
 				// list
 				self.active.send_modify(|active| {
-					active.insert(*producer.id(), Arc::new(receiver));
+					active.insert(sub_id, channel_info);
 				});
 			}
 		}
@@ -196,8 +197,9 @@ impl<D: Datum> ConsumerWorker<D> {
 		if state == State::Terminated {
 			// The receiver has unrecoverably terminated, remove it from the active
 			// list
+			let sub_id = UniqueId::from_bytes(*peer_id.as_bytes());
 			self.active.send_modify(|active| {
-				active.remove(&peer_id);
+				active.remove(&sub_id);
 			});
 
 			tracing::info!(
@@ -210,16 +212,10 @@ impl<D: Datum> ConsumerWorker<D> {
 	}
 
 	/// Gracefully closes all connections with remote producers.
-	async fn on_terminated(&mut self) {
+	fn on_terminated(&mut self) {
 		// terminate all active receiver workers
 		let producers_count = self.active.borrow().len();
-		let active = self.active.send_replace(im::HashMap::default());
-
-		active
-			.into_iter()
-			.map(|(_, handle)| handle.terminate())
-			.collect::<JoinAll<_>>()
-			.await;
+		self.active.send_replace(ActiveChannelsMap::default());
 
 		tracing::debug!(
 			stream_id = %D::stream_id(),
