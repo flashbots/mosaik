@@ -56,12 +56,12 @@ async fn by_tag() -> anyhow::Result<()> {
 	timeout_s(2, c0_2.when().subscribed().to_at_least(2)).await?;
 
 	// verify that c0_1 is only subscribed to n1
-	let subs = c0_1.producers().map(|p| *p.peer().id()).collect::<Vec<_>>();
+	let subs = c0_1.producers().collect::<Vec<_>>();
 	assert_eq!(subs.len(), 1);
-	assert_eq!(subs[0], n1.local().id());
+	assert_eq!(*subs[0].peer().id(), n1.local().id());
 
 	tracing::debug!("c0_1 is subscribed to the following producers:");
-	for producer in c0_1.producers() {
+	for producer in subs {
 		tracing::debug!(
 			" - {}, stats: {}",
 			Short(producer.peer()),
@@ -70,13 +70,13 @@ async fn by_tag() -> anyhow::Result<()> {
 	}
 
 	// verify that c0_2 is subscribed to both n1 and n2
-	let subs: Vec<_> = c0_2.producers().map(|p| *p.peer().id()).collect();
+	let subs = c0_2.producers().collect::<Vec<_>>();
 	assert_eq!(subs.len(), 2);
-	assert!(subs.contains(&n1.local().id()));
-	assert!(subs.contains(&n2.local().id()));
+	assert!(subs.iter().any(|p| *p.peer().id() == n1.local().id()));
+	assert!(subs.iter().any(|p| *p.peer().id() == n2.local().id()));
 
 	tracing::debug!("c0_2 is subscribed to the following producers:");
-	for producer in c0_2.producers() {
+	for producer in subs {
 		tracing::debug!(
 			" - {}, stats: {}",
 			Short(producer.peer()),
