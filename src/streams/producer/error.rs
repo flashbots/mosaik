@@ -1,11 +1,5 @@
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
-	#[error("I/O error: {0}")]
-	Io(#[from] std::io::Error),
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ProducerError<D> {
+pub enum Error<D> {
 	#[error("Producer is closed")]
 	Closed(Option<D>),
 

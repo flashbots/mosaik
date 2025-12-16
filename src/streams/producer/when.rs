@@ -33,7 +33,7 @@ impl When {
 	/// with other peers and has completed its initial setup.
 	///
 	/// Resolves immediately if the producer is already up and running.
-	pub async fn ready(&self) {
+	pub async fn online(&self) {
 		self.ready.wait().await;
 	}
 
@@ -41,7 +41,7 @@ impl When {
 	/// subscriber.
 	pub fn subscribed(&self) -> SubscriptionCondition {
 		SubscriptionCondition {
-			min_subscribers: 1,
+			min_consumers: 1,
 			required_tags: None,
 		}
 	}
@@ -53,15 +53,15 @@ impl When {
 /// and it will resolve again when the awaited condition transitions again from
 /// not met to met.
 pub struct SubscriptionCondition {
-	min_subscribers: usize,
+	min_consumers: usize,
 	required_tags: Option<BTreeSet<Tag>>,
 }
 
 impl SubscriptionCondition {
 	/// Specifies that the future should resolve when there is at least the given
-	/// number of subscribers.
+	/// number of consumers.
 	pub fn by_at_least(mut self, min: usize) -> Self {
-		self.min_subscribers = min;
+		self.min_consumers = min;
 		self
 	}
 

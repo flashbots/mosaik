@@ -142,7 +142,7 @@ async fn different_networks_are_isolated() -> anyhow::Result<()> {
 	let n4 = Network::new(netid2).await?;
 
 	// perform full mesh syncs within each network
-	discover_all(&[&n0, &n1, &n2, &n3, &n4]).await?;
+	discover_all([&n0, &n1, &n2, &n3, &n4]).await?;
 
 	// ensure that peers on the same network have each other in their catalogs,
 	// but peers on different networks do not appear in each other's catalogs

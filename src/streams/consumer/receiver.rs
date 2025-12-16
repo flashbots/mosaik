@@ -1,4 +1,12 @@
 use {
+	super::super::{
+		StreamNotFound,
+		Streams,
+		UnknownPeer,
+		accept::{ConsumerHandshake, StartStream},
+		consumer::builder::ConsumerConfig,
+		status::{State, Stats},
+	},
 	crate::{
 		Datum,
 		discovery::{Discovery, PeerEntry},
@@ -7,23 +15,10 @@ use {
 			link::{DifferentNetwork, GracefulShutdown, Link, LinkError, RecvError},
 		},
 		primitives::Short,
-		streams::{
-			StreamNotFound,
-			Streams,
-			UnknownPeer,
-			accept::{ConsumerHandshake, StartStream},
-			consumer::builder::ConsumerConfig,
-		},
 	},
 	backoff::backoff::Backoff,
-	chrono::{DateTime, Utc},
-	core::{
-		future::pending,
-		ops::ControlFlow,
-		sync::atomic::{AtomicI64, AtomicUsize, Ordering},
-		time::Duration,
-	},
-	futures::FutureExt,
+	core::{future::pending, ops::ControlFlow},
+	futures::{FutureExt, TryFutureExt},
 	std::sync::Arc,
 	tokio::sync::{mpsc, watch},
 	tokio_util::sync::{CancellationToken, ReusableBoxFuture},
@@ -94,14 +89,17 @@ pub(super) struct ReceiverHandle {
 	cancel: CancellationToken,
 
 	/// Observes changes to the receiver worker connection state.
-	state: watch::Receiver<State>,
+	pub(super) state: watch::Receiver<State>,
 
 	/// Snapshot of the remote producer peer entry as known at the time of
 	/// receiver worker creation.
-	peer: Arc<PeerEntry>,
+	pub(super) peer: Arc<PeerEntry>,
 
 	/// Statistics about this receiver worker.
-	stats: Arc<Stats>,
+	pub(super) stats: Arc<Stats>,
+
+	/// Configuration for this consumer.
+	pub(super) config: Arc<ConsumerConfig>,
 }
 
 impl ReceiverHandle {
@@ -118,29 +116,17 @@ impl ReceiverHandle {
 		}
 	}
 
-	/// Returns a watch handle for monitoring the receiver state.
-	pub const fn state(&self) -> &watch::Receiver<State> {
-		&self.state
-	}
-
 	/// Returns the current state of the receiver worker.
 	pub fn is_connected(&self) -> bool {
 		*self.state.borrow() == State::Connected
 	}
-
-	/// Returns a reference to the remote producer peer entry as known at the
-	/// time of receiver worker creation.
-	pub fn peer(&self) -> &PeerEntry {
-		&self.peer
-	}
-
-	/// Returns statistics about this receiver worker.
-	pub fn stats(&self) -> &Stats {
-		&self.stats
-	}
 }
 
 impl<D: Datum> Receiver<D> {
+	/// Spawns a new receiver worker for the specified remote producer peer.
+	///
+	/// An instance of this worker should be created for each connected producer
+	/// peer for a consumer instance.
 	pub fn spawn(
 		peer: PeerEntry,
 		local: &LocalNode,
@@ -159,7 +145,6 @@ impl<D: Datum> Receiver<D> {
 		let (state_tx, state) = watch::channel(State::Connecting);
 
 		let worker = Receiver {
-			config,
 			local,
 			discovery,
 			data_tx,
@@ -169,6 +154,7 @@ impl<D: Datum> Receiver<D> {
 			cancel: cancel.clone(),
 			peer: Arc::clone(&peer),
 			stats: Arc::clone(&stats),
+			config: Arc::clone(&config),
 		};
 
 		tokio::spawn(worker.run());
@@ -178,6 +164,7 @@ impl<D: Datum> Receiver<D> {
 			state,
 			peer,
 			stats,
+			config,
 		}
 	}
 }
@@ -200,8 +187,8 @@ impl<D: Datum> Receiver<D> {
 					break;
 				}
 
-				// Triggered when new data is received from the remote producer
-				// this will enqueue the next receive future.
+				// Triggered when the next datum read future is ready.
+				// This could be either a successfully received datum or an error.
 				(result, link) = &mut self.next_recv => {
 					self.on_next_recv(result, link).await;
 				}
@@ -226,8 +213,8 @@ impl<D: Datum> Receiver<D> {
 				self.data_tx.send(datum).ok();
 
 				// update stats
-				self.stats.datums.fetch_add(1, Ordering::Relaxed);
-				self.stats.bytes.fetch_add(bytes_len, Ordering::Relaxed);
+				self.stats.increment_datums();
+				self.stats.increment_bytes(bytes_len);
 
 				// if not cancelled, prepare to receive the next datum
 				if !self.cancel.is_cancelled() {
@@ -258,13 +245,12 @@ impl<D: Datum> Receiver<D> {
 		mut link: Link<Streams>,
 	) -> impl Future<Output = (Result<(D, usize), LinkError>, Link<Streams>)> + 'static
 	{
-		// bind the the receive future along with the link instance for next
-		// receive polls or for connection recovery logic.
+		// bind the the receive future along with the transport link it is using so
+		// we can repair the connection if needed.
+
 		async move {
-			(
-				link.recv_with_size::<D>().await.map_err(LinkError::Recv),
-				link,
-			)
+			let fut = link.recv_with_size::<D>().map_err(LinkError::Recv);
+			(fut.await, link)
 		}
 		.fuse()
 	}
@@ -348,10 +334,7 @@ impl<D: Datum> Receiver<D> {
 				self.state_tx.send(State::Connected).ok();
 
 				// update stats
-				self
-					.stats
-					.connected_at
-					.store(Utc::now().timestamp_millis(), Ordering::Relaxed);
+				self.stats.connected();
 
 				// begin listening for incoming data
 				self.next_recv.set(self.make_next_recv_future(link));
@@ -382,7 +365,7 @@ impl<D: Datum> Receiver<D> {
 			() => {
 				self.cancel.cancel();
 				self.state_tx.send(State::Terminated).ok();
-				self.stats.connected_at.store(0, Ordering::Relaxed);
+				self.stats.disconnected();
 				return;
 			};
 
@@ -397,7 +380,7 @@ impl<D: Datum> Receiver<D> {
 
 				self.cancel.cancel();
 				self.state_tx.send(State::Terminated).ok();
-				self.stats.connected_at.store(0, Ordering::Relaxed);
+				self.stats.disconnected();
 				return;
 			};
 		}
@@ -459,6 +442,17 @@ impl<D: Datum> Receiver<D> {
 				// discovery catalog.
 				unrecoverable!("producer is on a different network", e);
 			}
+			(_, Some(reason)) => {
+				// The producer closed the connection with an application-level
+				// error that is not explicitly handled above and is not known
+				// to be unrecoverable. Log and attempt to reconnect.
+				tracing::warn!(
+					stream_id = %D::stream_id(),
+					producer_id = %Short(&self.peer.id()),
+					reason = %reason,
+					"subscription refused by producer",
+				);
+			}
 			(e, _) => {
 				// io error occurred, drop the current link and attempt to reconnect
 				tracing::warn!(
@@ -472,6 +466,9 @@ impl<D: Datum> Receiver<D> {
 		Box::pin(self.connect()).await;
 	}
 
+	/// Applies the backoff policy before attempting to reconnect to the
+	/// remote producer. The backoff policy is reset on successful receives and
+	/// initialized to the default starting state on the first connection attempt.
 	async fn apply_backoff(&mut self) -> ControlFlow<()> {
 		match self.backoff {
 			None => {
@@ -504,124 +501,6 @@ impl<D: Datum> Receiver<D> {
 				tokio::time::sleep(duration).await;
 				ControlFlow::Continue(())
 			}
-		}
-	}
-}
-
-/// The current connection state of a stream receiver worker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum State {
-	/// A connection is being established with the remote producer.
-	Connecting,
-
-	/// A connection is established with the remote producer and it is actively
-	/// receiving data.
-	Connected,
-
-	/// The connection with the remote producer has been closed.
-	/// Only once this state is reached this consumer may establish a new
-	/// connection to the same producer.
-	Terminated,
-}
-
-/// Statistics about an individual stream subscription receiver.
-pub struct Stats {
-	/// Timestamp when this producer was first discovered.
-	created_at: DateTime<Utc>,
-
-	/// Timestamp when the last connection with the producer was established.
-	/// Represented as a unix timestamp in milliseconds.
-	///
-	/// Notes:
-	/// - If the connection with this producer has never been established, or is
-	///   currently dropped pending retries, this value is `0`.
-	///
-	/// - If the connection with this producer was dropped and reestablished,
-	///   this value will store the timestamp of the last successful connection.
-	connected_at: AtomicI64,
-
-	/// Total number of datums received from the remote producer.
-	datums: AtomicUsize,
-
-	/// Total number of bytes received from the remote producer.
-	bytes: AtomicUsize,
-}
-
-impl Stats {
-	/// Returns the timestamp when this receiver was created.
-	pub const fn created_at(&self) -> DateTime<Utc> {
-		self.created_at
-	}
-
-	/// Returns the total number of datums received from the remote producer.
-	pub fn datums(&self) -> usize {
-		self.datums.load(Ordering::Relaxed)
-	}
-
-	/// Returns the total number of bytes received from the remote producer.
-	pub fn bytes(&self) -> usize {
-		self.bytes.load(Ordering::Relaxed)
-	}
-
-	/// Returns the duration since the last successful connection with the
-	/// remote producer was established.
-	pub fn uptime(&self) -> Option<Duration> {
-		let ts = self.connected_at.load(Ordering::Relaxed);
-		if ts == 0 {
-			return None;
-		}
-
-		#[allow(clippy::missing_panics_doc)]
-		let connected_at = DateTime::<Utc>::from_timestamp_millis(ts).expect(
-			"stored connected_at timestamp should always be a valid datetime",
-		);
-
-		(Utc::now() - connected_at).to_std().ok()
-	}
-}
-
-impl core::fmt::Debug for Stats {
-	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-		use {
-			humansize::{DECIMAL, format_size},
-			humantime::format_duration,
-		};
-
-		f.debug_struct("Stats")
-			.field("created_at", &self.created_at)
-			.field("uptime", &self.uptime().map(format_duration))
-			.field("datums", &self.datums())
-			.field("bytes", &format_size(self.bytes(), DECIMAL))
-			.finish_non_exhaustive()
-	}
-}
-
-impl core::fmt::Display for Stats {
-	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-		use {
-			humansize::{DECIMAL, format_size},
-			humantime::format_duration,
-		};
-
-		write!(
-			f,
-			"uptime: {}, datums: {}, bytes: {}",
-			self
-				.uptime()
-				.map_or("N/A".to_string(), |d| format_duration(d).to_string()),
-			self.datums(),
-			format_size(self.bytes(), DECIMAL),
-		)
-	}
-}
-
-impl Default for Stats {
-	fn default() -> Self {
-		Self {
-			created_at: Utc::now(),
-			connected_at: AtomicI64::new(0),
-			bytes: AtomicUsize::new(0),
-			datums: AtomicUsize::new(0),
 		}
 	}
 }

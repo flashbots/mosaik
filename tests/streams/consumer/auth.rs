@@ -43,13 +43,13 @@ async fn by_tag() -> anyhow::Result<()> {
 	let p2 = n2.streams().produce::<Data1>();
 
 	// wait for producers and consumer to be ready
-	timeout_s(1, c0_1.when().ready()).await?;
-	timeout_s(1, c0_2.when().ready()).await?;
-	timeout_s(1, p1.when().ready()).await?;
-	timeout_s(1, p2.when().ready()).await?;
+	timeout_s(1, c0_1.when().online()).await?;
+	timeout_s(1, c0_2.when().online()).await?;
+	timeout_s(1, p1.when().online()).await?;
+	timeout_s(1, p2.when().online()).await?;
 
 	// sync discovery catalogs
-	discover_all(&[&n0, &n1, &n2]).await?;
+	discover_all([&n0, &n1, &n2]).await?;
 
 	// c0_1 should only be subscribed to p1 (n1), as it's the only producer
 	// that has the required tag. c0_2 should be subscribed to both p1 and p2

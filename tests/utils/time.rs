@@ -62,3 +62,11 @@ where
 	tokio::time::timeout(duration, future)
 		.map_err(move |_| TimeoutElapsed(duration))
 }
+
+pub fn sleep_s(count: u64) -> impl Future<Output = ()> {
+	tokio::time::sleep(secs(count))
+}
+
+pub fn sleep_ms(count: u64) -> impl Future<Output = ()> {
+	tokio::time::sleep(millis(count))
+}

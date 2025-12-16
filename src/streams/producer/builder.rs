@@ -33,6 +33,11 @@ pub(in crate::streams) struct ProducerConfig {
 
 	/// The network id this producer is associated with.
 	pub network_id: NetworkId,
+
+	/// Maximum number of subscribers allowed for this producer.
+	///
+	/// Defaults to unlimited if not set.
+	pub max_subscribers: usize,
 }
 
 /// Configurable builder for assembling a new producer instances for a specific
@@ -65,6 +70,14 @@ impl<D: Datum> Builder<'_, D> {
 		self
 	}
 
+	/// Sets the maximum number of subscribers allowed for this producer.
+	/// Defaults to unlimited if not set.
+	#[must_use]
+	pub fn with_max_subscribers(mut self, max: usize) -> Self {
+		self.config.max_subscribers = max;
+		self
+	}
+
 	/// Builds a new producer with the given configuration for this stream id.
 	/// If there is already an existing producer for this stream id, an error
 	/// is returned containing the existing producer created using the original
@@ -90,6 +103,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 			config: ProducerConfig {
 				buffer_size: 1024,
 				accept_if: Box::new(|_| true),
+				max_subscribers: usize::MAX,
 				network_id: *streams.local.network_id(),
 			},
 			_marker: PhantomData,

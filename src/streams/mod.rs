@@ -31,10 +31,12 @@ mod accept;
 mod config;
 mod criteria;
 mod datum;
+mod when;
 
 // Streams submodules
 pub mod consumer;
 pub mod producer;
+pub mod status;
 
 pub use {
 	config::{Config, ConfigBuilder, ConfigBuilderError, backoff},
@@ -153,3 +155,8 @@ link::make_close_reason!(
 link::make_close_reason!(
 	/// The remote peer is not allowed to subscribe to the requested stream.
 	struct NotAllowed, 10_403);
+
+link::make_close_reason!(
+	/// The producer has reached its maximum number of allowed subscribers
+	/// and cannot accept any new consumer subscriptions.
+	struct NoCapacity, 10_509);

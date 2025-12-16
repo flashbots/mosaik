@@ -1,10 +1,10 @@
 use {
 	super::{
-		super::Streams,
+		super::{Streams, status::State},
 		Consumer,
 		Datum,
 		When,
-		receiver::{Receiver, ReceiverHandle, State},
+		receiver::{Receiver, ReceiverHandle},
 	},
 	crate::{
 		discovery::{Catalog, Discovery},
@@ -88,6 +88,7 @@ impl<D: Datum> ConsumerWorker<D> {
 
 		Consumer {
 			chan: data_rx,
+			local_id: streams.local.id(),
 			status: When::new(active.subscribe(), ready),
 			_abort: cancel.drop_guard(),
 		}
@@ -175,7 +176,7 @@ impl<D: Datum> ConsumerWorker<D> {
 				// subscribe to the receiver's status updates
 				let peer_id = *producer.id();
 				self.status_rx.push(
-					WatchStream::new(receiver.state().clone())
+					WatchStream::new(receiver.state.clone())
 						.map(move |state| (state, peer_id))
 						.boxed(),
 				);

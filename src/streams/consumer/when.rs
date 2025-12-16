@@ -47,7 +47,7 @@ impl When {
 	/// with other peers and has completed its initial setup.
 	///
 	/// Resolves immediately if the consumer is already up and running.
-	pub async fn ready(&self) {
+	pub async fn online(&self) {
 		self.ready.wait().await;
 	}
 
@@ -159,7 +159,7 @@ impl SubscriptionCondition {
 			.values()
 			.filter(|handle| {
 				handle.is_connected()
-					&& self.predicates.iter().all(|pred| pred(handle.peer()))
+					&& self.predicates.iter().all(|pred| pred(&handle.peer))
 			})
 			.count();
 

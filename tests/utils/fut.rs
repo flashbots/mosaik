@@ -18,3 +18,8 @@ where
 	let mut context = Context::from_waker(waker);
 	Pin::new(f).poll(&mut context)
 }
+
+pub async fn forever() -> ! {
+	futures::future::pending::<()>().await;
+	unreachable!()
+}

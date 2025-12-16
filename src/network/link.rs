@@ -216,7 +216,8 @@ impl<P: Protocol> Link<P> {
 	}
 
 	/// Receives the next framed message and deserializes it into the given data
-	/// type `D`, returning along with the size of the received message in bytes.
+	/// type `D`, returning a deserialized value along with the size of the
+	/// message in bytes.
 	pub async fn recv_with_size<D: DeserializeOwned>(
 		&mut self,
 	) -> Result<(D, usize), RecvError> {

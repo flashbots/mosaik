@@ -3,6 +3,7 @@ use {
 		super::{
 			Criteria,
 			Datum,
+			NoCapacity,
 			NotAllowed,
 			StreamId,
 			Streams,
@@ -227,14 +228,27 @@ impl<D: Datum> WorkerLoop<D> {
 		criteria: Criteria,
 		peer: PeerEntry,
 	) {
-		// Check if we should accept this consumer based on the auth predicate
-		if !(self.config.accept_if)(&peer) {
+		// Check if we have capacity to accept a new consumer
+		if self.active.len() >= self.config.max_subscribers {
 			tracing::debug!(
 				consumer_id = %Short(&link.remote_id()),
 				stream_id = %D::stream_id(),
-				criteria = ?criteria,
-				peer = %Short(&peer),
-				"rejected new consumer",
+				current_subscribers = %self.active.len(),
+				"rejected new consumer: no capacity",
+			);
+
+			// Close the link with `NoCapacity` reason, this producer has
+			// reached its maximum number of allowed subscribers.
+			let _ = link.close(NoCapacity).await;
+			return;
+		}
+
+		// Check if we should accept this consumer based on the auth predicate
+		if !(self.config.accept_if)(&peer) {
+			tracing::debug!(
+				stream_id = %D::stream_id(),
+				consumer = %Short(&peer),
+				"rejected unauthorized consumer",
 			);
 
 			// Close the link with `NotAllowed` reason, this peer is not
@@ -265,7 +279,7 @@ impl<D: Datum> WorkerLoop<D> {
 		self.active.insert(Subscription {
 			link,
 			criteria,
-			peer,
+			_peer: peer,
 		});
 	}
 
@@ -313,5 +327,5 @@ struct Subscription {
 
 	/// Snapshot of the remote consumer peer entry as known at the time of
 	/// subscription creation.
-	peer: PeerEntry,
+	_peer: PeerEntry,
 }
