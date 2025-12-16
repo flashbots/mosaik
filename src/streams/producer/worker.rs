@@ -22,7 +22,8 @@ use {
 	core::{any::Any, cell::OnceCell},
 	futures::future::join_all,
 	slotmap::DenseSlotMap,
-	tokio::sync::mpsc,
+	std::sync::Arc,
+	tokio::sync::{SetOnce, mpsc},
 	tokio_util::sync::CancellationToken,
 };
 
@@ -49,6 +50,10 @@ pub(in crate::streams) struct Handle {
 	/// subscribe to this stream and then passed to the worker loop to be added
 	/// as a new subscription.
 	accepted: mpsc::UnboundedSender<(Link<Streams>, Criteria, PeerEntry)>,
+
+	/// A one-time set handle that is completed when the producer worker loop is
+	/// initialized and ready to interact with other peers.
+	ready: Arc<SetOnce<()>>,
 }
 
 impl Handle {
@@ -64,7 +69,7 @@ impl Handle {
 			.downcast_ref::<mpsc::Sender<D>>()
 			.expect("Failed to downcast data sender channel");
 
-		Producer::new(data_tx.clone(), When)
+		Producer::new(data_tx.clone(), When::new(self.ready.clone()))
 	}
 
 	/// Accepts an incoming connection from a remote consumer for this stream id.
@@ -114,6 +119,10 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// Remote peers that arrive here are past the handshake phase and have an
 	/// open transport-level stream.
 	accepted: mpsc::UnboundedReceiver<(Link<Streams>, Criteria, PeerEntry)>,
+
+	/// A one-time set handle that is completed when the producer worker loop is
+	/// initialized and ready to interact with other peers.
+	ready: Arc<SetOnce<()>>,
 }
 
 impl<D: Datum> WorkerLoop<D> {
@@ -122,6 +131,7 @@ impl<D: Datum> WorkerLoop<D> {
 		let cancel = sinks.local.termination().child_token();
 
 		let stream_id = D::stream_id();
+		let ready = Arc::new(SetOnce::new());
 		let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
 		let (data_tx, data_rx) = mpsc::channel(config.buffer_size);
 
@@ -131,6 +141,7 @@ impl<D: Datum> WorkerLoop<D> {
 			data_rx,
 			active: DenseSlotMap::with_key(),
 			accepted: accepted_rx,
+			ready: ready.clone(),
 		};
 
 		tokio::spawn(worker.run());
@@ -139,12 +150,16 @@ impl<D: Datum> WorkerLoop<D> {
 			stream_id,
 			data_tx: Box::new(data_tx),
 			accepted: accepted_tx,
+			ready,
 		}
 	}
 }
 
 impl<D: Datum> WorkerLoop<D> {
 	pub async fn run(mut self) {
+		// mark the producer as ready after initial setup is done
+		self.ready.set(()).expect("ready set once");
+
 		loop {
 			tokio::select! {
 				// Triggered when the network is shutting down or

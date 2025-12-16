@@ -1,11 +1,12 @@
 use {
+	crate::utils::discover_all,
 	core::time::Duration,
 	futures::{StreamExt, stream::SelectAll},
 	mosaik::*,
 	std::time::Instant,
 	tokio::time::interval,
 	tokio_stream::wrappers::BroadcastStream,
-	tracing::info,
+	tracing::debug,
 };
 
 #[tokio::test]
@@ -16,7 +17,7 @@ async fn converge_with_bootstrap() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 	let n0 = Network::new(network_id).await?;
 
-	info!(
+	debug!(
 		"Node0 (bootstrap) is known as {} on network {}",
 		n0.local().id(),
 		n0.network_id()
@@ -49,20 +50,20 @@ async fn converge_with_bootstrap() -> anyhow::Result<()> {
 	loop {
 		tokio::select! {
 			Some(Ok((event, peer_id))) = updates.next() => {
-				info!("Discovery event from {peer_id}: {event:?}");
+				debug!("Discovery event from {peer_id}: {event:?}");
 			}
 
 			_ = interval.tick() => {
 				for node in &nodes {
 					let catalog = node.discovery().catalog();
-					info!(
+					debug!(
 						"Peer {} knows about {} peers",
 						node.local().id(),
 						catalog.peers_count()
 					);
 				}
 
-				info!("---");
+				debug!("---");
 
 				let elapsed = start.elapsed();
 				let all_consistent = nodes.iter().all(|node| {
@@ -71,7 +72,7 @@ async fn converge_with_bootstrap() -> anyhow::Result<()> {
 				});
 
 				if all_consistent {
-					info!("All nodes catalogs synced in {elapsed:?}");
+					debug!("All nodes catalogs synced in {elapsed:?}");
 					return Ok(());
 				}
 
@@ -141,7 +142,7 @@ async fn different_networks_are_isolated() -> anyhow::Result<()> {
 	let n4 = Network::new(netid2).await?;
 
 	// perform full mesh syncs within each network
-	sync_all(&[&n0, &n1, &n2, &n3, &n4]).await?;
+	discover_all(&[&n0, &n1, &n2, &n3, &n4]).await?;
 
 	// ensure that peers on the same network have each other in their catalogs,
 	// but peers on different networks do not appear in each other's catalogs
@@ -163,19 +164,5 @@ async fn different_networks_are_isolated() -> anyhow::Result<()> {
 	assert!(n4.discovery().catalog().get(&n2.local().id()).is_some());
 	assert!(n4.discovery().catalog().get(&n3.local().id()).is_some());
 
-	Ok(())
-}
-
-async fn sync_all(networks: &[&Network]) -> anyhow::Result<()> {
-	for i in 0..networks.len() {
-		for j in 0..networks.len() {
-			if i != j {
-				networks[i]
-					.discovery()
-					.sync_with(networks[j].local().id())
-					.await?;
-			}
-		}
-	}
 	Ok(())
 }

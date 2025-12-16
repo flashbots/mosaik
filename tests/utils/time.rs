@@ -35,7 +35,8 @@ pub fn millis(count: u64) -> Duration {
 	Duration::from_millis(count)
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("timeout elapsed after {0:?}")]
 pub struct TimeoutElapsed(pub Duration);
 
 pub fn timeout_s<F>(

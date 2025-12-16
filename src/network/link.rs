@@ -212,6 +212,14 @@ impl<P: Protocol> Link<P> {
 	/// Receives the next framed message and deserializes it into the given
 	/// data type `D` using bincode deserialization.
 	pub async fn recv<D: DeserializeOwned>(&mut self) -> Result<D, RecvError> {
+		self.recv_with_size().await.map(|(d, _)| d)
+	}
+
+	/// Receives the next framed message and deserializes it into the given data
+	/// type `D`, returning along with the size of the received message in bytes.
+	pub async fn recv_with_size<D: DeserializeOwned>(
+		&mut self,
+	) -> Result<(D, usize), RecvError> {
 		let Some(frame) = self.cancel.run_until_cancelled(self.stream.next()).await
 		else {
 			close_connection(&self.connection, Cancelled).await;
@@ -235,6 +243,8 @@ impl<P: Protocol> Link<P> {
 			},
 		};
 
+		let bytes_len = reader.get_ref().len();
+
 		// deserialize the received bytes into the expected data type, if
 		// deserialization fails, close the connection with protocol violation
 		let decoded = match decode_from_std_read(&mut reader, standard()) {
@@ -245,7 +255,7 @@ impl<P: Protocol> Link<P> {
 			}
 		};
 
-		Ok(decoded)
+		Ok((decoded, bytes_len))
 	}
 
 	/// Sends a framed message over the link.

@@ -11,32 +11,53 @@ use {
 	},
 	futures::FutureExt,
 	std::{collections::BTreeSet, sync::Arc},
-	tokio::sync::watch,
+	tokio::sync::{SetOnce, watch},
 	tokio_util::sync::ReusableBoxFuture,
 };
 
-/// Consumer status condition monitoring
+/// Consumer status monitoring
 ///
 /// This struct provides access to futures that can be used to await changes
 /// in the consumer's status, such as when it becomes subscribed to producers or
 /// disconnects from them.
-pub struct When(watch::Receiver<ActiveReceivers>);
+pub struct When {
+	/// A one-time set handle that is completed when the consumer worker loop is
+	/// initialized and ready to interact with other peers.
+	pub(super) ready: Arc<SetOnce<()>>,
+
+	/// Observer for the active receivers map.
+	pub(super) receivers: watch::Receiver<ActiveReceivers>,
+}
 
 impl When {
 	/// Creates a new `When` instance from the given active receivers observer.
-	pub(super) fn new(active: watch::Receiver<ActiveReceivers>) -> Self {
-		Self(active)
+	pub(super) fn new(
+		active: watch::Receiver<ActiveReceivers>,
+		ready: Arc<SetOnce<()>>,
+	) -> Self {
+		Self {
+			ready,
+			receivers: active,
+		}
 	}
 }
 
 impl When {
+	/// Returns a future that resolves when the consumer is ready to interact
+	/// with other peers and has completed its initial setup.
+	///
+	/// Resolves immediately if the consumer is already up and running.
+	pub async fn ready(&self) {
+		self.ready.wait().await;
+	}
+
 	/// Returns a future that resolves when the consumer is subscribed to at least
 	/// one producer. This can be customized and combined with other conditions
 	/// using the methods on the returned [`SubscriptionCondition`].
 	pub fn subscribed(&self) -> SubscriptionCondition {
-		let mut receiver = self.0.clone();
+		let mut receiver = self.receivers.clone();
 		SubscriptionCondition {
-			active: self.0.clone(),
+			active: self.receivers.clone(),
 			min_producers: 1,
 			was_met: false,
 			is_inverse: false,
@@ -184,6 +205,18 @@ impl Future for SubscriptionCondition {
 				Poll::Pending => return Poll::Pending,
 			}
 		}
+	}
+}
+
+impl PartialEq<bool> for SubscriptionCondition {
+	fn eq(&self, other: &bool) -> bool {
+		self.is_condition_met() == *other
+	}
+}
+
+impl PartialEq<SubscriptionCondition> for bool {
+	fn eq(&self, other: &SubscriptionCondition) -> bool {
+		*self == other.is_condition_met()
 	}
 }
 

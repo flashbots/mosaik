@@ -1,9 +1,14 @@
-use {super::*, mosaik::*};
+use {
+	super::*,
+	crate::utils::{discover_all, timeout_s},
+	mosaik::{primitives::Short, *},
+};
 
 #[tokio::test]
 async fn by_tag() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 	let n0 = Network::new(network_id).await?;
+
 	let n1 = Network::builder(network_id)
 		.with_discovery(
 			discovery::Config::builder() //
@@ -20,24 +25,64 @@ async fn by_tag() -> anyhow::Result<()> {
 		.build()
 		.await?;
 
-	n0.discovery().dial(n1.local().id()).await;
-	n1.discovery().dial(n2.local().id()).await;
-
 	// This consumer will only attempt to subscribe to
 	// producers that have 'tag2' in their tags list.
-	let c0 = n0
+	let c0_1 = n0
 		.streams()
 		.consumer::<Data1>()
-		.only_from(|peer| peer.tags().contains(&"tag2".into()))
+		.subscribe_if(|peer| peer.tags().contains(&"tag2".into()))
 		.build();
+
+	// This consumer will attempt to subscribe to
+	// all discovered producers.
+	let c0_2 = n0.streams().consumer::<Data1>().build();
 
 	let p1 = n1.streams().produce::<Data1>();
 	let p2 = n2.streams().produce::<Data1>();
 
-	// ensure that c0 subscribes only to p1
-	c0.when().subscribed().to_at_least(2).await;
-	tracing::info!("consumer subscribed");
+	// wait for producers and consumer to be ready
+	timeout_s(1, c0_1.when().ready()).await?;
+	timeout_s(1, c0_2.when().ready()).await?;
+	timeout_s(1, p1.when().ready()).await?;
+	timeout_s(1, p2.when().ready()).await?;
 
-	// core::future::pending::<()>().await;
+	// sync discovery catalogs
+	discover_all(&[&n0, &n1, &n2]).await?;
+
+	// c0_1 should only be subscribed to p1 (n1), as it's the only producer
+	// that has the required tag. c0_2 should be subscribed to both p1 and p2
+	// because it has no restrictions.
+	timeout_s(2, c0_1.when().subscribed()).await?;
+	timeout_s(2, c0_2.when().subscribed().to_at_least(2)).await?;
+
+	// verify that c0_1 is only subscribed to n1
+	let subs = c0_1.producers().map(|p| *p.peer().id()).collect::<Vec<_>>();
+	assert_eq!(subs.len(), 1);
+	assert_eq!(subs[0], n1.local().id());
+
+	tracing::debug!("c0_1 is subscribed to the following producers:");
+	for producer in c0_1.producers() {
+		tracing::debug!(
+			" - {}, stats: {}",
+			Short(producer.peer()),
+			producer.stats()
+		);
+	}
+
+	// verify that c0_2 is subscribed to both n1 and n2
+	let subs: Vec<_> = c0_2.producers().map(|p| *p.peer().id()).collect();
+	assert_eq!(subs.len(), 2);
+	assert!(subs.contains(&n1.local().id()));
+	assert!(subs.contains(&n2.local().id()));
+
+	tracing::debug!("c0_2 is subscribed to the following producers:");
+	for producer in c0_2.producers() {
+		tracing::debug!(
+			" - {}, stats: {}",
+			Short(producer.peer()),
+			producer.stats()
+		);
+	}
+
 	Ok(())
 }

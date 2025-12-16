@@ -18,7 +18,7 @@ pub(in crate::streams) struct ConsumerConfig {
 
 	/// Holds the predicate that decides if a producer is eligible and should be
 	/// contacted for establishing a subscription.
-	pub only_from: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
+	pub subscribe_if: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
 
 	/// The backoff policy for retrying stream subscription connections on
 	/// recoverable failures.
@@ -45,11 +45,11 @@ impl<D: Datum> Builder<'_, D> {
 	/// for producers that are going to be contacted for establishing
 	/// subscriptions.
 	#[must_use]
-	pub fn only_from<F>(mut self, pred: F) -> Self
+	pub fn subscribe_if<F>(mut self, pred: F) -> Self
 	where
 		F: Fn(&PeerEntry) -> bool + Send + Sync + 'static,
 	{
-		self.config.only_from = Box::new(pred);
+		self.config.subscribe_if = Box::new(pred);
 		self
 	}
 
@@ -78,7 +78,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 		Self {
 			config: ConsumerConfig {
 				criteria: Criteria::default(),
-				only_from: Box::new(|_| true),
+				subscribe_if: Box::new(|_| true),
 				backoff: streams.config.backoff.clone(),
 			},
 			streams,

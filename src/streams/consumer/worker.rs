@@ -15,7 +15,7 @@ use {
 	core::pin::Pin,
 	futures::{Stream, StreamExt, future::JoinAll, stream::SelectAll},
 	std::sync::Arc,
-	tokio::sync::{mpsc, watch},
+	tokio::sync::{SetOnce, mpsc, watch},
 	tokio_stream::wrappers::WatchStream,
 	tokio_util::sync::CancellationToken,
 };
@@ -54,6 +54,10 @@ pub(super) struct ConsumerWorker<D: Datum> {
 
 	/// Aggregated status streams from all active receiver workers.
 	status_rx: StateUpdatesStream,
+
+	/// A one-time set handle that is completed when the consumer worker loop is
+	/// ready.
+	ready: Arc<SetOnce<()>>,
 }
 
 impl<D: Datum> ConsumerWorker<D> {
@@ -66,6 +70,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		let local = streams.local.clone();
 		let cancel = local.termination().child_token();
 		let active = watch::Sender::new(ActiveReceivers::new());
+		let ready = Arc::new(SetOnce::new());
 		let (data_tx, data_rx) = mpsc::unbounded_channel();
 
 		let worker = ConsumerWorker {
@@ -76,13 +81,14 @@ impl<D: Datum> ConsumerWorker<D> {
 			cancel: cancel.clone(),
 			active: active.clone(),
 			status_rx: StateUpdatesStream::new(),
+			ready: ready.clone(),
 		};
 
 		tokio::spawn(worker.run());
 
 		Consumer {
 			chan: data_rx,
-			status: When::new(active.subscribe()),
+			status: When::new(active.subscribe(), ready),
 			_abort: cancel.drop_guard(),
 		}
 	}
@@ -95,6 +101,9 @@ impl<D: Datum> ConsumerWorker<D> {
 		// current state of the catalog.
 		let mut catalog = self.discovery.catalog_watch();
 		catalog.mark_changed();
+
+		// mark the consumer as ready after initial setup is done
+		self.ready.set(()).expect("ready set once");
 
 		loop {
 			tokio::select! {
@@ -144,7 +153,7 @@ impl<D: Datum> ConsumerWorker<D> {
 					"discovered new producer"
 				);
 
-				if !(self.config.only_from)(producer) {
+				if !(self.config.subscribe_if)(producer) {
 					tracing::debug!(
 						stream_id = %stream_id,
 						producer_id = %Short(producer.id()),

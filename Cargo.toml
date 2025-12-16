@@ -122,6 +122,8 @@ dashmap = "6.1"
 slotmap = "1.1"
 derive_builder = "0.20.2"
 backoff = { version = "0.4", features = ["futures", "tokio"] }
+humansize = "2.0.0"
+humantime = "2.3"
 
 # CLI only dependencies
 clap = { workspace = true, optional = true }

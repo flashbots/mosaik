@@ -16,7 +16,13 @@ use {
 		},
 	},
 	backoff::backoff::Backoff,
-	core::{future::pending, ops::ControlFlow},
+	chrono::{DateTime, Utc},
+	core::{
+		future::pending,
+		ops::ControlFlow,
+		sync::atomic::{AtomicI64, AtomicUsize, Ordering},
+		time::Duration,
+	},
 	futures::FutureExt,
 	std::sync::Arc,
 	tokio::sync::{mpsc, watch},
@@ -66,11 +72,14 @@ pub(super) struct Receiver<D: Datum> {
 	/// The receiver future always carries the current physical link along with
 	/// it to enable repairing dropped connections according to the backoff
 	/// policy.
-	next_recv: ReusableBoxFuture<'static, (Result<D, LinkError>, Link<Streams>)>,
+	next_recv: ReusableBoxFuture<'static, (DatumRecvResult<D>, Link<Streams>)>,
 
 	/// Backoff policy for reconnecting to the remote producer on recoverable
 	/// errors that is currently being applied since the last successful receive.
 	backoff: Option<Box<dyn Backoff + Send + Sync + 'static>>,
+
+	/// Statistics about this receiver worker.
+	stats: Arc<Stats>,
 }
 
 /// Controls and observes the state of one stream receiver worker associated
@@ -78,7 +87,7 @@ pub(super) struct Receiver<D: Datum> {
 ///
 /// There should be only one instance of this worker handle per remote
 /// producer peer for a given consumer worker.
-pub(super) struct ReceiverHandle {
+pub struct ReceiverHandle {
 	/// Cancellation token for terminating the receiver worker associated with
 	/// this remote producer. This gets implicitly triggered when the parent
 	/// consumer worker is dropped or the network is shutting down.
@@ -90,6 +99,9 @@ pub(super) struct ReceiverHandle {
 	/// Snapshot of the remote producer peer entry as known at the time of
 	/// receiver worker creation.
 	peer: Arc<PeerEntry>,
+
+	/// Statistics about this receiver worker.
+	stats: Arc<Stats>,
 }
 
 impl ReceiverHandle {
@@ -121,6 +133,11 @@ impl ReceiverHandle {
 	pub fn peer(&self) -> &PeerEntry {
 		&self.peer
 	}
+
+	/// Returns statistics about this receiver worker.
+	pub fn stats(&self) -> &Stats {
+		&self.stats
+	}
 }
 
 impl<D: Datum> Receiver<D> {
@@ -137,6 +154,7 @@ impl<D: Datum> Receiver<D> {
 		let data_tx = data_tx.clone();
 		let discovery = discovery.clone();
 		let peer = Arc::new(peer);
+		let stats = Arc::new(Stats::default());
 		let next_recv = ReusableBoxFuture::new(pending());
 		let (state_tx, state) = watch::channel(State::Connecting);
 
@@ -150,6 +168,7 @@ impl<D: Datum> Receiver<D> {
 			backoff: None,
 			cancel: cancel.clone(),
 			peer: Arc::clone(&peer),
+			stats: Arc::clone(&stats),
 		};
 
 		tokio::spawn(worker.run());
@@ -158,6 +177,7 @@ impl<D: Datum> Receiver<D> {
 			cancel,
 			state,
 			peer,
+			stats,
 		}
 	}
 }
@@ -195,15 +215,19 @@ impl<D: Datum> Receiver<D> {
 	/// and honors the cancellation signal.
 	async fn on_next_recv(
 		&mut self,
-		result: Result<D, LinkError>,
+		result: DatumRecvResult<D>,
 		link: Link<Streams>,
 	) {
 		match result {
 			// a datum was successfully received
-			Ok(datum) => {
+			Ok((datum, bytes_len)) => {
 				// forward the received datum to the consumer worker
 				// for delivery to public api consumer handle.
 				self.data_tx.send(datum).ok();
+
+				// update stats
+				self.stats.datums.fetch_add(1, Ordering::Relaxed);
+				self.stats.bytes.fetch_add(bytes_len, Ordering::Relaxed);
 
 				// if not cancelled, prepare to receive the next datum
 				if !self.cancel.is_cancelled() {
@@ -232,11 +256,17 @@ impl<D: Datum> Receiver<D> {
 	fn make_next_recv_future(
 		&self,
 		mut link: Link<Streams>,
-	) -> impl Future<Output = (Result<D, LinkError>, Link<Streams>)> + 'static {
+	) -> impl Future<Output = (Result<(D, usize), LinkError>, Link<Streams>)> + 'static
+	{
 		// bind the the receive future along with the link instance for next
 		// receive polls or for connection recovery logic.
-		async move { (link.recv::<D>().await.map_err(LinkError::Recv), link) }
-			.fuse()
+		async move {
+			(
+				link.recv_with_size::<D>().await.map_err(LinkError::Recv),
+				link,
+			)
+		}
+		.fuse()
 	}
 
 	/// Attempts to connect to the remote producer and perform the stream
@@ -286,7 +316,7 @@ impl<D: Datum> Receiver<D> {
 					producer_id = %Short(&peer_addr.id),
 					expected_network = %Short(self.local.network_id()),
 					received_network = %Short(start.network_id()),
-					"producer responded with invalid network id in start stream handshake",
+					"producer is on a different network",
 				);
 				return Err(LinkError::Recv(RecvError::closed(DifferentNetwork)));
 			}
@@ -296,7 +326,7 @@ impl<D: Datum> Receiver<D> {
 				tracing::warn!(
 					stream_id = %D::stream_id(),
 					producer_id = %Short(&peer_addr.id),
-					"producer responded with invalid start stream handshake",
+					"producer is producing a different stream than requested",
 				);
 				return Err(LinkError::Recv(RecvError::closed(StreamNotFound)));
 			}
@@ -316,6 +346,12 @@ impl<D: Datum> Receiver<D> {
 
 				// set the receiver state to connected
 				self.state_tx.send(State::Connected).ok();
+
+				// update stats
+				self
+					.stats
+					.connected_at
+					.store(Utc::now().timestamp_millis(), Ordering::Relaxed);
 
 				// begin listening for incoming data
 				self.next_recv.set(self.make_next_recv_future(link));
@@ -346,6 +382,7 @@ impl<D: Datum> Receiver<D> {
 			() => {
 				self.cancel.cancel();
 				self.state_tx.send(State::Terminated).ok();
+				self.stats.connected_at.store(0, Ordering::Relaxed);
 				return;
 			};
 
@@ -360,6 +397,7 @@ impl<D: Datum> Receiver<D> {
 
 				self.cancel.cancel();
 				self.state_tx.send(State::Terminated).ok();
+				self.stats.connected_at.store(0, Ordering::Relaxed);
 				return;
 			};
 		}
@@ -466,7 +504,7 @@ impl<D: Datum> Receiver<D> {
 
 /// The current connection state of a stream receiver worker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum State {
+pub enum State {
 	/// A connection is being established with the remote producer.
 	Connecting,
 
@@ -479,3 +517,106 @@ pub(super) enum State {
 	/// connection to the same producer.
 	Terminated,
 }
+
+/// Statistics about an individual stream subscription receiver.
+pub struct Stats {
+	/// Timestamp when this producer was first discovered.
+	created_at: DateTime<Utc>,
+
+	/// Timestamp when the last connection with the producer was established.
+	/// Represented as a unix timestamp in milliseconds.
+	///
+	/// Notes:
+	/// - If the connection with this producer has never been established, or is
+	///   currently dropped pending retries, this value is `0`.
+	///
+	/// - If the connection with this producer was dropped and reestablished,
+	///   this value will store the timestamp of the last successful connection.
+	connected_at: AtomicI64,
+
+	/// Total number of datums received from the remote producer.
+	datums: AtomicUsize,
+
+	/// Total number of bytes received from the remote producer.
+	bytes: AtomicUsize,
+}
+
+impl Stats {
+	/// Returns the timestamp when this receiver was created.
+	pub const fn created_at(&self) -> DateTime<Utc> {
+		self.created_at
+	}
+
+	/// Returns the total number of datums received from the remote producer.
+	pub fn datums(&self) -> usize {
+		self.datums.load(Ordering::Relaxed)
+	}
+
+	/// Returns the total number of bytes received from the remote producer.
+	pub fn bytes(&self) -> usize {
+		self.bytes.load(Ordering::Relaxed)
+	}
+
+	/// Returns the duration since the last successful connection with the
+	/// remote producer was established.
+	pub fn uptime(&self) -> Option<Duration> {
+		let ts = self.connected_at.load(Ordering::Relaxed);
+		if ts == 0 {
+			return None;
+		}
+
+		let connected_at = DateTime::<Utc>::from_timestamp_millis(ts).expect(
+			"stored connected_at timestamp should always be a valid datetime",
+		);
+
+		(Utc::now() - connected_at).to_std().ok()
+	}
+}
+
+impl core::fmt::Debug for Stats {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		use {
+			humansize::{DECIMAL, format_size},
+			humantime::format_duration,
+		};
+
+		f.debug_struct("Stats")
+			.field("created_at", &self.created_at)
+			.field("uptime", &self.uptime().map(format_duration))
+			.field("datums", &self.datums())
+			.field("bytes", &format_size(self.bytes(), DECIMAL))
+			.finish_non_exhaustive()
+	}
+}
+
+impl core::fmt::Display for Stats {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		use {
+			humansize::{DECIMAL, format_size},
+			humantime::format_duration,
+		};
+
+		write!(
+			f,
+			"uptime: {}, datums: {}, bytes: {}",
+			self
+				.uptime()
+				.map_or("N/A".to_string(), |d| format_duration(d).to_string()),
+			self.datums(),
+			format_size(self.bytes(), DECIMAL),
+		)
+	}
+}
+
+impl Default for Stats {
+	fn default() -> Self {
+		Self {
+			created_at: Utc::now(),
+			connected_at: AtomicI64::new(0),
+			bytes: AtomicUsize::new(0),
+			datums: AtomicUsize::new(0),
+		}
+	}
+}
+
+type DatumRecvResult<D> = Result<(D, usize), LinkError>;

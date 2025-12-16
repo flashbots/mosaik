@@ -4,13 +4,39 @@ use {
 		pin::Pin,
 		task::{Context, Poll},
 	},
-	std::collections::BTreeSet,
+	std::{collections::BTreeSet, sync::Arc},
+	tokio::sync::SetOnce,
 };
 
+/// Producer status monitoring
+///
+/// This struct provides access to futures that can be used to await changes
+/// in the producer's status, such as when it gains subscribers or becomes
+/// ready to interact with other peers.
 #[derive(Clone)]
-pub struct When;
+pub struct When {
+	/// A one-time set handle that is completed when the producer worker loop is
+	/// initialized and ready to interact with other peers.
+	pub(super) ready: Arc<SetOnce<()>>,
+}
 
+// Internal API
 impl When {
+	pub(super) fn new(ready: Arc<SetOnce<()>>) -> Self {
+		Self { ready }
+	}
+}
+
+// Public API
+impl When {
+	/// Returns a future that resolves when the producer is ready to interact
+	/// with other peers and has completed its initial setup.
+	///
+	/// Resolves immediately if the producer is already up and running.
+	pub async fn ready(&self) {
+		self.ready.wait().await;
+	}
+
 	/// Returns a future that resolves when the producer has at least one
 	/// subscriber.
 	pub fn subscribed(&self) -> SubscriptionCondition {
