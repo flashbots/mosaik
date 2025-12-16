@@ -419,13 +419,12 @@ impl<D: Datum> Receiver<D> {
 			// this consumer in its discovery catalog. Trigger full catalog
 			// sync with the producer then reconnect.
 			(_, Some(reason)) if reason == UnknownPeer => {
-				// The connection was closed by the producer because the stream id
-				// was not produced by this node. Do not attempt to reconnect.
 				tracing::debug!(
 					stream_id = %D::stream_id(),
 					producer_id = %Short(&self.peer.id()),
 					"producer does not recognize this consumer",
 				);
+
 				let _ = self
 					.discovery
 					.sync_with(self.peer.address().clone())
@@ -452,6 +451,12 @@ impl<D: Datum> Receiver<D> {
 				// either in the discovery system or the producer's stream
 				// registration logic.
 				unrecoverable!("producer does not have the requested stream", e);
+			}
+			(e, Some(reason)) if reason == DifferentNetwork => {
+				// The producer is on a different network than this consumer.
+				// This is unrecoverable and most likely indicates a corrupt or stale
+				// discovery catalog.
+				unrecoverable!("producer is on a different network", e);
 			}
 			(e, _) => {
 				// io error occurred, drop the current link and attempt to reconnect
