@@ -77,6 +77,7 @@ impl When {
 		self.subscribed().not()
 	}
 }
+
 /// A future that resolves when a consumer's status meets a certain condition.
 ///
 /// This future can be polled multiple times even after it has resolved once,

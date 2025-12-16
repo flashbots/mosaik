@@ -1,11 +1,12 @@
 use {
+	super::{StreamInfo, worker::SubscriptionId},
 	crate::primitives::{IntoIterOrSingle, Tag},
 	core::{
 		pin::Pin,
 		task::{Context, Poll},
 	},
 	std::{collections::BTreeSet, sync::Arc},
-	tokio::sync::SetOnce,
+	tokio::sync::{SetOnce, watch},
 };
 
 /// Producer status monitoring
@@ -18,12 +19,18 @@ pub struct When {
 	/// A one-time set handle that is completed when the producer worker loop is
 	/// initialized and ready to interact with other peers.
 	pub(super) ready: Arc<SetOnce<()>>,
+
+	/// Observer for the active subscriptions info.
+	pub(super) active: watch::Receiver<im::HashMap<SubscriptionId, StreamInfo>>,
 }
 
 // Internal API
 impl When {
-	pub(super) fn new(ready: Arc<SetOnce<()>>) -> Self {
-		Self { ready }
+	pub(super) fn new(
+		ready: Arc<SetOnce<()>>,
+		active: watch::Receiver<im::HashMap<SubscriptionId, StreamInfo>>,
+	) -> Self {
+		Self { ready, active }
 	}
 }
 

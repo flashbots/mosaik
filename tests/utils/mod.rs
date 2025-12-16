@@ -4,21 +4,20 @@ mod fut;
 mod time;
 mod tracing;
 
+use futures::future::try_join_all;
 pub use {fut::*, time::*};
 
 pub async fn discover_all(
 	networks: impl IntoIterator<Item = &mosaik::Network>,
 ) -> anyhow::Result<()> {
 	let networks = networks.into_iter().collect::<Vec<_>>();
-	for i in 0..networks.len() {
-		for j in 0..networks.len() {
-			if i != j {
-				networks[i]
-					.discovery()
-					.sync_with(networks[j].local().id())
-					.await?;
-			}
-		}
-	}
+	try_join_all(networks.iter().enumerate().flat_map(|(i, net_i)| {
+		networks
+			.iter()
+			.enumerate()
+			.filter(move |(j, _)| i != *j)
+			.map(move |(_, net_j)| net_i.discovery().sync_with(net_j.local().id()))
+	}))
+	.await?;
 	Ok(())
 }

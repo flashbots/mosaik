@@ -8,6 +8,7 @@ use {
 			StreamId,
 			Streams,
 			accept::StartStream,
+			status::StreamInfo,
 		},
 		Producer,
 		Sinks,
@@ -15,23 +16,25 @@ use {
 		builder::ProducerConfig,
 	},
 	crate::{
+		PeerId,
 		discovery::PeerEntry,
 		network::link::{GracefulShutdown, Link},
 		primitives::{Bytes, Short},
+		streams::status::{State, Stats},
 	},
 	bincode::{config::standard, serde::encode_to_vec},
 	core::{any::Any, cell::OnceCell},
 	futures::future::join_all,
 	slotmap::DenseSlotMap,
 	std::sync::Arc,
-	tokio::sync::{SetOnce, mpsc},
+	tokio::sync::{SetOnce, mpsc, watch},
 	tokio_util::sync::CancellationToken,
 };
 
 /// Fanout Sink handle for a specific stream.
 ///
-/// This structs provides an interface to interact with the long-running fanout
-/// sink worker loop for a specific stream id.
+/// This structs provides an interface to interact with the long-running
+/// producer fanout sink worker loop for a specific stream id.
 pub(in crate::streams) struct Handle {
 	/// The unique stream id associated with this sink.
 	///
@@ -55,6 +58,9 @@ pub(in crate::streams) struct Handle {
 	/// A one-time set handle that is completed when the producer worker loop is
 	/// initialized and ready to interact with other peers.
 	ready: Arc<SetOnce<()>>,
+
+	/// Observer for the active subscriptions info map.
+	active: watch::Receiver<im::HashMap<SubscriptionId, StreamInfo>>,
 }
 
 impl Handle {
@@ -70,7 +76,10 @@ impl Handle {
 			.downcast_ref::<mpsc::Sender<D>>()
 			.expect("Failed to downcast data sender channel");
 
-		Producer::new(data_tx.clone(), When::new(self.ready.clone()))
+		Producer::new(
+			data_tx.clone(),
+			When::new(self.ready.clone(), self.active.clone()),
+		)
 	}
 
 	/// Accepts an incoming connection from a remote consumer for this stream id.
@@ -99,6 +108,9 @@ impl Handle {
 /// There is an instance of this struct for each active stream id that has
 /// at least one producer associated with it.
 pub(super) struct WorkerLoop<D: Datum> {
+	/// The local node's peer id.
+	local_id: PeerId,
+
 	/// Configuration for this producer sink.
 	config: ProducerConfig,
 
@@ -114,6 +126,12 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// Active subscriptions from remote consumers for this stream each with
 	/// potentially different criteria.
 	active: DenseSlotMap<SubscriptionId, Subscription>,
+
+	/// Channel for broadcasting active subscription info to observers.
+	///
+	/// This is used by public status APIs to get the current snapshot of
+	/// active subscriptions to this producer.
+	active_info: watch::Sender<im::HashMap<SubscriptionId, StreamInfo>>,
 
 	/// Incoming connections from remote consumers to be added as subscriptions.
 	///
@@ -133,6 +151,7 @@ impl<D: Datum> WorkerLoop<D> {
 
 		let stream_id = D::stream_id();
 		let ready = Arc::new(SetOnce::new());
+		let active_info = watch::Sender::new(im::HashMap::new());
 		let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
 		let (data_tx, data_rx) = mpsc::channel(config.buffer_size);
 
@@ -140,9 +159,11 @@ impl<D: Datum> WorkerLoop<D> {
 			config,
 			cancel,
 			data_rx,
+			local_id: sinks.local.id(),
 			active: DenseSlotMap::with_key(),
 			accepted: accepted_rx,
 			ready: ready.clone(),
+			active_info: active_info.clone(),
 		};
 
 		tokio::spawn(worker.run());
@@ -152,6 +173,7 @@ impl<D: Datum> WorkerLoop<D> {
 			data_tx: Box::new(data_tx),
 			accepted: accepted_tx,
 			ready,
+			active: active_info.subscribe(),
 		}
 	}
 }
@@ -204,6 +226,10 @@ impl<D: Datum> WorkerLoop<D> {
 				// SAFETY: `item` is properly serialized into `bytes` above.
 				let send_fut = unsafe { subscription.link.send_raw(bytes.clone()) };
 				sends.push(async move { (send_fut.await, sub_id) });
+
+				// Update statistics (todo)
+				subscription.stats.increment_datums();
+				subscription.stats.increment_bytes(bytes.len());
 			}
 		}
 
@@ -222,6 +248,12 @@ impl<D: Datum> WorkerLoop<D> {
 		}
 	}
 
+	/// Called by the protocol acceptor when a new remote consumer connection
+	/// is opened for this stream. This is responsible for validating the
+	/// connection and adding it to the active subscriptions if accepted.
+	///
+	/// Upon successful acceptance, a `StartStream` message is sent to the remote
+	/// consumer to initiate the stream.
 	async fn accept(
 		&mut self,
 		link: Link<Streams>,
@@ -230,7 +262,7 @@ impl<D: Datum> WorkerLoop<D> {
 	) {
 		// Check if we have capacity to accept a new consumer
 		if self.active.len() >= self.config.max_subscribers {
-			tracing::debug!(
+			tracing::warn!(
 				consumer_id = %Short(&link.remote_id()),
 				stream_id = %D::stream_id(),
 				current_subscribers = %self.active.len(),
@@ -245,7 +277,7 @@ impl<D: Datum> WorkerLoop<D> {
 
 		// Check if we should accept this consumer based on the auth predicate
 		if !(self.config.accept_if)(&peer) {
-			tracing::debug!(
+			tracing::warn!(
 				stream_id = %D::stream_id(),
 				consumer = %Short(&peer),
 				"rejected unauthorized consumer",
@@ -265,21 +297,45 @@ impl<D: Datum> WorkerLoop<D> {
 		);
 
 		let mut link = link;
+		let peer = Arc::new(peer);
 		let start_stream = StartStream(self.config.network_id, D::stream_id());
 
 		if let Err(e) = link.send(&start_stream).await {
-			tracing::error!(
+			tracing::warn!(
 				consumer_id = %Short(&link.remote_id()),
 				error = %e,
-				"failed to send start stream message to consumer",
+				"failed to confirm stream subscription with consumer",
 			);
 			return;
 		}
 
-		self.active.insert(Subscription {
+		let stats = Arc::new(Stats::default());
+		let state = watch::Sender::new(State::Connected);
+
+		// mark connection timestamp
+		stats.connected();
+
+		// Add the subscription to the active list
+		let sub_id = self.active.insert(Subscription {
 			link,
-			criteria,
-			_peer: peer,
+			criteria: criteria.clone(),
+			stats: Arc::clone(&stats),
+			peer: Arc::clone(&peer),
+			state: state.clone(),
+		});
+
+		// Publish an updated snapshot of active subscriptions info
+		// for public status APIs.
+		self.active_info.send_modify(|active| {
+			active.insert(sub_id, StreamInfo {
+				stream_id: D::stream_id(),
+				criteria,
+				producer_id: self.local_id,
+				consumer_id: *peer.id(),
+				stats,
+				peer,
+				state: state.subscribe(),
+			});
 		});
 	}
 
@@ -291,7 +347,13 @@ impl<D: Datum> WorkerLoop<D> {
 			"terminating stream producer",
 		);
 
-		for (_, subscription) in self.active.drain() {
+		for (sub_id, subscription) in self.active.drain() {
+			// Remove subscription from the active info map and signal
+			// to status observers that the subscription is gone.
+			self.active_info.send_modify(|active| {
+				active.remove(&sub_id);
+			});
+
 			let peer_id = subscription.link.remote_id();
 			if let Err(reason) = subscription.link.close(GracefulShutdown).await
 				&& !reason.is_cancelled()
@@ -313,7 +375,7 @@ slotmap::new_key_type! {
 	/// One remote node may have multiple subscriptions to the same stream
 	/// with different criteria. Each subscription is identified by a unique
 	/// [`SubscriptionId`] and is managed independently.
-	struct SubscriptionId;
+	pub(super) struct SubscriptionId;
 }
 
 /// Represents an active subscription from a remote consumer.
@@ -325,7 +387,13 @@ struct Subscription {
 	/// The stream subscription criteria for this consumer.
 	criteria: Criteria,
 
+	/// Statistics tracker for this subscription.
+	stats: Arc<Stats>,
+
 	/// Snapshot of the remote consumer peer entry as known at the time of
 	/// subscription creation.
-	_peer: PeerEntry,
+	peer: Arc<PeerEntry>,
+
+	/// State watcher for this subscription.
+	state: watch::Sender<State>,
 }

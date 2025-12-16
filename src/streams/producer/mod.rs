@@ -85,7 +85,11 @@ impl<D: Datum> Producer<D> {
 	/// stored here reflects the state of the consumer at the time the
 	/// subscription was established.
 	pub fn consumers(&self) -> impl Iterator<Item = StreamInfo> {
-		core::iter::empty()
+		// get the latest snapshot of active subscriptions info
+		// and release lock on the watch channel as soon as possible
+		let active = self.status.active.borrow().clone();
+
+		active.into_iter().map(|(_, info)| info)
 	}
 }
 
