@@ -19,7 +19,7 @@ use {
 		discovery::PeerEntry,
 		network::link::{GracefulShutdown, Link},
 		primitives::{Bytes, Short, UniqueId},
-		streams::status::{ActiveChannelsMap, State, Stats},
+		streams::status::{ActiveChannelsMap, ChannelConditions, State, Stats},
 	},
 	bincode::{config::standard, serde::encode_to_vec},
 	core::{any::Any, cell::OnceCell, pin::Pin},
@@ -27,7 +27,7 @@ use {
 	iroh::endpoint::ConnectionError,
 	slotmap::DenseSlotMap,
 	std::sync::Arc,
-	tokio::sync::{SetOnce, mpsc, watch},
+	tokio::sync::{mpsc, watch},
 	tokio_util::sync::CancellationToken,
 };
 
@@ -51,9 +51,8 @@ pub(in crate::streams) struct Handle {
 	/// as a new subscription.
 	accepted: mpsc::UnboundedSender<(Link<Streams>, Criteria, PeerEntry)>,
 
-	/// A one-time set handle that is completed when the producer worker loop is
-	/// initialized and ready to interact with other peers.
-	ready: Arc<SetOnce<()>>,
+	/// Observer for the ready status of the producer.
+	ready: watch::Receiver<bool>,
 
 	/// Observer for the active subscriptions info map.
 	active: watch::Receiver<ActiveChannelsMap>,
@@ -140,9 +139,13 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// whatever reason.
 	dropped: FuturesUnordered<DroppedFuture>,
 
-	/// A one-time set handle that is completed when the producer worker loop is
-	/// initialized and ready to interact with other peers.
-	ready: Arc<SetOnce<()>>,
+	/// Sets the online status of the producer when the worker loop is ready and
+	/// publishing conditions are met.
+	ready: watch::Sender<bool>,
+
+	/// A future that resolves when the producer can publish data based on
+	/// the configured publish conditions.
+	publish_if: ChannelConditions,
 }
 
 impl<D: Datum> WorkerLoop<D> {
@@ -150,11 +153,15 @@ impl<D: Datum> WorkerLoop<D> {
 	pub(super) fn spawn(sinks: &Sinks, config: ProducerConfig) -> Handle {
 		let cancel = sinks.local.termination().child_token();
 
-		let ready = Arc::new(SetOnce::new());
+		let ready = watch::Sender::new(false);
 		let config = Arc::new(config);
 		let active_info = watch::Sender::new(im::HashMap::new());
 		let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
 		let (data_tx, data_rx) = mpsc::channel(config.buffer_size);
+		let publish_if = (config.publish_if)(
+			When::new(active_info.subscribe(), ready.subscribe()).subscribed(),
+		);
+		ready.send_replace(publish_if.is_condition_met());
 
 		let worker = WorkerLoop::<D> {
 			cancel,
@@ -166,6 +173,7 @@ impl<D: Datum> WorkerLoop<D> {
 			ready: ready.clone(),
 			dropped: FuturesUnordered::new(),
 			active_info: active_info.clone(),
+			publish_if,
 		};
 
 		tokio::spawn(worker.run());
@@ -180,7 +188,7 @@ impl<D: Datum> WorkerLoop<D> {
 			config,
 			data_tx: Box::new(data_tx),
 			accepted: accepted_tx,
-			ready,
+			ready: ready.subscribe(),
 			active: active_info.subscribe(),
 		}
 	}
@@ -188,9 +196,6 @@ impl<D: Datum> WorkerLoop<D> {
 
 impl<D: Datum> WorkerLoop<D> {
 	pub async fn run(mut self) {
-		// mark the producer as ready after initial setup is done
-		self.ready.set(()).expect("ready set once");
-
 		loop {
 			tokio::select! {
 				// Triggered when the network is shutting down or
@@ -199,6 +204,17 @@ impl<D: Datum> WorkerLoop<D> {
 				() = self.cancel.cancelled() => {
 					self.shutdown().await;
 					break;
+				}
+
+				() = &mut self.publish_if => {
+					tracing::info!(
+						met = %self.publish_if.is_condition_met(),
+						stream_id = %Short(D::stream_id()),
+						consumers = %self.active.len(),
+						"producer publish conditions met, ready to send data",
+					);
+
+					self.ready.send_replace(self.publish_if.is_condition_met());
 				}
 
 				// Triggered when [`Acceptor`] accepts a new connection from a
@@ -333,7 +349,6 @@ impl<D: Datum> WorkerLoop<D> {
 			link,
 			criteria: criteria.clone(),
 			stats: Arc::clone(&stats),
-			peer: Arc::clone(&peer),
 			state: state.clone(),
 		});
 
@@ -437,10 +452,6 @@ struct Subscription {
 
 	/// Statistics tracker for this subscription.
 	stats: Arc<Stats>,
-
-	/// Snapshot of the remote consumer peer entry as known at the time of
-	/// subscription creation.
-	peer: Arc<PeerEntry>,
 
 	/// State watcher for this subscription.
 	state: watch::Sender<State>,

@@ -44,12 +44,6 @@ async fn by_tag() -> anyhow::Result<()> {
 	let p1 = n1.streams().produce::<Data1>();
 	let p2 = n2.streams().produce::<Data1>();
 
-	// wait for producers and consumer to be ready
-	timeout_s(1, c0_1.when().online()).await?;
-	timeout_s(1, c0_2.when().online()).await?;
-	timeout_s(1, p1.when().online()).await?;
-	timeout_s(1, p2.when().online()).await?;
-
 	// sync discovery catalogs
 	discover_all([&n0, &n1, &n2]).await?;
 
@@ -58,6 +52,8 @@ async fn by_tag() -> anyhow::Result<()> {
 	// because it has no restrictions.
 	timeout_s(2, c0_1.when().subscribed()).await?;
 	timeout_s(2, c0_2.when().subscribed().minimum_of(2)).await?;
+	timeout_s(2, p1.when().subscribed().minimum_of(2)).await?;
+	timeout_s(2, p2.when().subscribed()).await?;
 
 	// verify that c0_1 is only subscribed to n1
 	let subs = c0_1.producers().collect::<Vec<_>>();

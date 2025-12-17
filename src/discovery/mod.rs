@@ -59,7 +59,7 @@ impl Discovery {
 	///
 	/// This is an async and best-effort operation; there is no guarantee that the
 	/// dial will succeed or that the peers are online.
-	pub async fn dial<V>(&self, peers: impl IntoIterOrSingle<PeerId, V>) {
+	pub async fn dial<V>(&self, peers: impl IntoIterOrSingle<EndpointAddr, V>) {
 		self.0.dial(peers.iterator().into_iter()).await;
 	}
 

@@ -57,6 +57,12 @@ impl<D: Datum> Consumer<D> {
 		&self.status
 	}
 
+	/// Returns whether the consumer is currently ready to receive data
+	/// from other peers.
+	pub fn is_online(&self) -> bool {
+		self.status.is_online()
+	}
+
 	/// Returns an iterator over the currently connected producers for this
 	/// consumer. The `PeerEntry` values yielded by the iterator represent the
 	/// state of the peers at the time their subscription was established.

@@ -93,6 +93,12 @@ impl<D: Datum> Producer<D> {
 		&self.config
 	}
 
+	/// Returns whether the producer is has its publishing conditions met and is
+	/// ready to send data to connected consumers.
+	pub fn is_online(&self) -> bool {
+		self.status.is_online()
+	}
+
 	/// Returns an iterator over the active subscriptions to this producer.
 	///
 	/// Each subscription represents an active connection from a remote

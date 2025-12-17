@@ -12,7 +12,7 @@ use {
 		discovery::{Discovery, PeerEntry},
 		network::{LocalNode, link::*},
 		primitives::Short,
-		streams::status::ChannelInfo,
+		streams::{NotAllowed, status::ChannelInfo},
 	},
 	backoff::backoff::Backoff,
 	core::{future::pending, ops::ControlFlow, time::Duration},
@@ -360,6 +360,12 @@ impl<D: Datum> Receiver<D> {
 				let reconnect_fut = self.sync_catalog_then_connect(addr);
 				self.next_connect.set(reconnect_fut);
 				return;
+			}
+
+			(_, Some(reason)) if reason == NotAllowed => {
+				// The producer has refused the subscription request due to
+				// not meeting its subscription criteria.
+				unrecoverable!("authentication failed", reason);
 			}
 
 			// the connection was closed gracefully by the producer because it is

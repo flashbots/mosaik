@@ -18,7 +18,7 @@ use {
 	core::pin::Pin,
 	futures::{Stream, StreamExt, stream::SelectAll},
 	std::sync::Arc,
-	tokio::sync::{SetOnce, mpsc, watch},
+	tokio::sync::{mpsc, watch},
 	tokio_stream::wrappers::WatchStream,
 	tokio_util::sync::CancellationToken,
 };
@@ -58,7 +58,7 @@ pub(super) struct ConsumerWorker<D: Datum> {
 
 	/// A one-time set handle that is completed when the consumer worker loop is
 	/// ready.
-	ready: Arc<SetOnce<()>>,
+	ready: watch::Sender<bool>,
 }
 
 impl<D: Datum> ConsumerWorker<D> {
@@ -71,7 +71,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		let local = streams.local.clone();
 		let cancel = local.termination().child_token();
 		let active = watch::Sender::new(ActiveChannelsMap::new());
-		let ready = Arc::new(SetOnce::new());
+		let ready = watch::Sender::new(true);
 		let (data_tx, data_rx) = mpsc::unbounded_channel();
 
 		let worker = ConsumerWorker {
@@ -89,7 +89,7 @@ impl<D: Datum> ConsumerWorker<D> {
 
 		Consumer {
 			chan: data_rx,
-			status: When::new(active.subscribe(), ready),
+			status: When::new(active.subscribe(), ready.subscribe()),
 			_abort: cancel.drop_guard(),
 		}
 	}
@@ -104,7 +104,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		catalog.mark_changed();
 
 		// mark the consumer as ready after initial setup is done
-		self.ready.set(()).expect("ready set once");
+		let _ = self.ready.send(true);
 
 		loop {
 			tokio::select! {

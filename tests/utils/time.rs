@@ -1,5 +1,6 @@
 use {
 	core::{
+		panic::Location,
 		pin::Pin,
 		task::{Context, Poll, Waker},
 		time::Duration,
@@ -36,9 +37,10 @@ pub fn millis(count: u64) -> Duration {
 }
 
 #[derive(Debug, Clone, Copy, thiserror::Error)]
-#[error("timeout elapsed after {0:?}")]
-pub struct TimeoutElapsed(pub Duration);
+#[error("timeout elapsed after {0:?} at {1}")]
+pub struct TimeoutElapsed(pub Duration, pub &'static Location<'static>);
 
+#[track_caller]
 pub fn timeout_s<F>(
 	count: u64,
 	future: F,
@@ -46,11 +48,13 @@ pub fn timeout_s<F>(
 where
 	F: IntoFuture,
 {
+	let caller = Location::caller();
 	let duration = secs(count);
 	tokio::time::timeout(duration, future)
-		.map_err(move |_| TimeoutElapsed(duration))
+		.map_err(move |_| TimeoutElapsed(duration, caller))
 }
 
+#[track_caller]
 pub fn timeout_ms<F>(
 	count: u64,
 	future: F,
@@ -58,9 +62,10 @@ pub fn timeout_ms<F>(
 where
 	F: IntoFuture,
 {
+	let caller = Location::caller();
 	let duration = millis(count);
 	tokio::time::timeout(duration, future)
-		.map_err(move |_| TimeoutElapsed(duration))
+		.map_err(move |_| TimeoutElapsed(duration, caller))
 }
 
 pub fn sleep_s(count: u64) -> impl Future<Output = ()> {

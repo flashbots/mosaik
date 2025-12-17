@@ -3,7 +3,12 @@ use {
 		super::{Datum, Streams},
 		Producer,
 	},
-	crate::{NetworkId, StreamId, discovery::PeerEntry},
+	crate::{
+		NetworkId,
+		StreamId,
+		discovery::PeerEntry,
+		streams::status::ChannelConditions,
+	},
 	core::marker::PhantomData,
 };
 
@@ -36,6 +41,18 @@ pub struct ProducerConfig {
 	/// accept or reject incoming consumer connections.
 	pub accept_if: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
 
+	/// A function that produces channel conditions under which a datum can be
+	/// considered publishable to a consumer. Here you can specify conditions
+	/// such as minimum number of subscribers, required tags, or custom
+	/// predicates, that must be met before publishing is allowed otherwise
+	/// sending data through the producer will fail.
+	///
+	/// This follows the same API as the `producer.when().subscribed()` method.
+	/// By default this is set to allow publishing if there is at least one
+	/// subscriber.
+	pub publish_if:
+		Box<dyn Fn(ChannelConditions) -> ChannelConditions + Send + Sync>,
+
 	/// The network id this producer is associated with.
 	pub network_id: NetworkId,
 
@@ -63,6 +80,24 @@ impl<D: Datum> Builder<'_, D> {
 		F: Fn(&PeerEntry) -> bool + Send + Sync + 'static,
 	{
 		self.config.accept_if = Box::new(pred);
+		self
+	}
+
+	/// A function that produces channel conditions under which a datum can be
+	/// considered publishable to a consumer. Here you can specify conditions
+	/// such as minimum number of subscribers, required tags, or custom
+	/// predicates, that must be met before publishing is allowed otherwise
+	/// sending data through the producer will fail.
+	///
+	/// This follows the same API as the `producer.when().subscribed()` method.
+	/// By default this is set to allow publishing if there is at least one
+	/// subscriber.
+	#[must_use]
+	pub fn publish_if<F>(mut self, f: F) -> Self
+	where
+		F: Fn(ChannelConditions) -> ChannelConditions + Send + Sync + 'static,
+	{
+		self.config.publish_if = Box::new(f);
 		self
 	}
 
@@ -109,6 +144,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 				buffer_size: 1024,
 				stream_id: D::stream_id(),
 				accept_if: Box::new(|_| true),
+				publish_if: Box::new(|c| c.minimum_of(1)),
 				max_subscribers: usize::MAX,
 				network_id: *streams.local.network_id(),
 			},

@@ -44,12 +44,6 @@ async fn by_tag() -> anyhow::Result<()> {
 	let c3 = n3.streams().consume::<Data1>();
 	let c4 = n4.streams().consume::<Data1>();
 
-	// wait for producers and consumers to be ready
-	timeout_s(1, p0.when().online()).await?;
-	timeout_s(1, p1.when().online()).await?;
-	timeout_s(1, c3.when().online()).await?;
-	timeout_s(1, c4.when().online()).await?;
-
 	// sync discovery catalogs
 	discover_all([&n0, &n1, &n3, &n4]).await?;
 

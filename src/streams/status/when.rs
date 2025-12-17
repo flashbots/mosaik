@@ -11,7 +11,7 @@ use {
 	},
 	futures::FutureExt,
 	std::{collections::BTreeSet, sync::Arc},
-	tokio::sync::{SetOnce, watch},
+	tokio::sync::watch,
 	tokio_util::sync::ReusableBoxFuture,
 };
 
@@ -21,9 +21,11 @@ use {
 /// the channel becomes online and ready to interact with other peers or meets
 /// other subscription conditions.
 pub struct When {
-	/// A one-time set handle that is completed when the channel is
-	/// online and ready to interact with other peers.
-	pub(crate) ready: Arc<SetOnce<()>>,
+	/// Observer for the ready status of the consumer or producer.
+	///
+	/// When the value is set to false the consumer or producer is not ready
+	/// to send or receive data.
+	pub(crate) ready: watch::Receiver<bool>,
 
 	/// Observer for the most recent version of the active subscriptions info.
 	pub(crate) active: watch::Receiver<ActiveChannelsMap>,
@@ -31,22 +33,18 @@ pub struct When {
 
 impl Clone for When {
 	fn clone(&self) -> Self {
-		let mut active = self.active.clone();
-		active.mark_changed();
-
-		Self {
-			active,
-			ready: self.ready.clone(),
-		}
+		Self::new(self.active.clone(), self.ready.clone())
 	}
 }
 
 impl When {
 	/// Initialized by consumers and producers for each new stream subscription.
 	pub(crate) fn new(
-		active: watch::Receiver<ActiveChannelsMap>,
-		ready: Arc<SetOnce<()>>,
+		mut active: watch::Receiver<ActiveChannelsMap>,
+		mut ready: watch::Receiver<bool>,
 	) -> Self {
+		active.mark_changed();
+		ready.mark_changed();
 		Self { ready, active }
 	}
 }
@@ -54,12 +52,42 @@ impl When {
 // Public API
 impl When {
 	/// Returns a future that resolves when the consumer or producer is ready to
-	/// interact with other peers and has completed its initial setup.
+	/// send or receive data from other peers.
 	///
 	/// Resolves immediately if the consumer or producer is already up and
-	/// running.
-	pub async fn online(&self) {
-		self.ready.wait().await;
+	/// running and all publishing criteria are met.
+	///
+	/// By default for producers, this means at least one subscriber is connected.
+	pub fn online(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
+		let mut ready = self.ready.clone();
+
+		async move {
+			if ready.wait_for(|v| *v).await.is_err() {
+				// if the watch channel is closed, consider the consumer/producer
+				// offline and never resolve this future
+				core::future::pending::<()>().await;
+			}
+		}
+	}
+
+	/// Returns whether the consumer or producer is currently ready to send or
+	/// receive data from other peers.
+	pub fn is_online(&self) -> bool {
+		*self.ready.borrow()
+	}
+
+	/// Returns a future that resolves when the consumer or producer is not ready
+	/// to send or receive data from other peers.
+	///
+	/// Resolves immediately if the consumer or producer is already offline.
+	pub fn offline(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
+		let mut ready = self.ready.clone();
+
+		async move {
+			// if the watch channel is closed, consider the consumer/producer offline
+			// and always resolve this future
+			let _ = ready.wait_for(|v| !*v).await;
+		}
 	}
 
 	/// Returns a future that resolves when the consumer or producer is subscribed

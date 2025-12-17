@@ -18,11 +18,6 @@ async fn smoke() -> anyhow::Result<()> {
 	tracing::debug!("n2: {}", n2.local().id());
 
 	let p1 = n1.streams().produce::<Data1>();
-	p1.when().online().await;
-
-	n0.online().await;
-	n1.online().await;
-	n2.online().await;
 
 	// discover peers
 	discover_all([&n0, &n1, &n2]).await?;
@@ -38,8 +33,7 @@ async fn smoke() -> anyhow::Result<()> {
 	assert_eq!(poll_once(&mut condition4.clone()), Poll::Ready(()));
 
 	// 1 consumer, 1 producer
-	let c0 = n0.streams().consume::<Data1>();
-	c0.when().online().await;
+	let _c0 = n0.streams().consume::<Data1>();
 
 	// should resolve because we have 1 consumer now
 	timeout_s(3, &mut condition1)
@@ -53,8 +47,7 @@ async fn smoke() -> anyhow::Result<()> {
 	assert_eq!(poll_once(&mut condition2), Poll::Pending);
 
 	// 1 producer, 2 consumers
-	let c2 = n2.streams().consume::<Data1>();
-	c2.when().online().await;
+	let _c2 = n2.streams().consume::<Data1>();
 
 	// should resolve because we have 2 consumers now
 	timeout_s(3, &mut condition2)
@@ -103,8 +96,7 @@ async fn smoke() -> anyhow::Result<()> {
 	discover_all([&n0, &n1, &n3]).await?;
 
 	// add consumer on n3 for Data1 stream
-	let p3 = n3.streams().consume::<Data1>();
-	p3.when().online().await;
+	let _p3 = n3.streams().consume::<Data1>();
 
 	timeout_s(3, &mut condition2)
 		.await

@@ -39,9 +39,8 @@ async fn max_subs() -> anyhow::Result<()> {
 		.collect::<Vec<_>>();
 
 	// wait for all producers and consumers to be ready
-	timeout_s(1, prod.when().online()).await?;
 	join_all(consumers.iter().map(|c| timeout_s(1, c.when().online()))).await;
-	tracing::debug!("all producer and consumers are online");
+	tracing::debug!("all consumers are online");
 
 	// kick off full discovery
 	discover_all(n_cs.iter().chain(once(&n_p))).await?;
@@ -104,6 +103,136 @@ async fn max_subs() -> anyhow::Result<()> {
 		.find(|id| !subscribed.contains(id))
 		.expect("expected to find new subscriber");
 	assert!(unsubscribed.contains(new_subscriber));
+
+	Ok(())
+}
+
+/// This test verifies that the producer's `publish_if` condition is
+/// correctly applied to control when the producer is allowed to publish data.
+///
+/// Producers in this test do not place any restrictions on which consumers
+/// can subscribe to them; all consumers are allowed to connect, but publishing
+/// is controlled by the `publish_if` condition.
+#[tokio::test]
+async fn publish_if() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	// publishes data1 and data2 streams
+	let n0 = Network::new(network_id).await?;
+
+	// require at least two subscribers to allow publishing
+	let p0_1 = n0
+		.streams()
+		.producer::<Data1>()
+		.publish_if(|c| c.minimum_of(2))
+		.build()?;
+
+	// default publish_if allows publishing with at least one subscriber
+	let p0_2 = n0.streams().produce::<Data2>();
+
+	// publishes data1 stream
+	let n1 = Network::new(network_id).await?;
+
+	// allow publishing on p1_1 only if there are at least two subscribers with
+	// tag 'tag2'
+	let p1_1 = n1
+		.streams()
+		.producer::<Data1>()
+		.publish_if(|c| c.with_tags("tag2").minimum_of(2))
+		.build()?;
+
+	// spin up a consumer node with no tags
+	let n2 = Network::new(network_id).await?;
+	n2.discovery().dial(n0.local().addr()).await;
+	n2.discovery().dial(n1.local().addr()).await;
+
+	let c2_1 = n2.streams().consume::<Data1>();
+	let c2_2 = n2.streams().consume::<Data2>();
+
+	// ensure that consumers subscribe to both producers
+	timeout_s(2, c2_1.when().subscribed().minimum_of(2)).await?;
+	timeout_s(2, c2_2.when().subscribed().minimum_of(1)).await?;
+	tracing::debug!("Consumer n2 subscribed to all available producers");
+
+	// should not be able to publish yet, only 1 subscriber
+	timeout_s(2, p0_1.when().subscribed().minimum_of(1)).await?;
+	timeout_s(1, p0_1.when().offline()).await?;
+	assert!(!p0_1.is_online());
+
+	// should be able to publish, has 1 subscriber
+	timeout_s(2, p0_2.when().subscribed().minimum_of(1)).await?;
+	timeout_s(2, p0_2.when().online()).await?;
+	assert!(p0_2.is_online());
+
+	// should not be able to publish yet, no subscribers with tag 'tag2'
+	timeout_s(2, p1_1.when().subscribed().minimum_of(1)).await?;
+	timeout_s(1, p1_1.when().offline()).await?;
+	assert!(!p1_1.is_online());
+
+	// spin up another consumer without the required tag
+	let n3 = Network::new(network_id).await?;
+	n3.discovery().dial(n0.local().addr()).await;
+	n3.discovery().dial(n1.local().addr()).await;
+
+	let c3_1 = n3.streams().consume::<Data1>();
+
+	// ensure that the new consumer subscribes to both producers
+	timeout_s(2, c3_1.when().subscribed().minimum_of(2)).await?;
+	tracing::debug!("Consumer n3 subscribed to all available producers");
+
+	// p0_1 should now be able to publish, has 2 subscribers
+	timeout_s(2, p0_1.when().subscribed().minimum_of(2)).await?;
+	timeout_s(2, p0_1.when().online()).await?;
+	assert!(p0_1.is_online());
+
+	// p1_1 should still not be able to publish, no subscribers with tag 'tag2'
+	timeout_s(2, p1_1.when().subscribed().minimum_of(2)).await?;
+	assert!(!p1_1.is_online());
+
+	// spin up a tagged consumer
+	let n4 = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder() //
+				.with_tags("tag2"),
+		)
+		.build()
+		.await?;
+	n4.discovery().dial(n0.local().addr()).await;
+	n4.discovery().dial(n1.local().addr()).await;
+
+	let c4_1 = n4.streams().consume::<Data1>();
+
+	// wait for tagged consumers to subscribe
+	timeout_s(2, c4_1.when().subscribed().minimum_of(2)).await?;
+	tracing::debug!("Consumer n4 subscribed to all available producers");
+
+	// p1_1 should see the new subscriber but still not be able to publish,
+	// only 1 of its subscribers has the required tag
+	timeout_s(2, p1_1.when().subscribed().minimum_of(3)).await?;
+	timeout_s(1, p1_1.when().offline()).await?;
+	assert!(!p1_1.is_online());
+
+	let n5 = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder() //
+				.with_tags("tag2"),
+		)
+		.build()
+		.await?;
+
+	n5.discovery().dial(n0.local().addr()).await;
+	n5.discovery().dial(n1.local().addr()).await;
+
+	let c5_1 = n5.streams().consume::<Data1>();
+
+	// wait for tagged consumers to subscribe
+	timeout_s(2, c5_1.when().subscribed().minimum_of(2)).await?;
+	tracing::debug!("Consumer n5 subscribed to all available producers");
+
+	// p1_1 should now be able to publish, has 2 subscribers with required tag
+	timeout_s(2, p1_1.when().subscribed().minimum_of(4)).await?;
+	timeout_s(2, p1_1.when().online()).await?;
+	assert!(p1_1.is_online());
 
 	Ok(())
 }
