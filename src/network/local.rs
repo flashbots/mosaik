@@ -6,8 +6,9 @@ use {
 			NetworkId,
 			link::{OpenError, Protocol},
 		},
+		primitives::IntoIterOrSingle,
 	},
-	iroh::{Endpoint, EndpointAddr},
+	iroh::{Endpoint, EndpointAddr, discovery::Discovery},
 	std::{fmt, sync::Arc},
 	tokio::sync::SetOnce,
 	tokio_util::sync::CancellationToken,
@@ -136,6 +137,18 @@ impl LocalNode {
 		let local = self.clone();
 		let remote = remote.into();
 		async move { Link::open_with_cancel(&local, remote, cancel).await }
+	}
+
+	/// Adds the given peers to the iroh addressing system to associate peer ids
+	/// with their known addresses. This is used to speed up address resolution by
+	/// bypassing the DHT.
+	pub(crate) fn observe<'a, V>(
+		&self,
+		addrs: impl IntoIterOrSingle<&'a EndpointAddr, V>,
+	) {
+		for addr in addrs.iterator() {
+			self.endpoint().discovery().publish(&addr.clone().into());
+		}
 	}
 }
 

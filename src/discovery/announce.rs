@@ -189,11 +189,7 @@ impl Announce {
 			return;
 		}
 
-		self
-			.local
-			.endpoint()
-			.discovery()
-			.publish(&peer.address().clone().into());
+		self.local.observe(peer.address());
 
 		if self.neighbors_count.load(Ordering::SeqCst) == 0 {
 			let (tx, _) = oneshot::channel::<()>();
@@ -507,15 +503,8 @@ impl WorkerLoop {
 		topic_tx: &mut GossipSender,
 		tx: oneshot::Sender<()>,
 	) {
-		for peer in &peers {
-			self
-				.local
-				.endpoint()
-				.discovery()
-				.publish(&peer.clone().into());
-		}
-
-		let peer_ids = peers.iter().map(|p| p.id).collect::<Vec<_>>();
+		self.local.observe(peers.iter());
+		let peer_ids = peers.into_iter().map(|p| p.id).collect::<Vec<_>>();
 
 		tracing::debug!(
 			network = %self.local.network_id(),

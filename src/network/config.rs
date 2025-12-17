@@ -9,7 +9,11 @@ use {
 	},
 	core::net::SocketAddr,
 	derive_builder::Builder,
-	iroh::{Endpoint, discovery::mdns::MdnsDiscoveryBuilder, protocol::Router},
+	iroh::{
+		Endpoint,
+		discovery::{mdns::MdnsDiscoveryBuilder, static_provider::StaticProvider},
+		protocol::Router,
+	},
 	std::collections::BTreeSet,
 };
 
@@ -121,7 +125,8 @@ impl NetworkConfig {
 	async fn bind_endpoint(&self) -> Result<Endpoint, Error> {
 		let mut endpoint_builder = Endpoint::builder()
 			.secret_key(self.secret_key.clone())
-			.relay_mode(self.relay_mode.clone());
+			.relay_mode(self.relay_mode.clone())
+			.discovery(StaticProvider::new());
 
 		if self.mdns_discovery {
 			endpoint_builder =
