@@ -3,8 +3,8 @@ use {
 	crate::{
 		NetworkId,
 		discovery::PeerEntry,
-		network::{LocalNode, PeerId, link::Protocol},
-		primitives::{Pretty, Short, UnboundedChannel},
+		network::{LocalNode, link::Protocol},
+		primitives::{IntoIterOrSingle, Pretty, Short, UnboundedChannel},
 	},
 	bincode::{
 		config::standard,
@@ -16,7 +16,7 @@ use {
 		time::Duration,
 	},
 	futures::StreamExt,
-	iroh::protocol::ProtocolHandler,
+	iroh::{EndpointAddr, discovery::Discovery, protocol::ProtocolHandler},
 	iroh_gossip::{
 		Gossip,
 		api::{
@@ -76,9 +76,10 @@ pub enum Event {
 ///   are generated based on the changes to the current state of the catalog.
 pub(super) struct Announce {
 	gossip: Gossip,
+	local: LocalNode,
 	network_id: NetworkId,
 	events: UnboundedReceiver<Event>,
-	dials: UnboundedSender<(Vec<PeerId>, oneshot::Sender<()>)>,
+	dials: UnboundedSender<(Vec<EndpointAddr>, oneshot::Sender<()>)>,
 	neighbors_count: Arc<AtomicUsize>,
 }
 
@@ -133,7 +134,7 @@ impl Announce {
 			if let Err(e) = driver.spawn().await {
 				error!(
 					error = %e,
-					network_id = %local.network_id(),
+					network_id = %network_id,
 					"Unrecoverable error in discovery protocol, terminating network"
 				);
 
@@ -144,6 +145,7 @@ impl Announce {
 
 		Self {
 			gossip,
+			local,
 			network_id,
 			events: events.1,
 			dials: dials.0,
@@ -160,8 +162,18 @@ impl Announce {
 	}
 
 	/// Dials the given peer address to initiate a discovery exchange.
-	pub async fn dial(&self, peers: Vec<PeerId>) {
+	pub async fn dial<V>(&self, peers: impl IntoIterOrSingle<EndpointAddr, V>) {
 		let (tx, rx) = oneshot::channel::<()>();
+
+		let peers = peers.iterator().into_iter().collect::<Vec<_>>();
+		for peer in &peers {
+			self
+				.local
+				.endpoint()
+				.discovery()
+				.publish(&peer.clone().into());
+		}
+
 		self.dials.send((peers, tx)).ok();
 		let _ = rx.await;
 	}
@@ -177,9 +189,15 @@ impl Announce {
 			return;
 		}
 
+		self
+			.local
+			.endpoint()
+			.discovery()
+			.publish(&peer.address().clone().into());
+
 		if self.neighbors_count.load(Ordering::SeqCst) == 0 {
 			let (tx, _) = oneshot::channel::<()>();
-			self.dials.send((vec![*peer.id()], tx)).ok();
+			self.dials.send((vec![peer.address().clone()], tx)).ok();
 		}
 	}
 
@@ -201,7 +219,7 @@ struct WorkerLoop {
 	messages_in: UnboundedChannel<AnnouncementMessage>,
 	messages_out: UnboundedChannel<AnnouncementMessage>,
 	neighbors_count: Arc<AtomicUsize>,
-	dials: UnboundedReceiver<(Vec<PeerId>, oneshot::Sender<()>)>,
+	dials: UnboundedReceiver<(Vec<EndpointAddr>, oneshot::Sender<()>)>,
 	announce_interval: tokio::time::Interval,
 }
 
@@ -485,17 +503,27 @@ impl WorkerLoop {
 
 	async fn dial_peers(
 		&self,
-		peers: Vec<PeerId>,
+		peers: Vec<EndpointAddr>,
 		topic_tx: &mut GossipSender,
 		tx: oneshot::Sender<()>,
 	) {
+		for peer in &peers {
+			self
+				.local
+				.endpoint()
+				.discovery()
+				.publish(&peer.clone().into());
+		}
+
+		let peer_ids = peers.iter().map(|p| p.id).collect::<Vec<_>>();
+
 		tracing::debug!(
 			network = %self.local.network_id(),
-			peers = %Short::iter(&peers),
+			peers = %Short::iter(&peer_ids),
 			"Dialing peers"
 		);
 
-		if let Err(e) = topic_tx.join_peers(peers).await {
+		if let Err(e) = topic_tx.join_peers(peer_ids).await {
 			tracing::warn!(
 				error = %e,
 				network = %self.local.network_id(),

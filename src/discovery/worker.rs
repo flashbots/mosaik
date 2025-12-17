@@ -10,13 +10,15 @@ use {
 		sync::CatalogSync,
 	},
 	crate::{
-		network::{LocalNode, PeerId},
+		network::LocalNode,
 		primitives::{IntoIterOrSingle, Short},
 	},
+	core::iter::once,
 	futures::StreamExt,
 	iroh::{
 		EndpointAddr,
 		Watcher,
+		discovery::{Discovery, static_provider::StaticProvider},
 		endpoint::Connection,
 		protocol::DynProtocolHandler,
 	},
@@ -48,7 +50,7 @@ pub(super) struct Handle {
 
 impl Handle {
 	/// Sends a command to dial a peer with the given `PeerId`
-	pub async fn dial<V>(&self, peers: impl IntoIterOrSingle<PeerId, V>) {
+	pub async fn dial<V>(&self, peers: impl IntoIterOrSingle<EndpointAddr, V>) {
 		let (tx, rx) = oneshot::channel();
 		self
 			.commands
@@ -102,12 +104,27 @@ impl Handle {
 ///
 /// Interactions with the worker loop are done through the [`Handle`] struct.
 pub(super) struct WorkerLoop {
+	/// Allows the public API to interact with the internal worker loop.
 	handle: Arc<Handle>,
+
+	/// Full catalog sync protocol handler.
 	sync: CatalogSync,
+
+	/// Peer gossip announcement protocol handler.
 	announce: Announce,
+
+	/// Public API discovery events.
 	events: broadcast::Sender<Event>,
+
+	/// Ongoing catalog sync tasks.
 	syncs: JoinSet<Result<(), Error>>,
+
+	/// Incoming commands from the public API.
 	commands: UnboundedReceiver<WorkerCommand>,
+
+	/// Static addressing provider that publishes discovered peer addresses to
+	/// iroh endpoint addressing resolver.
+	provider: StaticProvider,
 }
 
 impl WorkerLoop {
@@ -137,6 +154,7 @@ impl WorkerLoop {
 			events: events_tx,
 			syncs: JoinSet::new(),
 			commands: commands_rx,
+			provider: StaticProvider::new(),
 		};
 
 		// spawn the worker loop
@@ -172,6 +190,14 @@ impl WorkerLoop {
 		// watch for local address changes, this will also trigger the first
 		// local peer entry update
 		let mut addr_change = self.handle.local.endpoint().watch_addr().stream();
+
+		self
+			.handle
+			.local
+			.endpoint()
+			.discovery()
+			.add(self.provider.clone());
+
 		loop {
 			tokio::select! {
 				// Network graceful termination signal
@@ -207,7 +233,7 @@ impl WorkerLoop {
 						tracing::warn!(
 							error = %e,
 							network = %self.handle.local.network_id(),
-							"Catalog Sync task failed"
+							"Discovery Catalog Sync task failed"
 						);
 					}
 				}
@@ -279,6 +305,15 @@ impl WorkerLoop {
 								"new peer discovered"
 							);
 
+							// Publish the new peer entry to the static provider
+							let endpoint_info = signed_peer_entry.address().clone().into();
+							self
+								.handle
+								.local
+								.endpoint()
+								.discovery()
+								.publish(&endpoint_info);
+
 							// Trigger a full catalog sync with the newly discovered peer
 							self.syncs.spawn(
 								self.sync.sync_with(signed_peer_entry.address().clone()),
@@ -286,8 +321,9 @@ impl WorkerLoop {
 
 							self
 								.events
-								.send(Event::PeerDiscovered(signed_peer_entry.clone().into()))
+								.send(Event::PeerDiscovered(signed_peer_entry.into()))
 								.ok();
+
 							true
 						}
 						UpsertResult::Updated(signed_peer_entry) => {
@@ -296,6 +332,16 @@ impl WorkerLoop {
 								network = %self.handle.local.network_id(),
 								"peer info updated"
 							);
+
+							// Publish the new peer entry to the static provider
+							let endpoint_info = signed_peer_entry.address().clone().into();
+							self
+								.handle
+								.local
+								.endpoint()
+								.discovery()
+								.publish(&endpoint_info);
+
 							self
 								.events
 								.send(Event::PeerUpdated(signed_peer_entry.clone().into()))
@@ -330,6 +376,7 @@ impl WorkerLoop {
 		match event {
 			Event::PeerDiscovered(entry) | Event::PeerUpdated(entry) => {
 				self.announce.observe(entry);
+				self.register_peers_addresses(once(entry.address()));
 			}
 			Event::PeerDeparted(_) => {}
 		}
@@ -342,6 +389,9 @@ impl WorkerLoop {
 		peer: EndpointAddr,
 		done: oneshot::Sender<Result<(), Error>>,
 	) {
+		// Register the peer addresses with the static addressing provider
+		self.register_peers_addresses(once(&peer));
+
 		let sync_fut = self.sync.sync_with(peer);
 		self.syncs.spawn(async move {
 			match sync_fut.await {
@@ -357,11 +407,27 @@ impl WorkerLoop {
 			}
 		});
 	}
+
+	/// Registers the addresses of a peer with the static addressing provider
+	fn register_peers_addresses<'a>(
+		&self,
+		addr: impl Iterator<Item = &'a EndpointAddr>,
+	) {
+		for addr in addr {
+			let endpoint_info = addr.clone().into();
+			self
+				.handle
+				.local
+				.endpoint()
+				.discovery()
+				.publish(&endpoint_info);
+		}
+	}
 }
 
 pub(super) enum WorkerCommand {
-	/// Dial a peer with the given `PeerId`s
-	DialPeers(Vec<PeerId>, oneshot::Sender<()>),
+	/// Dial a peer with the given `EndpointAddr`s
+	DialPeers(Vec<EndpointAddr>, oneshot::Sender<()>),
 
 	/// Accept an incoming `CatalogSync` protocol connection from a remote peer
 	AcceptCatalogSync(Connection),

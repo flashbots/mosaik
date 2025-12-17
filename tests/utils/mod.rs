@@ -16,7 +16,7 @@ pub async fn discover_all(
 			.iter()
 			.enumerate()
 			.filter(move |(j, _)| i != *j)
-			.map(move |(_, net_j)| net_i.discovery().sync_with(net_j.local().id()))
+			.map(move |(_, net_j)| net_i.discovery().sync_with(net_j.local().addr()))
 	}))
 	.await?;
 	Ok(())

@@ -23,8 +23,9 @@ use {
 		streams::status::{ActiveChannelsMap, State, Stats},
 	},
 	bincode::{config::standard, serde::encode_to_vec},
-	core::{any::Any, cell::OnceCell},
-	futures::future::join_all,
+	core::{any::Any, cell::OnceCell, pin::Pin},
+	futures::{FutureExt, StreamExt, future::join_all, stream::FuturesUnordered},
+	iroh::endpoint::ConnectionError,
 	slotmap::DenseSlotMap,
 	std::sync::Arc,
 	tokio::sync::{SetOnce, mpsc, watch},
@@ -139,6 +140,10 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// open transport-level stream.
 	accepted: mpsc::UnboundedReceiver<(Link<Streams>, Criteria, PeerEntry)>,
 
+	/// Futures that resolve when a remote consumer connection is dropped for
+	/// whatever reason.
+	dropped: FuturesUnordered<DroppedFuture>,
+
 	/// A one-time set handle that is completed when the producer worker loop is
 	/// initialized and ready to interact with other peers.
 	ready: Arc<SetOnce<()>>,
@@ -163,6 +168,7 @@ impl<D: Datum> WorkerLoop<D> {
 			active: DenseSlotMap::with_key(),
 			accepted: accepted_rx,
 			ready: ready.clone(),
+			dropped: FuturesUnordered::new(),
 			active_info: active_info.clone(),
 		};
 
@@ -203,6 +209,12 @@ impl<D: Datum> WorkerLoop<D> {
 				// by the public api via the [`Producer`] handle.
 				Some(datum) = self.data_rx.recv() => {
 					self.fanout(datum).await;
+				}
+
+				// Triggered when any of the active remote consumer connections
+				// is dropped for any reason.
+				Some((sub_id, reason)) = self.dropped.next() => {
+					self.on_connection_dropped(sub_id, &reason);
 				}
 			}
 		}
@@ -279,7 +291,7 @@ impl<D: Datum> WorkerLoop<D> {
 		if !(self.config.accept_if)(&peer) {
 			tracing::warn!(
 				stream_id = %D::stream_id(),
-				consumer = %Short(&peer),
+				consumer_id = %Short(&peer),
 				"rejected unauthorized consumer",
 			);
 
@@ -289,15 +301,7 @@ impl<D: Datum> WorkerLoop<D> {
 			return;
 		}
 
-		tracing::info!(
-			consumer_id = %Short(&link.remote_id()),
-			stream_id = %D::stream_id(),
-			criteria = ?criteria,
-			"accepted new consumer",
-		);
-
 		let mut link = link;
-		let peer = Arc::new(peer);
 		let start_stream = StartStream(self.config.network_id, D::stream_id());
 
 		if let Err(e) = link.send(&start_stream).await {
@@ -309,11 +313,17 @@ impl<D: Datum> WorkerLoop<D> {
 			return;
 		}
 
+		let peer = Arc::new(peer);
 		let stats = Arc::new(Stats::default());
 		let state = watch::Sender::new(State::Connected);
+		stats.connected(); // mark connection timestamp
 
-		// mark connection timestamp
-		stats.connected();
+		tracing::info!(
+			consumer_id = %Short(&link.remote_id()),
+			stream_id = %D::stream_id(),
+			criteria = ?criteria,
+			"accepted new consumer",
+		);
 
 		// Add the subscription to the active list
 		let sub_id = self.active.insert(Subscription {
@@ -323,6 +333,10 @@ impl<D: Datum> WorkerLoop<D> {
 			peer: Arc::clone(&peer),
 			state: state.clone(),
 		});
+
+		// Track when the remote consumer connection is dropped for any reason
+		let fut = self.active[sub_id].link.disconnected();
+		self.dropped.push(fut.map(move |r| (sub_id, r)).boxed());
 
 		// Publish an updated snapshot of active subscriptions info
 		// for public status APIs.
@@ -356,6 +370,9 @@ impl<D: Datum> WorkerLoop<D> {
 				active.remove(&sub_id);
 			});
 
+			subscription.stats.disconnected();
+			let _ = subscription.state.send(State::Terminated);
+
 			let peer_id = subscription.link.remote_id();
 			if let Err(reason) = subscription.link.close(GracefulShutdown).await
 				&& !reason.is_cancelled()
@@ -367,6 +384,32 @@ impl<D: Datum> WorkerLoop<D> {
 					"error closing subscription link",
 				);
 			}
+		}
+	}
+
+	/// Handles a dropped connection from a remote consumer.
+	fn on_connection_dropped(
+		&mut self,
+		sub_id: SubscriptionId,
+		reason: &ConnectionError,
+	) {
+		if let Some(subscription) = self.active.remove(sub_id) {
+			subscription.stats.disconnected();
+			let _ = subscription.state.send(State::Terminated);
+
+			// Remove subscription from the active info map and signal
+			// to status observers that the subscription is gone.
+			self.active_info.send_modify(|active| {
+				let sub_id = UniqueId::from_u64(sub_id.0.as_ffi());
+				active.remove(&sub_id);
+			});
+
+			tracing::info!(
+				stream_id = %Short(D::stream_id()),
+				consumer_id = %Short(&subscription.link.remote_id()),
+				reason = %reason,
+				"consumer disconnected",
+			);
 		}
 	}
 }
@@ -399,3 +442,7 @@ struct Subscription {
 	/// State watcher for this subscription.
 	state: watch::Sender<State>,
 }
+
+type DroppedFuture = Pin<
+	Box<dyn Future<Output = (SubscriptionId, ConnectionError)> + Send + 'static>,
+>;

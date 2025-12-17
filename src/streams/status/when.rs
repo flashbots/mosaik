@@ -20,7 +20,6 @@ use {
 /// This struct provides access to a future that can be used to await when
 /// the channel becomes online and ready to interact with other peers or meets
 /// other subscription conditions.
-#[derive(Clone)]
 pub struct When {
 	/// A one-time set handle that is completed when the channel is
 	/// online and ready to interact with other peers.
@@ -28,6 +27,18 @@ pub struct When {
 
 	/// Observer for the most recent version of the active subscriptions info.
 	pub(crate) active: watch::Receiver<ActiveChannelsMap>,
+}
+
+impl Clone for When {
+	fn clone(&self) -> Self {
+		let mut active = self.active.clone();
+		active.mark_changed();
+
+		Self {
+			active,
+			ready: self.ready.clone(),
+		}
+	}
 }
 
 impl When {
@@ -54,11 +65,11 @@ impl When {
 	/// Returns a future that resolves when the consumer or producer is subscribed
 	/// to at least one peer. This can be customized and combined with other
 	/// conditions using the methods on the returned [`SubscriptionCondition`].
-	pub fn subscribed(&self) -> SubscriptionCondition {
+	pub fn subscribed(&self) -> ChannelConditions {
 		let mut active = self.active.clone();
 		active.mark_changed();
 
-		SubscriptionCondition {
+		ChannelConditions {
 			active: active.clone(),
 			min_peers: 1,
 			was_met: false,
@@ -76,8 +87,8 @@ impl When {
 	/// [`SubscriptionCondition`].
 	///
 	/// This is equivalent to calling `subscribed().not()`.
-	pub fn unsubscribed(&self) -> SubscriptionCondition {
-		self.subscribed().not()
+	pub fn unsubscribed(&self) -> ChannelConditions {
+		self.subscribed().unmet()
 	}
 }
 
@@ -91,7 +102,7 @@ impl When {
 /// In its initial state when instantiated and the condition is met immediately,
 /// the future will resolve on the next poll, then reset to awaiting state until
 /// the condition transitions from not met to met.
-pub struct SubscriptionCondition {
+pub struct ChannelConditions {
 	active: watch::Receiver<ActiveChannelsMap>,
 	min_peers: usize,
 	predicates: Vec<Arc<PeerPredicate>>,
@@ -101,9 +112,10 @@ pub struct SubscriptionCondition {
 }
 
 // Public API
-impl SubscriptionCondition {
+impl ChannelConditions {
 	/// Specifies that the future should resolve when there is at least the given
 	/// number of peers.
+	#[must_use]
 	pub fn minimum_of(mut self, min: usize) -> Self {
 		self.min_peers = min;
 		self
@@ -115,6 +127,7 @@ impl SubscriptionCondition {
 	///
 	/// When combined with `minimum_of`, the condition is met when there are at
 	/// least that many producers with the given tags.
+	#[must_use]
 	pub fn with_tags<V>(self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
 		let tags: BTreeSet<Tag> = tags.iterator().into_iter().collect();
 		self.with_predicate(move |peer: &PeerEntry| tags.is_subset(peer.tags()))
@@ -122,6 +135,7 @@ impl SubscriptionCondition {
 
 	/// Specifies a custom predicate that must be met by producers for the
 	/// condition to be considered met.
+	#[must_use]
 	pub fn with_predicate<F>(mut self, predicate: F) -> Self
 	where
 		F: Fn(&PeerEntry) -> bool + Send + Sync + 'static,
@@ -144,15 +158,17 @@ impl SubscriptionCondition {
 		(matching_peers >= self.min_peers) != self.is_inverse
 	}
 
-	/// Inverts the condition, so that it resolves when the condition is not met.
-	pub fn not(self) -> Self {
+	/// Inverts the condition, so that the future resolves when the condition is
+	/// not met.
+	#[must_use]
+	pub fn unmet(self) -> Self {
 		let mut cloned = self.clone();
-		cloned.is_inverse = !cloned.is_inverse;
+		cloned.is_inverse = true;
 		cloned
 	}
 }
 
-impl Clone for SubscriptionCondition {
+impl Clone for ChannelConditions {
 	fn clone(&self) -> Self {
 		let mut active = self.active.clone();
 		active.mark_changed();
@@ -169,7 +185,7 @@ impl Clone for SubscriptionCondition {
 	}
 }
 
-impl fmt::Debug for SubscriptionCondition {
+impl fmt::Debug for ChannelConditions {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("SubscriptionCondition")
 			.field("min_peers", &self.min_peers)
@@ -179,7 +195,7 @@ impl fmt::Debug for SubscriptionCondition {
 	}
 }
 
-impl Future for SubscriptionCondition {
+impl Future for ChannelConditions {
 	type Output = ();
 
 	fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -213,14 +229,14 @@ impl Future for SubscriptionCondition {
 	}
 }
 
-impl PartialEq<bool> for SubscriptionCondition {
+impl PartialEq<bool> for ChannelConditions {
 	fn eq(&self, other: &bool) -> bool {
 		self.is_condition_met() == *other
 	}
 }
 
-impl PartialEq<SubscriptionCondition> for bool {
-	fn eq(&self, other: &SubscriptionCondition) -> bool {
+impl PartialEq<ChannelConditions> for bool {
+	fn eq(&self, other: &ChannelConditions) -> bool {
 		*self == other.is_condition_met()
 	}
 }

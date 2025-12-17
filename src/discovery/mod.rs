@@ -92,14 +92,14 @@ impl Discovery {
 	/// This async method resolves when the sync is complete or fails.
 	pub async fn sync_with(
 		&self,
-		peer_id: impl Into<EndpointAddr>,
+		peer_addr: impl Into<EndpointAddr>,
 	) -> Result<(), Error> {
-		let peer_id = peer_id.into();
+		let peer_addr = peer_addr.into();
 		let (tx, rx) = oneshot::channel();
 		self
 			.0
 			.commands
-			.send(WorkerCommand::SyncWith(peer_id, tx))
+			.send(WorkerCommand::SyncWith(peer_addr, tx))
 			.map_err(|_| Error::Cancelled)?;
 		rx.await.map_err(|_| Error::Cancelled)?
 	}

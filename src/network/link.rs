@@ -351,7 +351,7 @@ impl<P: Protocol> Link<P> {
 
 	/// Awaits the link closure and returns the closure result if the link was
 	/// closed for a reason not indicating success.
-	pub async fn closed(self) -> Result<(), ConnectionError> {
+	pub async fn closed(&self) -> Result<(), ConnectionError> {
 		match self
 			.cancel
 			.run_until_cancelled(self.connection.closed())
@@ -362,6 +362,24 @@ impl<P: Protocol> Link<P> {
 				Ok(())
 			}
 			Some(err) => Err(err),
+		}
+	}
+
+	/// Returns a future that resolves when the connection to the remote peer is
+	/// dropped or when the link is cancelled. The returned future is 'static and
+	/// can be spawned onto a separate task with lifetimes independent of the
+	/// link.
+	pub fn disconnected(
+		&self,
+	) -> impl Future<Output = ConnectionError> + Send + Sync + 'static {
+		let cancel = self.cancel.clone();
+		let connection = self.connection.clone();
+
+		async move {
+			cancel
+				.run_until_cancelled(connection.closed())
+				.await
+				.unwrap_or(ConnectionError::LocallyClosed)
 		}
 	}
 }
