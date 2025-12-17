@@ -6,12 +6,14 @@ use {
 		StreamId,
 		status::{ChannelInfo, When},
 	},
+	builder::ProducerConfig,
 	core::{
 		fmt::Debug,
 		pin::Pin,
 		task::{Context, Poll},
 	},
 	futures::{Sink, SinkExt},
+	std::sync::Arc,
 	tokio::sync::mpsc,
 	tokio_util::sync::PollSender,
 };
@@ -43,6 +45,7 @@ pub use {
 pub struct Producer<D: Datum> {
 	status: When,
 	chan: PollSender<D>,
+	config: Arc<ProducerConfig>,
 }
 
 impl<D: Datum> Debug for Producer<D> {
@@ -52,16 +55,21 @@ impl<D: Datum> Debug for Producer<D> {
 }
 
 impl<D: Datum> Producer<D> {
-	pub(crate) fn new(chan: mpsc::Sender<D>, status: When) -> Self {
+	pub(crate) fn new(
+		chan: mpsc::Sender<D>,
+		status: When,
+		config: Arc<ProducerConfig>,
+	) -> Self {
 		Self {
 			status,
+			config,
 			chan: PollSender::new(chan),
 		}
 	}
 
 	/// The stream id associated with this producer.
-	pub fn stream_id(&self) -> StreamId {
-		D::stream_id()
+	pub fn stream_id(&self) -> &StreamId {
+		&self.config().stream_id
 	}
 
 	/// Awaits changes to the producer's status.
@@ -78,6 +86,11 @@ impl<D: Datum> Producer<D> {
 	/// ```
 	pub const fn when(&self) -> &When {
 		&self.status
+	}
+
+	/// Returns the configuration used to create this producer.
+	pub fn config(&self) -> &ProducerConfig {
+		&self.config
 	}
 
 	/// Returns an iterator over the active subscriptions to this producer.

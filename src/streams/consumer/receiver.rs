@@ -10,10 +10,7 @@ use {
 	crate::{
 		Datum,
 		discovery::{Discovery, PeerEntry},
-		network::{
-			LocalNode,
-			link::{DifferentNetwork, GracefulShutdown, Link, LinkError, RecvError},
-		},
+		network::{LocalNode, link::*},
 		primitives::Short,
 		streams::status::ChannelInfo,
 	},
@@ -135,23 +132,27 @@ impl<D: Datum> Receiver<D> {
 		// initial connection attempt
 		self.connect().await;
 
+		let mut state_change = self.state_tx.subscribe();
+
 		loop {
 			tokio::select! {
-				// Triggered when the consumer is dropped or the network is shutting down
-				// or an unrecoverable error occurs with this receiver
-				() = self.cancel.cancelled() => {
-					let _ = self.state_tx
-						.subscribe()
-						.wait_for(|s| *s == State::Terminated)
-						.await;
-
-					break;
-				}
-
 				// Triggered when the next datum read future is ready.
 				// This could be either a successfully received datum or an error.
 				(result, link) = &mut self.next_recv => {
 					self.on_next_recv(result, link).await;
+				}
+
+				// Triggered when the receiver worker state changes to terminated.
+				// Used to break out of the loop when an unrecoverable error occurs.
+				_ = state_change.changed() => {
+					if *state_change.borrow_and_update() == State::Terminated {
+						tracing::debug!(
+							stream_id = %D::stream_id(),
+							producer_id = %Short(&self.peer.id()),
+							"receiver worker terminated",
+						);
+						break;
+					}
 				}
 			}
 		}
@@ -189,7 +190,7 @@ impl<D: Datum> Receiver<D> {
 			}
 			// an error occurred while receiving the datum,
 			// kick off the sad path handling for the current link.
-			Err(error) => self.handle_recv_error(error).await,
+			Err(error) => self.handle_recv_error(error, Some(link)).await,
 		}
 	}
 
@@ -208,7 +209,6 @@ impl<D: Datum> Receiver<D> {
 	{
 		// bind the the receive future along with the transport link it is using so
 		// we can repair the connection if needed.
-
 		async move {
 			let fut = link.recv_with_size::<D>().map_err(LinkError::Recv);
 			(fut.await, link)
@@ -265,6 +265,7 @@ impl<D: Datum> Receiver<D> {
 					received_network = %Short(start.network_id()),
 					"producer is on a different network",
 				);
+				link.close(DifferentNetwork).await.ok();
 				return Err(LinkError::Recv(RecvError::closed(DifferentNetwork)));
 			}
 
@@ -275,6 +276,7 @@ impl<D: Datum> Receiver<D> {
 					producer_id = %Short(&peer_addr.id),
 					"producer is producing a different stream than requested",
 				);
+				link.close(StreamNotFound).await.ok();
 				return Err(LinkError::Recv(RecvError::closed(StreamNotFound)));
 			}
 
@@ -300,7 +302,7 @@ impl<D: Datum> Receiver<D> {
 				// begin listening for incoming data
 				self.next_recv.set(self.make_next_recv_future(link));
 			}
-			Err(error) => self.handle_recv_error(error).await,
+			Err(error) => self.handle_recv_error(error, None).await,
 		}
 	}
 
@@ -317,7 +319,11 @@ impl<D: Datum> Receiver<D> {
 	///
 	/// Inside this method, if the error is unrecoverable, the worker's
 	/// cancellation token is triggered to initiate shutdown.
-	async fn handle_recv_error(&mut self, error: LinkError) {
+	async fn handle_recv_error(
+		&mut self,
+		error: LinkError,
+		_: Option<Link<Streams>>,
+	) {
 		let close_reason = error.close_reason().cloned();
 
 		// indicates an unrecoverable error that should terminate the worker
@@ -348,7 +354,7 @@ impl<D: Datum> Receiver<D> {
 
 		match (error, close_reason) {
 			// Consumer or network is terminating
-			(LinkError::Cancelled, _) => {
+			(LinkError::Cancelled | LinkError::Recv(RecvError::Cancelled), _) => {
 				// explicitly cancelled through the cancellation token, shut down
 				unrecoverable!();
 			}
@@ -363,10 +369,10 @@ impl<D: Datum> Receiver<D> {
 			// this consumer in its discovery catalog. Trigger full catalog
 			// sync with the producer then reconnect.
 			(_, Some(reason)) if reason == UnknownPeer => {
-				tracing::debug!(
+				tracing::trace!(
 					stream_id = %D::stream_id(),
 					producer_id = %Short(&self.peer.id()),
-					"producer does not recognize this consumer",
+					"producer does not recognize this consumer, will sync catalog then reconnect",
 				);
 
 				let _ = self

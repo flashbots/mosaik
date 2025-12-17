@@ -1,5 +1,8 @@
 use {
-	crate::primitives::{IntoIterOrSingle, Tag},
+	crate::{
+		PeerId,
+		primitives::{IntoIterOrSingle, Tag},
+	},
 	core::time::Duration,
 	derive_builder::Builder,
 	iroh::EndpointAddr,
@@ -37,6 +40,11 @@ impl Config {
 	/// Creates a new config builder with default values.
 	pub fn builder() -> ConfigBuilder {
 		ConfigBuilder::default()
+	}
+
+	/// Returns the list of bootstrap peer IDs without their addresses.
+	pub fn bootstrap_peers_ids(&self) -> Vec<PeerId> {
+		self.bootstrap_peers.iter().map(|addr| addr.id).collect()
 	}
 }
 

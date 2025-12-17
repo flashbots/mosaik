@@ -5,7 +5,6 @@ use {
 			Datum,
 			NoCapacity,
 			NotAllowed,
-			StreamId,
 			Streams,
 			accept::StartStream,
 			status::ChannelInfo,
@@ -37,12 +36,8 @@ use {
 /// This structs provides an interface to interact with the long-running
 /// producer fanout sink worker loop for a specific stream id.
 pub(in crate::streams) struct Handle {
-	/// The unique stream id associated with this sink.
-	///
-	/// This type is bound to the specific datum type `D` used to create the
-	/// sink and is used to validate type parameters when casting the sender
-	/// channel.
-	stream_id: StreamId,
+	/// The configuration used to create this producer sink.
+	config: Arc<ProducerConfig>,
 
 	/// A type erased sender channel for sending datum to the sink worker loop.
 	///
@@ -69,7 +64,7 @@ impl Handle {
 	/// sink worker loop.
 	pub fn sender<D: Datum>(&self) -> Producer<D> {
 		// Validate that the stream id matches the expected datum type
-		assert_eq!(self.stream_id, D::stream_id(), "StreamId mismatch");
+		assert_eq!(self.config.stream_id, D::stream_id(), "StreamId mismatch");
 
 		// Downcast the type erased sender channel to the expected type
 		let data_tx = self
@@ -80,6 +75,7 @@ impl Handle {
 		Producer::new(
 			data_tx.clone(),
 			When::new(self.active.clone(), self.ready.clone()),
+			Arc::clone(&self.config),
 		)
 	}
 
@@ -113,7 +109,7 @@ pub(super) struct WorkerLoop<D: Datum> {
 	local_id: PeerId,
 
 	/// Configuration for this producer sink.
-	config: ProducerConfig,
+	config: Arc<ProducerConfig>,
 
 	/// Cancellation token triggered when the worker loop should shut down.
 	/// This token is derived from the local node's termination token and will
@@ -154,17 +150,17 @@ impl<D: Datum> WorkerLoop<D> {
 	pub(super) fn spawn(sinks: &Sinks, config: ProducerConfig) -> Handle {
 		let cancel = sinks.local.termination().child_token();
 
-		let stream_id = D::stream_id();
 		let ready = Arc::new(SetOnce::new());
+		let config = Arc::new(config);
 		let active_info = watch::Sender::new(im::HashMap::new());
 		let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
 		let (data_tx, data_rx) = mpsc::channel(config.buffer_size);
 
 		let worker = WorkerLoop::<D> {
-			config,
 			cancel,
 			data_rx,
 			local_id: sinks.local.id(),
+			config: Arc::clone(&config),
 			active: DenseSlotMap::with_key(),
 			accepted: accepted_rx,
 			ready: ready.clone(),
@@ -174,8 +170,14 @@ impl<D: Datum> WorkerLoop<D> {
 
 		tokio::spawn(worker.run());
 
+		tracing::info!(
+			stream_id = %Short(D::stream_id()),
+			network_id = %config.network_id,
+			"created new stream producer",
+		);
+
 		Handle {
-			stream_id,
+			config,
 			data_tx: Box::new(data_tx),
 			accepted: accepted_tx,
 			ready,
@@ -278,7 +280,7 @@ impl<D: Datum> WorkerLoop<D> {
 				consumer_id = %Short(&link.remote_id()),
 				stream_id = %D::stream_id(),
 				current_subscribers = %self.active.len(),
-				"rejected new consumer: no capacity",
+				"rejected consumer connection: no capacity",
 			);
 
 			// Close the link with `NoCapacity` reason, this producer has
@@ -322,6 +324,7 @@ impl<D: Datum> WorkerLoop<D> {
 			consumer_id = %Short(&link.remote_id()),
 			stream_id = %D::stream_id(),
 			criteria = ?criteria,
+			total_consumers = %self.active.len() + 1,
 			"accepted new consumer",
 		);
 

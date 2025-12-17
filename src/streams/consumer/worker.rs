@@ -149,16 +149,16 @@ impl<D: Datum> ConsumerWorker<D> {
 			// already in the active list of connected producers.
 			let sub_id = UniqueId::from_bytes(*producer.id().as_bytes());
 			if !self.active.borrow().contains_key(&sub_id) {
-				tracing::debug!(
+				tracing::trace!(
 					stream_id = %stream_id,
-					producer_id = %Short(producer.id()),
-					"discovered new producer"
+					producer = %Short(producer),
+					"discovered new stream producer"
 				);
 
 				if !(self.config.subscribe_if)(producer) {
 					tracing::debug!(
 						stream_id = %stream_id,
-						producer_id = %Short(producer.id()),
+						producer_id = %Short(producer),
 						"skipping producer that does not satisfy eligibility criteria"
 					);
 					continue;

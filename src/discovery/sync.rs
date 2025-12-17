@@ -162,7 +162,7 @@ impl CatalogSync {
 					let _ = events_tx.send(event);
 				}
 
-				tracing::debug!(
+				tracing::trace!(
 					peer = %Short(&peer.id),
 					new_peers = %insertions,
 					updated_peers = %updates,
@@ -267,7 +267,7 @@ impl ProtocolHandler for CatalogSync {
 					self.events.send(event);
 				}
 
-				tracing::debug!(
+				tracing::trace!(
 					peer = %Short(link.remote_id()),
 					new_peers = %insertions,
 					updated_peers = %updates,

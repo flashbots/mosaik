@@ -227,21 +227,10 @@ impl WorkerLoop {
 
 		// add bootstrap peers to the addressing system
 		self.local.observe(self.config.bootstrap_peers.iter());
-
+		let peer_ids = self.config.bootstrap_peers_ids();
 		let topic_id = self.local.network_id().into();
-		let (mut topic_tx, mut topic_rx) = self
-			.gossip
-			.subscribe(
-				topic_id,
-				self
-					.config
-					.bootstrap_peers
-					.iter()
-					.map(|addr| addr.id)
-					.collect(),
-			)
-			.await?
-			.split();
+		let (mut topic_tx, mut topic_rx) =
+			self.gossip.subscribe(topic_id, peer_ids).await?.split();
 
 		loop {
 			tokio::select! {
@@ -297,12 +286,7 @@ impl WorkerLoop {
 	/// This joins an iroh-gossip topic based on the network ID.
 	async fn join_gossip_topic(&self) -> Result<GossipTopic, Error> {
 		let topic_id = self.local.network_id().into();
-		let bootstrap = self
-			.config
-			.bootstrap_peers
-			.iter()
-			.map(|addr| addr.id)
-			.collect();
+		let bootstrap = self.config.bootstrap_peers_ids();
 		let topic = self.gossip.subscribe(topic_id, bootstrap).await?;
 		Ok(topic)
 	}
@@ -359,7 +343,7 @@ impl WorkerLoop {
 				);
 
 				// Broadcast our own info to the new neighbor
-				self.broadcast_self_info(false);
+				self.broadcast_self_info();
 			}
 			GossipEvent::NeighborDown(id) => {
 				self.neighbors_count.fetch_sub(1, Ordering::SeqCst);
@@ -419,7 +403,7 @@ impl WorkerLoop {
 	fn on_catalog_update(&mut self) {
 		let current_local_version = self.catalog.borrow().local().update_version();
 		if current_local_version > self.last_own_version {
-			self.broadcast_self_info(false);
+			self.broadcast_self_info();
 			self.last_own_version = current_local_version;
 		}
 	}
@@ -431,22 +415,14 @@ impl WorkerLoop {
 	///
 	/// We distinguish between periodic and immediate broadcasts for logging
 	/// purposes.
-	fn broadcast_self_info(&self, is_periodic: bool) {
+	fn broadcast_self_info(&self) {
 		let entry = self.catalog.borrow().local().clone();
 
-		if is_periodic {
-			tracing::trace!(
-				network = %self.local.network_id(),
-				entry = ?Pretty(&entry),
-				"periodic broadcast of local peer info"
-			);
-		} else {
-			tracing::debug!(
-				network = %self.local.network_id(),
-				entry = ?Pretty(&entry),
-				"broadcast of local peer info"
-			);
-		}
+		tracing::trace!(
+			network = %self.local.network_id(),
+			entry = ?Pretty(&entry),
+			"broadcast of local peer info"
+		);
 
 		self
 			.messages_out
@@ -522,7 +498,7 @@ impl WorkerLoop {
 		self.local.observe(peers.iter());
 		let peer_ids = peers.into_iter().map(|p| p.id).collect::<Vec<_>>();
 
-		tracing::debug!(
+		tracing::trace!(
 			network = %self.local.network_id(),
 			peers = %Short::iter(&peer_ids),
 			"Dialing peers"
@@ -554,7 +530,7 @@ impl WorkerLoop {
 
 	fn on_periodic_announce_tick(&mut self) {
 		// Broadcast our own info periodically
-		self.broadcast_self_info(true);
+		self.broadcast_self_info();
 
 		// Calculate next announce delay with jitter
 		let base = self.config.announce_interval;

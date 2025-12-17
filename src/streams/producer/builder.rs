@@ -3,7 +3,7 @@ use {
 		super::{Datum, Streams},
 		Producer,
 	},
-	crate::{NetworkId, discovery::PeerEntry},
+	crate::{NetworkId, StreamId, discovery::PeerEntry},
 	core::marker::PhantomData,
 };
 
@@ -21,7 +21,12 @@ pub enum Error<D: Datum> {
 	AlreadyExists(Producer<D>),
 }
 
-pub(in crate::streams) struct ProducerConfig {
+/// Configuration options for a stream producer.
+pub struct ProducerConfig {
+	/// The stream id this producer is associated is producing for.
+	/// There can only be one producer per stream id on one network node.
+	pub stream_id: StreamId,
+
 	/// The buffer size for the producer's internal channel that holds datum
 	/// before they are sent to connected consumers. If the buffer is full, calls
 	/// to `send` on the producer will await until there is space available.
@@ -29,7 +34,7 @@ pub(in crate::streams) struct ProducerConfig {
 
 	/// Sets a predicate function that is used to determine whether to
 	/// accept or reject incoming consumer connections.
-	pub accept_if: Box<dyn FnMut(&PeerEntry) -> bool + Send + Sync>,
+	pub accept_if: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
 
 	/// The network id this producer is associated with.
 	pub network_id: NetworkId,
@@ -55,7 +60,7 @@ impl<D: Datum> Builder<'_, D> {
 	#[must_use]
 	pub fn accept_if<F>(mut self, pred: F) -> Self
 	where
-		F: FnMut(&PeerEntry) -> bool + Send + Sync + 'static,
+		F: Fn(&PeerEntry) -> bool + Send + Sync + 'static,
 	{
 		self.config.accept_if = Box::new(pred);
 		self
@@ -102,6 +107,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 			streams,
 			config: ProducerConfig {
 				buffer_size: 1024,
+				stream_id: D::stream_id(),
 				accept_if: Box::new(|_| true),
 				max_subscribers: usize::MAX,
 				network_id: *streams.local.network_id(),

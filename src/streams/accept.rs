@@ -70,9 +70,9 @@ impl ProtocolHandler for Acceptor {
 		let remote_peer_id = link.remote_id();
 		let catalog = self.discovery.catalog();
 		let Some(peer) = catalog.get(&remote_peer_id) else {
-			tracing::debug!(
-				consumer_id = %Short(&remote_peer_id),
-				"unknown consumer peer",
+			tracing::trace!(
+				peer_id = %Short(&remote_peer_id),
+				"rejecting unidentified consumer",
 			);
 
 			// Close the link with a reason before returning error

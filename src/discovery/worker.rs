@@ -310,7 +310,7 @@ impl WorkerLoop {
 							tracing::debug!(
 								info = %Short(signed_peer_entry),
 								network = %self.handle.local.network_id(),
-								"peer info updated"
+								"known peer updated"
 							);
 
 							// Publish the new peer entry to the static provider
