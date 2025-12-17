@@ -4,6 +4,8 @@ use {
 	mosaik::{primitives::Short, *},
 };
 
+/// This test verifies that consumers can authenticate producers based on tags
+/// and refuse subscriptions to producers that do not meet the criteria.
 #[tokio::test]
 async fn by_tag() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
