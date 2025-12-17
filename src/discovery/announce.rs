@@ -225,10 +225,21 @@ impl WorkerLoop {
 		// and addresses resolved.
 		self.local.online().await;
 
+		// add bootstrap peers to the addressing system
+		self.local.observe(self.config.bootstrap_peers.iter());
+
 		let topic_id = self.local.network_id().into();
 		let (mut topic_tx, mut topic_rx) = self
 			.gossip
-			.subscribe(topic_id, self.config.bootstrap_peers.clone())
+			.subscribe(
+				topic_id,
+				self
+					.config
+					.bootstrap_peers
+					.iter()
+					.map(|addr| addr.id)
+					.collect(),
+			)
 			.await?
 			.split();
 
@@ -286,7 +297,12 @@ impl WorkerLoop {
 	/// This joins an iroh-gossip topic based on the network ID.
 	async fn join_gossip_topic(&self) -> Result<GossipTopic, Error> {
 		let topic_id = self.local.network_id().into();
-		let bootstrap = self.config.bootstrap_peers.clone();
+		let bootstrap = self
+			.config
+			.bootstrap_peers
+			.iter()
+			.map(|addr| addr.id)
+			.collect();
 		let topic = self.gossip.subscribe(topic_id, bootstrap).await?;
 		Ok(topic)
 	}

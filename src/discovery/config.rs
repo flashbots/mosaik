@@ -1,10 +1,8 @@
 use {
-	crate::{
-		network::PeerId,
-		primitives::{IntoIterOrSingle, Tag},
-	},
+	crate::primitives::{IntoIterOrSingle, Tag},
 	core::time::Duration,
 	derive_builder::Builder,
+	iroh::EndpointAddr,
 	serde::{Deserialize, Serialize},
 };
 
@@ -20,7 +18,7 @@ pub struct Config {
 
 	/// A list of bootstrap peers to connect to on startup.
 	#[builder(default = "Vec::new()", setter(custom))]
-	pub bootstrap_peers: Vec<PeerId>,
+	pub bootstrap_peers: Vec<EndpointAddr>,
 
 	/// A list of tags to advertise in the local peer entry on startup.
 	#[builder(default = "Vec::new()", setter(custom))]
@@ -47,13 +45,12 @@ impl ConfigBuilder {
 	#[must_use]
 	pub fn with_bootstrap<V>(
 		mut self,
-		peers: impl IntoIterOrSingle<PeerId, V>,
+		peers: impl IntoIterOrSingle<EndpointAddr, V>,
 	) -> Self {
-		let peers: Vec<PeerId> = peers.iterator().into_iter().collect();
 		if let Some(existing) = &mut self.bootstrap_peers {
-			existing.extend(peers);
+			existing.extend(peers.iterator());
 		} else {
-			self.bootstrap_peers = Some(peers);
+			self.bootstrap_peers = Some(peers.iterator().into_iter().collect());
 		}
 		self
 	}
