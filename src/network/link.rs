@@ -554,6 +554,12 @@ impl From<ApplicationClose> for RecvError {
 	}
 }
 
+impl From<ApplicationClose> for OpenError {
+	fn from(val: ApplicationClose) -> Self {
+		OpenError::Io(ConnectionError::ApplicationClosed(val).into())
+	}
+}
+
 impl RecvError {
 	pub fn closed(reason: impl Into<ApplicationClose>) -> Self {
 		RecvError::from(reason.into())

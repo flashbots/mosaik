@@ -269,7 +269,7 @@ impl WorkerLoop {
 				}
 			}
 			WorkerCommand::SyncWith(peer_id, done) => {
-				self.on_manual_sync_request(peer_id, done);
+				self.on_explicit_sync_request(peer_id, done);
 			}
 		}
 		Ok(())
@@ -358,7 +358,7 @@ impl WorkerLoop {
 
 	/// Invoked with an manual catalog sync request from the handle is initiated
 	/// through the public api.
-	fn on_manual_sync_request(
+	fn on_explicit_sync_request(
 		&mut self,
 		peer: EndpointAddr,
 		done: oneshot::Sender<Result<(), Error>>,
