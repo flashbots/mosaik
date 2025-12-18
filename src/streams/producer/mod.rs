@@ -21,6 +21,7 @@ use {
 
 mod builder;
 mod error;
+mod sender;
 mod sink;
 mod worker;
 
@@ -60,6 +61,11 @@ pub use {
 ///   can be used to attempt to send a datum immediately, returning an error if
 ///   the producer is offline or if the underlying channel is not ready to
 ///   accept new datum.
+///
+/// - Each connected consumer has its own independent sender loop that is
+///   responsible for delivering datums to that consumer over transport. This
+///   design is chosen to avoid stalling the entire producer when one of the
+///   consumers is slow or unresponsive.
 #[derive(Clone)]
 pub struct Producer<D: Datum> {
 	status: When,

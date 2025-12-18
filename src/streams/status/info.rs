@@ -206,6 +206,16 @@ impl ChannelInfo {
 	pub fn is_connected(&self) -> bool {
 		self.state() == State::Connected
 	}
+
+	/// Returns a future that resolves when the connection is terminated.
+	pub fn disconnected(
+		&self,
+	) -> impl Future<Output = ()> + Send + Sync + 'static {
+		let mut state_rx = self.state.clone();
+		async move {
+			let _ = state_rx.wait_for(|s| s == &State::Terminated).await;
+		}
+	}
 }
 
 /// A map of the latest snapshot of active stream subscriptions.

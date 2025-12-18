@@ -131,13 +131,17 @@ async fn custom_stream_id() -> anyhow::Result<()> {
 
 	tracing::debug!("consumers successfully subscribed to producers");
 
-	p0_1.send(Data1("hello1234".into())).await?;
-	p0_2.send(Data1("hello5678".into())).await?;
+	timeout_s(3, p0_1.send(Data1("hello1234".into()))).await??;
+	timeout_s(3, p0_2.send(Data1("hello5678".into()))).await??;
 
-	let msg0 = c1_1.next().await.expect("expected message from c1_1");
+	let msg0 = timeout_s(3, c1_1.next())
+		.await?
+		.expect("expected message from c1_1");
 	assert_eq!(msg0, Data1("hello1234".into()));
 
-	let msg1 = c1_2.next().await.expect("expected message from c1_2");
+	let msg1 = timeout_s(3, c1_2.next())
+		.await?
+		.expect("expected message from c1_2");
 	assert_eq!(msg1, Data1("hello5678".into()));
 
 	Ok(())

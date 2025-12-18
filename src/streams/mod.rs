@@ -15,6 +15,7 @@ use {
 	crate::{
 		discovery::Discovery,
 		network::{
+			self,
 			LocalNode,
 			ProtocolProvider,
 			link::{self, Protocol},
@@ -141,21 +142,28 @@ impl link::Protocol for Streams {
 	const ALPN: &'static [u8] = b"/mosaik/streams/1.0";
 }
 
-link::make_close_reason!(
+network::error::make_close_reason!(
 	/// A remote consumer is trying to subscribe to a string that is not in the
 	/// producer's catalog. Indicates that the consumer should re-sync its
 	/// catalog and retry the subscription.
 	struct UnknownPeer, 10_401);
 
-link::make_close_reason!(
+network::error::make_close_reason!(
 	/// The requested stream was not found on the producer node.
 	struct StreamNotFound, 10_404);
 
-link::make_close_reason!(
+network::error::make_close_reason!(
 	/// The remote peer is not allowed to subscribe to the requested stream.
 	struct NotAllowed, 10_403);
 
-link::make_close_reason!(
+network::error::make_close_reason!(
 	/// The producer has reached its maximum number of allowed subscribers
 	/// and cannot accept any new consumer subscriptions.
 	struct NoCapacity, 10_509);
+
+network::error::make_close_reason!(
+	/// The producer has disconnected the consumer due to slow consumption of
+	/// data. The consumer should consider increasing its processing capacity
+	/// or investigate network latency. See `ProducerConfig::disconnect_lagging` for
+	/// more details.
+	struct TooSlow, 10_413);

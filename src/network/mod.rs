@@ -11,13 +11,13 @@ use {
 };
 
 mod config;
-pub(crate) mod error;
+pub mod error;
 pub(crate) mod link;
 mod local;
 
 pub use {
 	config::{NetworkBuilder, NetworkConfig},
-	error::Error as NetworkError,
+	error::{Error as NetworkError, *},
 	iroh::RelayMode,
 	local::LocalNode,
 };

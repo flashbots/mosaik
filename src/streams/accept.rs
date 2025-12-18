@@ -3,7 +3,10 @@ use {
 	crate::{
 		NetworkId,
 		discovery::Discovery,
-		network::link::{DifferentNetwork, Link, Protocol},
+		network::{
+			error::DifferentNetwork,
+			link::{Link, Protocol},
+		},
 		primitives::Short,
 		streams::{StreamNotFound, UnknownPeer},
 	},
@@ -147,7 +150,23 @@ impl ProtocolHandler for Acceptor {
 
 		// pass the connection to the stream-specific [`SinkHandle`]
 		// to handle the initiation of the data stream with this remote consumer.
-		sink.accept(link, handshake.criteria, peer.clone());
+		if let Err(link) = sink.accept(link, handshake.criteria, peer.clone()) {
+			// the sink was terminated or unable to accept new consumers
+			tracing::debug!(
+				consumer_id = %Short(peer.id()),
+				stream_id = %handshake.stream_id,
+				"Sink terminated before accepting new consumer",
+			);
+
+			// Close the link before returning error, since the sink for this
+			// stream id is no longer available, that is equivalent to stream not
+			// found.
+			return link
+				.close(StreamNotFound)
+				.await
+				.map_err(AcceptError::from_err);
+		}
+
 		Ok(())
 	}
 }

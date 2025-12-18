@@ -3,7 +3,8 @@ use {
 	crate::{
 		network::{
 			LocalNode,
-			link::{Link, LinkError, Protocol, Success},
+			error::Success,
+			link::{Link, LinkError, Protocol},
 		},
 		primitives::{Short, UnboundedChannel},
 	},

@@ -1,5 +1,15 @@
 use {
-	super::{LocalNode, PeerId},
+	super::{
+		LocalNode,
+		PeerId,
+		error::{
+			Cancelled,
+			InvalidAlpn,
+			ProtocolViolation,
+			Success,
+			UnexpectedClose,
+		},
+	},
 	crate::primitives::{Bytes, Short},
 	bincode::{
 		config::standard,
@@ -8,7 +18,7 @@ use {
 	},
 	bytes::{Buf, BufMut, BytesMut},
 	core::{fmt, marker::PhantomData},
-	futures::{SinkExt, StreamExt},
+	futures::{FutureExt, SinkExt, StreamExt},
 	iroh::{EndpointAddr, endpoint::*, protocol::AcceptError as IrohAcceptError},
 	n0_error::Meta,
 	serde::{Serialize, de::DeserializeOwned},
@@ -265,10 +275,11 @@ impl<P: Protocol> Link<P> {
 	/// length-delimited frame.
 	///
 	/// If the serialization fails, the link is closed with a [`UnexpectedClose`].
+	/// Returns the number of bytes sent on success.
 	pub async fn send<D: Serialize>(
 		&mut self,
 		datum: &D,
-	) -> Result<(), SendError> {
+	) -> Result<usize, SendError> {
 		let mut writer = BytesMut::new().writer();
 		if let Err(e) = encode_into_std_write(datum, &mut writer, standard()) {
 			close_connection(&self.connection, ProtocolViolation).await;
@@ -288,10 +299,13 @@ impl<P: Protocol> Link<P> {
 	/// This variant of `send` is unsafe because it is intended for advanced
 	/// use cases where the caller needs to optimize performance by avoiding
 	/// serialization overhead. Improper use may lead to protocol violations.
+	///
+	/// Returns the number of bytes sent on success.
 	pub async unsafe fn send_raw(
 		&mut self,
 		bytes: Bytes,
-	) -> Result<(), SendError> {
+	) -> Result<usize, SendError> {
+		let msg_len = bytes.len();
 		let fut = self.stream.send(bytes);
 		let Some(send_result) = self.cancel.run_until_cancelled(fut).await else {
 			close_connection(&self.connection, Cancelled).await;
@@ -299,7 +313,7 @@ impl<P: Protocol> Link<P> {
 		};
 
 		match send_result {
-			Ok(()) => Ok(()),
+			Ok(()) => Ok(msg_len),
 			Err(err) => match err.downcast::<WriteError>() {
 				Ok(io_err) => Err(SendError::Io(io_err)),
 				Err(other_err) => Err(SendError::Unknown(other_err)),
@@ -350,37 +364,35 @@ impl<P: Protocol> Link<P> {
 	}
 
 	/// Awaits the link closure and returns the closure result if the link was
-	/// closed for a reason not indicating success.
-	pub async fn closed(&self) -> Result<(), ConnectionError> {
-		match self
-			.cancel
-			.run_until_cancelled(self.connection.closed())
-			.await
-		{
-			None | Some(ConnectionError::LocallyClosed) => Ok(()),
-			Some(ConnectionError::ApplicationClosed(reason)) if reason == Success => {
-				Ok(())
-			}
-			Some(err) => Err(err),
-		}
-	}
-
-	/// Returns a future that resolves when the connection to the remote peer is
-	/// dropped or when the link is cancelled. The returned future is 'static and
-	/// can be spawned onto a separate task with lifetimes independent of the
-	/// link.
-	pub fn disconnected(
+	/// closed for a reason not indicating success. This future can be used to
+	/// monitor the link for unexpected closures and its lifetime is detached
+	/// from the link itself.
+	pub fn closed(
 		&self,
-	) -> impl Future<Output = ConnectionError> + Send + Sync + 'static {
+	) -> impl Future<Output = Result<(), ConnectionError>> + Send + Sync + 'static
+	{
 		let cancel = self.cancel.clone();
 		let connection = self.connection.clone();
-
 		async move {
-			cancel
-				.run_until_cancelled(connection.closed())
-				.await
-				.unwrap_or(ConnectionError::LocallyClosed)
+			match cancel.run_until_cancelled(connection.closed()).await {
+				None | Some(ConnectionError::LocallyClosed) => Ok(()),
+				Some(ConnectionError::ApplicationClosed(reason))
+					if reason == Success =>
+				{
+					Ok(())
+				}
+				Some(err) => Err(err),
+			}
 		}
+		.fuse()
+	}
+
+	/// Replaces the existing cancellation token with a new one.
+	///
+	/// This is useful when the link needs to inherit a more scoped cancellation
+	/// token after being created with a general one.
+	pub fn replace_cancel_token(&mut self, cancel: CancellationToken) {
+		self.cancel = cancel;
 	}
 }
 
@@ -634,6 +646,12 @@ impl CloseError {
 	pub fn is_cancelled(&self) -> bool {
 		matches!(self, CloseError::Cancelled)
 	}
+
+	/// Returns `true` if the link was already closed when attempting to close
+	/// it.
+	pub fn was_already_closed(&self) -> bool {
+		matches!(self, CloseError::AlreadyClosed(_))
+	}
 }
 
 impl LinkError {
@@ -763,70 +781,3 @@ impl<P: Protocol> fmt::Display for Link<P> {
 		)
 	}
 }
-
-macro_rules! make_close_reason {
-	($(#[$meta:meta])* $vis:vis struct $name:ident, $code:expr) => {
-		$(#[$meta])*
-		#[derive(Debug, Clone, Copy)]
-		$vis struct $name;
-
-		const _: () = {
-			#[automatically_derived]
-			impl From<$name> for iroh::endpoint::ApplicationClose {
-				fn from(_: $name) -> Self {
-					iroh::endpoint::ApplicationClose {
-						error_code: iroh::endpoint::VarInt::from($code as u32),
-						reason: stringify!($name).into(),
-					}
-				}
-			}
-
-			#[automatically_derived]
-			impl PartialEq<iroh::endpoint::ApplicationClose> for $name {
-				fn eq(&self, other: &iroh::endpoint::ApplicationClose) -> bool {
-					other.error_code == iroh::endpoint::VarInt::from($code as u32)
-				}
-			}
-
-			#[automatically_derived]
-			impl PartialEq<$name> for iroh::endpoint::ApplicationClose {
-				fn eq(&self, _: &$name) -> bool {
-					self.error_code == iroh::endpoint::VarInt::from($code as u32)
-				}
-			}
-		};
-	};
-}
-
-pub(crate) use make_close_reason;
-
-// Standardized application-level close reasons for links and protocols in
-// mosaik. Close reasons 0-199 are reserved for mosaik internal use.
-
-make_close_reason!(
-	/// Protocol ran to completion successfully.
-	pub(crate) struct Success, 200);
-
-make_close_reason!(
-	/// Graceful shutdown initiated.
-	pub(crate) struct GracefulShutdown, 204);
-
-make_close_reason!(
-	/// The accepting socket was expecting a different protocol ALPN.
-	pub(crate) struct InvalidAlpn, 100);
-
-make_close_reason!(
-	/// The remote peer is on a different network.
-	pub(crate) struct DifferentNetwork, 101);
-
-make_close_reason!(
-	/// Operation was cancelled.
-	pub(crate) struct Cancelled, 102);
-
-make_close_reason!(
-	/// The connection was closed unexpectedly.
-	pub(crate) struct UnexpectedClose, 103);
-
-make_close_reason!(
-	/// The remote peer sent a message that violates the protocol.
-	pub(crate) struct ProtocolViolation, 400);

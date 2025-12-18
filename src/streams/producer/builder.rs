@@ -9,7 +9,8 @@ use {
 		discovery::PeerEntry,
 		streams::status::ChannelConditions,
 	},
-	core::marker::PhantomData,
+	core::{any::Any, marker::PhantomData},
+	tokio::sync::mpsc::UnboundedSender,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +38,12 @@ pub struct ProducerConfig {
 	/// to `send` on the producer will await until there is space available.
 	pub buffer_size: usize,
 
+	/// If set to true, the producer will disconnect slow consumers that are
+	/// unable to keep up with the data production rate. If the backlog of a
+	/// consumer inflight datums grows beyond `buffer_size` it will be
+	/// disconnected.
+	pub disconnect_lagging: bool,
+
 	/// Sets a predicate function that is used to determine whether to
 	/// accept or reject incoming consumer connections.
 	pub accept_if: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
@@ -60,6 +67,21 @@ pub struct ProducerConfig {
 	///
 	/// Defaults to unlimited if not set.
 	pub max_subscribers: usize,
+
+	/// Optional sink for unsent datum that were not delivered to any consumers
+	/// because they did not meet any subscription criteria of active
+	/// subscriptions or because there were no active subscribers.
+	///
+	/// Note that in default configuration, when there are not active
+	/// subscribers, the producer is considered offline and will not accept any
+	/// new datum to be sent. However, if the `online_when` condition is
+	/// customized to allow publishing even when there are no subscribers, this
+	/// sink can be used to capture datum that would otherwise be dropped.
+	///
+	/// This is type-erased to allow config to be stored without
+	/// knowing the datum type but is expected to be of type
+	/// [`tokio::sync::mpsc::UnboundedSender<D>`].
+	pub(crate) undelivered: Option<Box<dyn Any + Send + Sync>>,
 }
 
 /// Configurable builder for assembling a new producer instances for a specific
@@ -101,6 +123,16 @@ impl<D: Datum> Builder<'_, D> {
 		self
 	}
 
+	/// If set to true, the producer will disconnect slow consumers that are
+	/// unable to keep up with the data production rate. If the backlog of a
+	/// consumer inflight datums grows beyond `buffer_size` it will be
+	/// disconnected.
+	#[must_use]
+	pub fn disconnect_lagging(mut self, disconnect: bool) -> Self {
+		self.config.disconnect_lagging = disconnect;
+		self
+	}
+
 	/// Sets the buffer size for the producer's internal channel that holds datum
 	/// before they are sent to connected consumers. If the buffer is full, calls
 	/// to `send` on the producer will await until there is space available.
@@ -128,6 +160,21 @@ impl<D: Datum> Builder<'_, D> {
 		self
 	}
 
+	/// Sets an optional sink for undelivered datum that were not delivered to
+	/// any consumers because they did not meet any subscription criteria of
+	/// active subscriptions or because there were no active subscribers.
+	///
+	/// Note that in default configuration, when there are not active
+	/// subscribers, the producer is considered offline and will not accept any
+	/// new datum to be sent. However, if the `online_when` condition is
+	/// customized to allow publishing even when there are no subscribers, this
+	/// sink can be used to capture datum that would otherwise be dropped.
+	#[must_use]
+	pub fn with_undelivered_sink(mut self, sink: UnboundedSender<D>) -> Self {
+		self.config.undelivered = Some(Box::new(sink));
+		self
+	}
+
 	/// Builds a new producer with the given configuration for this stream id.
 	/// If there is already an existing producer for this stream id, an error
 	/// is returned containing the existing producer created using the original
@@ -152,11 +199,13 @@ impl<'s, D: Datum> Builder<'s, D> {
 			streams,
 			config: ProducerConfig {
 				buffer_size: 1024,
+				disconnect_lagging: false,
 				stream_id: D::derived_stream_id(),
 				accept_if: Box::new(|_| true),
 				online_when: Box::new(|c| c.minimum_of(1)),
 				max_subscribers: usize::MAX,
 				network_id: *streams.local.network_id(),
+				undelivered: None,
 			},
 			_marker: PhantomData,
 		}

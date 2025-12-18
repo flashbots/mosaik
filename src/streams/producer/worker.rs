@@ -1,33 +1,31 @@
 use {
 	super::{
-		super::{
-			Criteria,
-			Datum,
-			NoCapacity,
-			NotAllowed,
-			Streams,
-			accept::StartStream,
-			status::ChannelInfo,
-		},
+		super::{Criteria, Datum, NoCapacity, NotAllowed, Streams},
 		Producer,
 		Sinks,
 		When,
 		builder::ProducerConfig,
+		sender::{Sender, Subscription},
 	},
 	crate::{
 		PeerId,
 		discovery::PeerEntry,
-		network::link::{GracefulShutdown, Link},
+		network::{GracefulShutdown, link::Link},
 		primitives::{Bytes, Short, UniqueId},
-		streams::status::{ActiveChannelsMap, ChannelConditions, State, Stats},
+		streams::{
+			TooSlow,
+			status::{ActiveChannelsMap, ChannelConditions},
+		},
 	},
 	bincode::{config::standard, serde::encode_to_vec},
-	core::{any::Any, cell::OnceCell, pin::Pin},
-	futures::{FutureExt, StreamExt, future::join_all, stream::FuturesUnordered},
-	iroh::endpoint::ConnectionError,
+	core::{any::Any, cell::OnceCell},
+	futures::FutureExt,
 	slotmap::DenseSlotMap,
 	std::sync::Arc,
-	tokio::sync::{mpsc, watch},
+	tokio::{
+		sync::{mpsc, watch},
+		task::JoinSet,
+	},
 	tokio_util::sync::CancellationToken,
 };
 
@@ -51,11 +49,8 @@ pub(in crate::streams) struct Handle {
 	/// as a new subscription.
 	accepted: mpsc::UnboundedSender<(Link<Streams>, Criteria, PeerEntry)>,
 
-	/// Observer for the ready status of the producer.
-	ready: watch::Receiver<bool>,
-
-	/// Observer for the active subscriptions info map.
-	active: watch::Receiver<ActiveChannelsMap>,
+	/// Observer for the status of active subscriptions to this producer.
+	when: When,
 }
 
 impl Handle {
@@ -68,11 +63,7 @@ impl Handle {
 			.downcast_ref::<mpsc::Sender<D>>()
 			.expect("datum type mismatch; this is a bug.");
 
-		Producer::new(
-			data_tx.clone(),
-			When::new(self.active.clone(), self.ready.clone()),
-			Arc::clone(&self.config),
-		)
+		Producer::new(data_tx.clone(), self.when.clone(), Arc::clone(&self.config))
 	}
 
 	/// Accepts an incoming connection from a remote consumer for this stream id.
@@ -80,16 +71,17 @@ impl Handle {
 	/// By the time the connection is accepted, the [`Acceptor`] has already
 	/// decoded the handshake message and opened a transport-level stream with
 	/// the remote peer.
+	#[expect(clippy::result_large_err)]
 	pub fn accept(
 		&self,
 		link: Link<Streams>,
 		criteria: Criteria,
 		peer: PeerEntry,
-	) {
+	) -> Result<(), Link<Streams>> {
 		self
 			.accepted
 			.send((link, criteria, peer))
-			.expect("worker loop has shut down");
+			.map_err(|mpsc::error::SendError((link, _, _))| link)
 	}
 }
 
@@ -116,8 +108,7 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// consumers.
 	data_rx: mpsc::Receiver<D>,
 
-	/// Active subscriptions from remote consumers for this stream each with
-	/// potentially different criteria.
+	/// Active subscriptions from remote consumers.
 	active: DenseSlotMap<SubscriptionId, Subscription>,
 
 	/// Channel for broadcasting active subscription info to observers.
@@ -134,7 +125,7 @@ pub(super) struct WorkerLoop<D: Datum> {
 
 	/// Futures that resolve when a remote consumer connection is dropped for
 	/// whatever reason.
-	dropped: FuturesUnordered<DroppedFuture>,
+	dropped: JoinSet<SubscriptionId>,
 
 	/// Sets the online status of the producer when the worker loop is ready and
 	/// publishing conditions are met.
@@ -150,14 +141,14 @@ impl<D: Datum> WorkerLoop<D> {
 	pub(super) fn spawn(sinks: &Sinks, config: ProducerConfig) -> Handle {
 		let cancel = sinks.local.termination().child_token();
 
-		let online = watch::Sender::new(false);
 		let config = Arc::new(config);
+		let online = watch::Sender::new(false);
 		let active_info = watch::Sender::new(im::HashMap::new());
+		let when = When::new(active_info.subscribe(), online.subscribe());
+		let online_when = (config.online_when)(when.subscribed());
 		let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
 		let (data_tx, data_rx) = mpsc::channel(config.buffer_size);
-		let online_when = (config.online_when)(
-			When::new(active_info.subscribe(), online.subscribe()).subscribed(),
-		);
+
 		online.send_replace(online_when.is_condition_met());
 
 		let worker = WorkerLoop::<D> {
@@ -168,9 +159,9 @@ impl<D: Datum> WorkerLoop<D> {
 			active: DenseSlotMap::with_key(),
 			accepted: accepted_rx,
 			online: online.clone(),
-			dropped: FuturesUnordered::new(),
 			active_info: active_info.clone(),
 			online_when,
+			dropped: JoinSet::new(),
 		};
 
 		tokio::spawn(worker.run());
@@ -182,11 +173,10 @@ impl<D: Datum> WorkerLoop<D> {
 		);
 
 		Handle {
+			when,
 			config,
 			data_tx: Box::new(data_tx),
 			accepted: accepted_tx,
-			ready: online.subscribe(),
-			active: active_info.subscribe(),
 		}
 	}
 }
@@ -201,7 +191,7 @@ impl<D: Datum> WorkerLoop<D> {
 				// this stream is terminated due to all producers being dropped
 				// or an unrecoverable error.
 				() = self.cancel.cancelled() => {
-					self.shutdown().await;
+					self.shutdown();
 					break;
 				}
 
@@ -226,13 +216,13 @@ impl<D: Datum> WorkerLoop<D> {
 				// Triggered when a new datum is produced for this stream
 				// by the public api via the [`Producer`] handle.
 				Some(datum) = self.data_rx.recv() => {
-					self.fanout(datum).await;
+					self.fanout(datum);
 				}
 
 				// Triggered when any of the active remote consumer connections
 				// is dropped for any reason.
-				Some((sub_id, reason)) = self.dropped.next() => {
-					self.on_connection_dropped(sub_id, &reason);
+				Some(Ok(sub_id)) = self.dropped.join_next() => {
+					self.on_subscription_dropped(sub_id);
 				}
 			}
 		}
@@ -240,10 +230,16 @@ impl<D: Datum> WorkerLoop<D> {
 
 	/// Forwards the given datum to all active remote consumers that match the
 	/// criteria.
-	async fn fanout(&mut self, item: D) {
+	///
+	/// Notes:
+	/// - The datum is serialized only once for all matching consumers.
+	/// - If no consumers match the datum, it is sent to the undelivered sink if
+	///   configured.
+	/// - If a consumer is lagging behind and its channel is full, it may be
+	///   disconnected based on the producer configuration.
+	fn fanout(&self, item: D) {
 		let bytes = OnceCell::<Bytes>::new();
-		let mut sends = Vec::with_capacity(self.active.len());
-		for (sub_id, subscription) in &mut self.active {
+		for (_, subscription) in &self.active {
 			if subscription.criteria.matches(&item) {
 				let bytes = bytes.get_or_init(|| {
 					// Serialize the datum only once for all matching consumers,
@@ -253,27 +249,47 @@ impl<D: Datum> WorkerLoop<D> {
 						.into()
 				});
 
-				// SAFETY: `item` is properly serialized into `bytes` above.
-				let send_fut = unsafe { subscription.link.send_raw(bytes.clone()) };
-				sends.push(async move { (send_fut.await, sub_id) });
+				// forward the serialized datum to the matching consumer
+				if subscription.bytes_tx.try_send(bytes.clone()).is_err() {
+					// if the consumer is falling behind
+					if self.config.disconnect_lagging {
+						// and we are configured to disconnect lagging consumers,
+						tracing::warn!(
+							stream_id = %Short(self.config.stream_id),
+							consumer_id = %Short(&subscription.peer.id()),
+							lagging_by = self.config.buffer_size,
+							"disconnecting lagging consumer",
+						);
 
-				// Update statistics (todo)
-				subscription.stats.increment_datums();
-				subscription.stats.increment_bytes(bytes.len());
+						// mark the subscription to be dropped due to lagging
+						let _ = subscription.drop_requested.set(TooSlow.into());
+					} else {
+						tracing::trace!(
+							stream_id = %Short(self.config.stream_id),
+							consumer_id = %Short(&subscription.peer.id()),
+							lagging_by = self.config.buffer_size,
+							"dropping datum for lagging consumer",
+						);
+					}
+				}
 			}
 		}
 
-		// Await all send operations to complete
-		let results = join_all(sends).await;
-		for (res, _) in results {
-			if let Err(reason) = res {
-				tracing::warn!(
-					stream_id = %Short(self.config.stream_id),
-					reason = %reason,
-					"error sending datum to consumer",
-				);
-				// Remove the failed subscription
-				todo!("handle failed sends properly");
+		// check if there were any matching consumers
+		if bytes.get().is_none() {
+			// no consumers matched, handle undelivered datum
+			if let Some(undelivered) = &self.config.undelivered {
+				// send the datum to the undelivered sink if configured
+				let undelivered = undelivered
+					.downcast_ref::<mpsc::UnboundedSender<D>>()
+					.expect("datum type mismatch; this is a bug.");
+
+				if undelivered.send(item).is_err() {
+					tracing::warn!(
+						stream_id = %Short(self.config.stream_id),
+						"undelivered sink is closed; dropping datum",
+					);
+				}
 			}
 		}
 	}
@@ -319,67 +335,40 @@ impl<D: Datum> WorkerLoop<D> {
 			return;
 		}
 
-		let mut link = link;
-		let start_stream =
-			StartStream(self.config.network_id, self.config.stream_id);
-
-		if let Err(e) = link.send(&start_stream).await {
-			tracing::warn!(
-				consumer_id = %Short(&link.remote_id()),
-				error = %e,
-				"failed to confirm stream subscription with consumer",
-			);
-			return;
-		}
-
-		let peer = Arc::new(peer);
-		let stats = Arc::new(Stats::default());
-		let state = watch::Sender::new(State::Connected);
-		stats.connected(); // mark connection timestamp
-
-		tracing::info!(
-			consumer_id = %Short(&link.remote_id()),
-			stream_id = %Short(self.config.stream_id),
-			criteria = ?criteria,
-			total_consumers = %self.active.len() + 1,
-			"accepted new consumer",
+		// create and spawn a new sender task for this consumer
+		let (sub, info) = Sender::spawn(
+			link,
+			&self.config,
+			&self.cancel,
+			self.local_id,
+			criteria,
+			peer,
 		);
 
-		// Add the subscription to the active list
-		let sub_id = self.active.insert(Subscription {
-			link,
-			criteria: criteria.clone(),
-			stats: Arc::clone(&stats),
-			state: state.clone(),
-		});
+		// Add this consumer to the list of active subscriptions
+		let sub_id = self.active.insert(sub);
 
-		// Track when the remote consumer connection is dropped for any reason
-		let fut = self.active[sub_id].link.disconnected();
-		self.dropped.push(fut.map(move |r| (sub_id, r)).boxed());
+		// Monitor the disconnection of this consumer
+		let drop_fut = info.disconnected();
+		self.dropped.spawn(drop_fut.map(move |()| sub_id));
 
-		// Publish an updated snapshot of active subscriptions info
-		// for public status APIs.
+		// Update the active subscriptions info map and notify observers
 		self.active_info.send_modify(|active| {
 			let sub_id = UniqueId::from_u64(sub_id.0.as_ffi());
-			active.insert(sub_id, ChannelInfo {
-				consumer_id: *peer.id(),
-				producer_id: self.local_id,
-				stream_id: self.config.stream_id,
-				state: state.subscribe(),
-				peer,
-				stats,
-				criteria,
-			});
+			active.insert(sub_id, info);
 		});
 	}
 
 	/// Gracefully shuts down the worker loop by closing all active
 	/// subscriptions.
-	async fn shutdown(&mut self) {
+	fn shutdown(&mut self) {
 		tracing::debug!(
 			stream_id = %Short(self.config.stream_id),
 			"terminating stream producer",
 		);
+
+		self.cancel.cancel();
+		self.dropped.abort_all();
 
 		for (sub_id, subscription) in self.active.drain() {
 			// Remove subscription from the active info map and signal
@@ -389,50 +378,31 @@ impl<D: Datum> WorkerLoop<D> {
 				active.remove(&sub_id);
 			});
 
-			subscription.stats.disconnected();
-			let _ = subscription.state.send(State::Terminated);
-
-			let peer_id = subscription.link.remote_id();
-			if let Err(reason) = subscription.link.close(GracefulShutdown).await
-				&& !reason.is_cancelled()
-			{
-				tracing::debug!(
-					stream_id = %Short(self.config.stream_id),
-					consumer_id = %Short(peer_id),
-					reason = %reason,
-					"error closing subscription link",
-				);
-			}
+			let _ = subscription.drop_requested.set(GracefulShutdown.into());
 		}
 	}
 
 	/// Handles a dropped connection from a remote consumer.
-	fn on_connection_dropped(
-		&mut self,
-		sub_id: SubscriptionId,
-		reason: &ConnectionError,
-	) {
+	fn on_subscription_dropped(&mut self, sub_id: SubscriptionId) {
+		// Remove subscription from the active info map and signal
+		// to status observers that the subscription is gone.
+		self.active_info.send_modify(|active| {
+			let sub_id = UniqueId::from_u64(sub_id.0.as_ffi());
+			active.remove(&sub_id);
+		});
+
 		if let Some(subscription) = self.active.remove(sub_id) {
-			subscription.stats.disconnected();
-			let _ = subscription.state.send(State::Terminated);
-
-			// Remove subscription from the active info map and signal
-			// to status observers that the subscription is gone.
-			self.active_info.send_modify(|active| {
-				let sub_id = UniqueId::from_u64(sub_id.0.as_ffi());
-				active.remove(&sub_id);
-			});
-
 			tracing::info!(
-				reason = %reason,
 				stream_id = %Short(self.config.stream_id),
-				consumer_id = %Short(&subscription.link.remote_id()),
+				consumer_id = %Short(&subscription.peer.id()),
 				remaining_consumers = %self.active.len(),
 				"consumer disconnected",
 			);
 		}
 	}
 
+	/// Triggered when the publishing conditions for this producer are met
+	/// and it is considered online.
 	fn on_online(&mut self) {
 		tracing::trace!(
 			stream_id = %Short(self.config.stream_id),
@@ -443,6 +413,8 @@ impl<D: Datum> WorkerLoop<D> {
 		self.online.send_replace(true);
 	}
 
+	/// Triggered when the publishing conditions for this producer are no longer
+	/// met and it is considered offline.
 	fn on_offline(&mut self) {
 		tracing::trace!(
 			stream_id = %Short(self.config.stream_id),
@@ -462,23 +434,3 @@ slotmap::new_key_type! {
 	/// [`SubscriptionId`] and is managed independently.
 	pub(crate) struct SubscriptionId;
 }
-
-/// Represents an active subscription from a remote consumer.
-/// Each subscription is an independent transport-level connection.
-struct Subscription {
-	/// The transport-level link to the remote consumer.
-	link: Link<Streams>,
-
-	/// The stream subscription criteria for this consumer.
-	criteria: Criteria,
-
-	/// Statistics tracker for this subscription.
-	stats: Arc<Stats>,
-
-	/// State watcher for this subscription.
-	state: watch::Sender<State>,
-}
-
-type DroppedFuture = Pin<
-	Box<dyn Future<Output = (SubscriptionId, ConnectionError)> + Send + 'static>,
->;

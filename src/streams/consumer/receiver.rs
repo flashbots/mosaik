@@ -1,8 +1,6 @@
 use {
 	super::super::{
-		StreamNotFound,
 		Streams,
-		UnknownPeer,
 		accept::{ConsumerHandshake, StartStream},
 		consumer::builder::ConsumerConfig,
 		status::{State, Stats},
@@ -10,9 +8,9 @@ use {
 	crate::{
 		Datum,
 		discovery::{Discovery, PeerEntry},
-		network::{LocalNode, link::*},
+		network::{LocalNode, error::*, link::*},
 		primitives::Short,
-		streams::{NotAllowed, status::ChannelInfo},
+		streams::{NotAllowed, StreamNotFound, UnknownPeer, status::ChannelInfo},
 	},
 	backoff::backoff::Backoff,
 	core::{future::pending, ops::ControlFlow, time::Duration},
@@ -281,6 +279,7 @@ impl<D: Datum> Receiver<D> {
 					received_network = %Short(start.network_id()),
 					"producer is on a different network",
 				);
+
 				link.close(DifferentNetwork).await.ok();
 				return Err(LinkError::Recv(RecvError::closed(DifferentNetwork)));
 			}
