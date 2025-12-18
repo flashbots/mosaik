@@ -1,8 +1,9 @@
 use {
 	super::*,
-	crate::utils::{discover_all, poll_once, timeout_s},
+	crate::utils::{TimeoutElapsed, discover_all, poll_once, timeout_s},
 	core::task::Poll,
-	mosaik::*,
+	futures::{SinkExt, StreamExt},
+	mosaik::{streams::producer, *},
 };
 
 #[tokio::test]
@@ -107,6 +108,68 @@ async fn smoke() -> anyhow::Result<()> {
 	assert!(!condition3.is_condition_met());
 	assert_eq!(poll_once(&mut condition2.clone()), Poll::Ready(()));
 	assert_eq!(poll_once(&mut condition3.clone()), Poll::Pending);
+
+	Ok(())
+}
+
+/// Verifies that the producer API signals delivery failure when it is in
+/// offline state.
+#[tokio::test]
+async fn send_fails_if_offline() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let n0 = Network::new(network_id).await?;
+
+	// Producers are offline by default until at least one consumer is connected.
+	let mut producer = n0.streams().produce::<Data1>();
+
+	assert!(!producer.is_online());
+
+	// sending using `Sink` should halt at the `.poll_ready()` stage
+	let send_result = timeout_s(2, producer.send(Data1("test1".into()))).await;
+	assert!(matches!(send_result, Err(TimeoutElapsed(_, _))));
+
+	let send_result = producer.try_send(Data1("test1".into()));
+	assert_eq!(
+		send_result,
+		Err(producer::Error::Offline(Data1("test1".into())))
+	);
+
+	let n1 = Network::new(network_id).await?;
+	discover_all([&n0, &n1]).await?;
+
+	let mut c0 = n1.streams().consume::<Data1>();
+
+	// wait until the producer is online
+	timeout_s(2, producer.when().online()).await?;
+	timeout_s(2, c0.when().subscribed()).await?;
+	assert!(producer.is_online());
+
+	let consumers = producer.consumers().collect::<Vec<_>>();
+	assert_eq!(consumers.len(), 1);
+	assert_eq!(*consumers[0].peer().id(), n1.local().id());
+
+	let producers = c0.producers().collect::<Vec<_>>();
+	assert_eq!(producers.len(), 1);
+	assert_eq!(*producers[0].peer().id(), n0.local().id());
+
+	let send_result = timeout_s(2, producer.send(Data1("test2".into()))).await?;
+	assert!(send_result.is_ok());
+
+	let recv_result = timeout_s(2, c0.next()).await?;
+	assert_eq!(recv_result, Some(Data1("test2".into())));
+
+	// when we drop the consumer, the producer should go offline again
+	drop(c0);
+	timeout_s(2, producer.when().offline()).await?;
+	assert!(!producer.is_online());
+
+	assert_eq!(producer.consumers().count(), 0);
+
+	let send_result = producer.try_send(Data1("test3".into()));
+	assert_eq!(
+		send_result,
+		Err(producer::Error::Offline(Data1("test3".into())))
+	);
 
 	Ok(())
 }

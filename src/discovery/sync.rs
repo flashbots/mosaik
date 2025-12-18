@@ -117,15 +117,18 @@ impl CatalogSync {
 			// Send our local catalog snapshot to the remote peer
 			let local_snapshot = { (*catalog.borrow()).clone() };
 			let local_snapshot = CatalogSnapshot::from(&local_snapshot);
+
 			link
 				.send(&local_snapshot)
 				.await
 				.inspect_err(|e| {
-					tracing::warn!(
-						peer = %Short(&peer.id),
-						error = %e,
-						"failed to send local catalog snapshot",
-					);
+					if !e.is_cancelled() {
+						tracing::warn!(
+							peer = %Short(&peer.id),
+							error = %e,
+							"failed to send local catalog snapshot",
+						);
+					}
 				})
 				.map_err(LinkError::from)?;
 
@@ -136,11 +139,13 @@ impl CatalogSync {
 				.recv::<CatalogSnapshot>()
 				.await
 				.inspect_err(|e| {
-					tracing::warn!(
-						peer = %Short(&peer.id),
-						error = %e,
-						"failed to receive remote catalog snapshot",
-					);
+					if !e.is_cancelled() {
+						tracing::debug!(
+							error = %e,
+							peer = %Short(&peer.id),
+							"failed to receive remote catalog snapshot",
+						);
+					}
 				})
 				.map_err(LinkError::from)?;
 
@@ -210,11 +215,13 @@ impl ProtocolHandler for CatalogSync {
 				Link::<CatalogSync>::accept_with_cancel(connection, cancel)
 					.await
 					.inspect_err(|e| {
-						tracing::debug!(
-							error = %e,
-							peer = %Short(&remote_id),
-							"failed to accept incoming catalog sync link",
-						);
+						if !e.is_cancelled() {
+							tracing::debug!(
+								error = %e,
+								peer = %Short(&remote_id),
+								"failed to accept incoming catalog sync link",
+							);
+						}
 					})?;
 
 			// The acceptor awaits the remote peer's catalog snapshot message first.
@@ -224,11 +231,13 @@ impl ProtocolHandler for CatalogSync {
 				.recv::<CatalogSnapshot>()
 				.await
 				.inspect_err(|e| {
-					tracing::warn!(
-						peer = %Short(&remote_id),
-						error = %e,
-						"failed to receive remote catalog snapshot",
-					);
+					if !e.is_cancelled() {
+						tracing::debug!(
+							error = %e,
+							peer = %Short(&remote_id),
+							"failed to receive remote catalog snapshot",
+						);
+					}
 				})
 				.map_err(AcceptError::from_err)?;
 
@@ -239,11 +248,13 @@ impl ProtocolHandler for CatalogSync {
 				.send(&local_snapshot)
 				.await
 				.inspect_err(|e| {
-					tracing::warn!(
-						peer = %Short(&link.remote_id()),
-						error = %e,
-						"failed to send local catalog snapshot",
-					);
+					if !e.is_cancelled() {
+						tracing::warn!(
+							error = %e,
+							peer = %Short(&link.remote_id()),
+							"failed to send local catalog snapshot",
+						);
+					}
 				})
 				.map_err(AcceptError::from_err)?;
 			drop(local_snapshot);

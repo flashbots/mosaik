@@ -10,12 +10,12 @@ use {
 	builder::ProducerConfig,
 	core::{
 		fmt::Debug,
-		pin::Pin,
+		pin::{Pin, pin},
 		task::{Context, Poll},
 	},
 	futures::{Sink, SinkExt},
 	std::sync::Arc,
-	tokio::sync::mpsc,
+	tokio::sync::mpsc::{self, error::TrySendError},
 	tokio_util::sync::PollSender,
 };
 
@@ -48,7 +48,18 @@ pub use {
 ///   attempts to send data will fail. Online conditions can be observed through
 ///   the [`when()`](Producer::when) API. They can be things like minimum number
 ///   of subscribers, required tags, or custom predicates on the current set of
-///   subscribers.
+///   subscribers. Online conditions are re-evaluated whenever there is a change
+///   in the set of active subscribers. Online conditions can be configured via
+///   the [`network.streams().producer().online_when(..)`] API. By default,
+///   producers are online when they have at least one active consumer.
+///
+/// - Using `Sink::send` on a producer will first wait for the producer to be
+///   online before attempting to send the datum to the underlying channel. If
+///   the producer is offline, the `Sink::poll_ready` call will not complete
+///   until the producer becomes online. Alternatively, the `try_send` method
+///   can be used to attempt to send a datum immediately, returning an error if
+///   the producer is offline or if the underlying channel is not ready to
+///   accept new datum.
 #[derive(Clone)]
 pub struct Producer<D: Datum> {
 	status: When,
@@ -112,6 +123,22 @@ impl<D: Datum> Producer<D> {
 		self.status.is_online()
 	}
 
+	/// Attempts to send a datum to the underlying stream producer sink.
+	pub fn try_send(&self, item: D) -> Result<(), Error<D>> {
+		if !self.is_online() {
+			return Err(Error::Offline(item));
+		}
+
+		let Some(inner) = self.chan.get_ref() else {
+			return Err(Error::Closed(Some(item)));
+		};
+
+		inner.try_send(item).map_err(|e| match e {
+			TrySendError::Full(d) => Error::Full(d),
+			TrySendError::Closed(d) => Error::Closed(Some(d)),
+		})
+	}
+
 	/// Returns an iterator over the active subscriptions to this producer.
 	///
 	/// Each subscription represents an active connection from a remote
@@ -127,6 +154,16 @@ impl<D: Datum> Producer<D> {
 	}
 }
 
+/// Sink implementation for sending datum to remote consumers.
+///
+/// Notes:
+/// - The sink will only accept datum to send when the producer is online.
+///   Otherwise an `Error::Offline` is returned.
+/// - The sink may return `Error::Closed` if the underlying sink is closed.
+/// - When sending datums, the sink will be in a ready state only when the
+///   producer is online and the underlying channel is ready to accept new
+///   datum, otherwise `Sink::send` will not resolve until both conditions are
+///   met.
 impl<D: Datum> Sink<D> for Producer<D> {
 	type Error = Error<D>;
 
@@ -134,19 +171,22 @@ impl<D: Datum> Sink<D> for Producer<D> {
 		self: Pin<&mut Self>,
 		cx: &mut Context<'_>,
 	) -> Poll<Result<(), Self::Error>> {
-		self
-			.get_mut()
+		let this = self.get_mut();
+		let mut online_fut = pin!(this.status.online.wait_for(|s| *s));
+
+		match Pin::new(&mut online_fut).poll(cx) {
+			Poll::Ready(_) => {}
+			Poll::Pending => return Poll::Pending,
+		}
+
+		this
 			.chan
 			.poll_ready_unpin(cx)
 			.map_err(|e| Error::Closed(e.into_inner()))
 	}
 
 	fn start_send(self: Pin<&mut Self>, item: D) -> Result<(), Self::Error> {
-		self
-			.get_mut()
-			.chan
-			.start_send_unpin(item)
-			.map_err(|e| Error::Closed(e.into_inner()))
+		self.try_send(item)
 	}
 
 	fn poll_flush(

@@ -163,7 +163,7 @@ impl<D: Datum> Receiver<D> {
 					tracing::debug!(
 							stream_id = %Short(self.config.stream_id),
 							producer_id = %Short(&self.peer.id()),
-							"receiver worker terminated",
+							"stream subscription terminated",
 						);
 					break;
 				}

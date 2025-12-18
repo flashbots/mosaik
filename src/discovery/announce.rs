@@ -308,7 +308,7 @@ impl WorkerLoop {
 				// topic connection dropped, re-join
 				tracing::warn!(
 					network = %self.local.network_id(),
-					"Gossip topic connection closed, re-joining"
+					"announcement gossip network connection lost, attempting to re-join"
 				);
 				self.neighbors_count.store(0, Ordering::SeqCst);
 				self.rejoin_topic(topic_tx, topic_rx).await?;
@@ -316,7 +316,7 @@ impl WorkerLoop {
 			Some(Err(e)) => {
 				tracing::warn!(
 					network = %self.local.network_id(),
-					"Gossip topic error: {e}"
+					"announcement gossip network error: {e}"
 				);
 			}
 			Some(Ok(event)) => {
@@ -360,7 +360,7 @@ impl WorkerLoop {
 				else {
 					tracing::warn!(
 						network = %self.local.network_id(),
-						"Failed to decode announcement message"
+						"failed to decode announcement message"
 					);
 					// todo: Ban peer due to protocol violation
 					return;
@@ -473,7 +473,7 @@ impl WorkerLoop {
 				// topic connection dropped, re-join
 				tracing::warn!(
 					network = %self.local.network_id(),
-					"gossip topic connection closed, re-joining"
+					"announcement gossip network connection lost, attempting to re-join"
 				);
 
 				self.rejoin_topic(topic_tx, topic_rx).await?;
@@ -508,7 +508,7 @@ impl WorkerLoop {
 			tracing::warn!(
 				error = %e,
 				network = %self.local.network_id(),
-				"Failed to dial peers via gossip topic"
+				"failed to dial peers via announcement gossip network"
 			);
 		}
 

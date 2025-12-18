@@ -10,10 +10,11 @@ use {
 		sync::CatalogSync,
 	},
 	crate::{
+		PeerId,
 		network::LocalNode,
 		primitives::{IntoIterOrSingle, Short},
 	},
-	futures::StreamExt,
+	futures::{StreamExt, TryFutureExt},
 	iroh::{
 		EndpointAddr,
 		Watcher,
@@ -115,7 +116,7 @@ pub(super) struct WorkerLoop {
 	events: broadcast::Sender<Event>,
 
 	/// Ongoing catalog sync tasks.
-	syncs: JoinSet<Result<(), Error>>,
+	syncs: JoinSet<Result<(), (Error, PeerId)>>,
 
 	/// Incoming commands from the public API.
 	commands: UnboundedReceiver<WorkerCommand>,
@@ -159,7 +160,7 @@ impl WorkerLoop {
 				tracing::error!(
 					error = %e,
 					network = %local.network_id(),
-					"Discovery worker loop terminated with error"
+					"Discovery subsystem terminated"
 				);
 			}
 
@@ -219,7 +220,7 @@ impl WorkerLoop {
 						tracing::warn!(
 							error = %e,
 							network = %self.handle.local.network_id(),
-							"Discovery Catalog Sync task failed"
+							"discovery catalog sync failed"
 						);
 					}
 				}
@@ -249,18 +250,18 @@ impl WorkerLoop {
 			WorkerCommand::AcceptCatalogSync(connection) => {
 				let peer_id = connection.remote_id();
 				if let Err(e) = self.sync.protocol().accept(connection).await {
-					tracing::warn!(
+					tracing::trace!(
 						error = %e,
-						peer_id = %peer_id,
+						peer_id = %Short(&peer_id),
 						network = %self.handle.local.network_id(),
-						"Failed to accept catalog sync connection"
+						"failed to accept catalog sync connection"
 					);
 				}
 			}
 			WorkerCommand::AcceptAnnounce(connection) => {
 				let peer_id = connection.remote_id();
 				if let Err(e) = self.announce.protocol().accept(connection).await {
-					tracing::warn!(
+					tracing::trace!(
 						error = %e,
 						peer_id = %peer_id,
 						network = %self.handle.local.network_id(),
@@ -295,8 +296,12 @@ impl WorkerLoop {
 							self.handle.local.observe(signed_peer_entry.address());
 
 							// Trigger a full catalog sync with the newly discovered peer
+							let peer_id = *signed_peer_entry.id();
 							self.syncs.spawn(
-								self.sync.sync_with(signed_peer_entry.address().clone()),
+								self
+									.sync
+									.sync_with(signed_peer_entry.address().clone())
+									.map_err(move |e| (e, peer_id)),
 							);
 
 							self
@@ -363,6 +368,7 @@ impl WorkerLoop {
 		peer: EndpointAddr,
 		done: oneshot::Sender<Result<(), Error>>,
 	) {
+		let peer_id = peer.id;
 		self.handle.local.observe(&peer);
 		let sync_fut = self.sync.sync_with(peer);
 		self.syncs.spawn(async move {
@@ -374,7 +380,7 @@ impl WorkerLoop {
 				Err(e) => {
 					let wrapped = io::Error::other(e.to_string());
 					let _ = done.send(Err(e));
-					Err(Error::Other(wrapped.into()))
+					Err((Error::Other(wrapped.into()), peer_id))
 				}
 			}
 		});

@@ -193,6 +193,8 @@ impl<D: Datum> WorkerLoop<D> {
 
 impl<D: Datum> WorkerLoop<D> {
 	pub async fn run(mut self) {
+		let mut offline_when = self.online_when.clone().unmet();
+
 		loop {
 			tokio::select! {
 				// Triggered when the network is shutting down or
@@ -203,15 +205,16 @@ impl<D: Datum> WorkerLoop<D> {
 					break;
 				}
 
+				// Triggered when the publishing conditions for this producer
+				// are met and it is considered online.
 				() = &mut self.online_when => {
-					tracing::info!(
-						met = %self.online_when.is_condition_met(),
-						stream_id = %Short(self.config.stream_id),
-						consumers = %self.active.len(),
-						"producer publish conditions met, ready to send data",
-					);
+					self.on_online();
+				}
 
-					self.online.send_replace(self.online_when.is_condition_met());
+				// Triggered when the publishing conditions for this producer
+				// are no longer met and it is considered offline.
+				() = &mut offline_when => {
+					self.on_offline();
 				}
 
 				// Triggered when [`Acceptor`] accepts a new connection from a
@@ -246,7 +249,7 @@ impl<D: Datum> WorkerLoop<D> {
 					// Serialize the datum only once for all matching consumers,
 					// if there is at least one consumer with criteria that matches.
 					encode_to_vec(&item, standard())
-						.expect("Failed to serialize datum")
+						.expect("failed to serialize datum")
 						.into()
 				});
 
@@ -270,7 +273,7 @@ impl<D: Datum> WorkerLoop<D> {
 					"error sending datum to consumer",
 				);
 				// Remove the failed subscription
-				todo!()
+				todo!("handle failed sends properly");
 			}
 		}
 	}
@@ -421,12 +424,33 @@ impl<D: Datum> WorkerLoop<D> {
 			});
 
 			tracing::info!(
+				reason = %reason,
 				stream_id = %Short(self.config.stream_id),
 				consumer_id = %Short(&subscription.link.remote_id()),
-				reason = %reason,
+				remaining_consumers = %self.active.len(),
 				"consumer disconnected",
 			);
 		}
+	}
+
+	fn on_online(&mut self) {
+		tracing::trace!(
+			stream_id = %Short(self.config.stream_id),
+			consumers = %self.active.len(),
+			"producer is online",
+		);
+
+		self.online.send_replace(true);
+	}
+
+	fn on_offline(&mut self) {
+		tracing::trace!(
+			stream_id = %Short(self.config.stream_id),
+			consumers = %self.active.len(),
+			"producer is offline",
+		);
+
+		self.online.send_replace(false);
 	}
 }
 

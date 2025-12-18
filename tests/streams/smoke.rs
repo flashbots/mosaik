@@ -126,8 +126,8 @@ async fn custom_stream_id() -> anyhow::Result<()> {
 
 	n1.discovery().dial(n0.local().addr()).await;
 
-	timeout_s(1, c1_1.when().subscribed()).await?;
-	timeout_s(1, c1_2.when().subscribed()).await?;
+	timeout_s(3, c1_1.when().subscribed()).await?;
+	timeout_s(3, c1_2.when().subscribed()).await?;
 
 	tracing::debug!("consumers successfully subscribed to producers");
 

@@ -143,8 +143,9 @@ async fn online_when() -> anyhow::Result<()> {
 
 	// spin up a consumer node with no tags
 	let n2 = Network::new(network_id).await?;
-	n2.discovery().dial(n0.local().addr()).await;
-	n2.discovery().dial(n1.local().addr()).await;
+
+	// connect all nodes together
+	discover_all([&n0, &n1, &n2]).await?;
 
 	let c2_1 = n2.streams().consume::<Data1>();
 	let c2_2 = n2.streams().consume::<Data2>();
@@ -233,6 +234,16 @@ async fn online_when() -> anyhow::Result<()> {
 	timeout_s(2, p1_1.when().subscribed().minimum_of(4)).await?;
 	timeout_s(2, p1_1.when().online()).await?;
 	assert!(p1_1.is_online());
+
+	// now verify that producers go offline when subscribers disconnect
+	drop(n5);
+
+	tracing::debug!("Terminated node n5 (consumer c5_1)");
+	timeout_s(2, p1_1.when().offline()).await?;
+	assert!(!p1_1.is_online());
+	tracing::debug!(
+		"Producer p1_1 went offline after losing a tagged subscriber"
+	);
 
 	Ok(())
 }
