@@ -107,7 +107,7 @@ impl<D: Datum> Receiver<D> {
 
 		// Construct the status signaling info for this receiver worker.
 		let channel_info = ChannelInfo {
-			stream_id: D::stream_id(),
+			stream_id: config.stream_id,
 			criteria: config.criteria.clone(),
 			producer_id: *peer.id(),
 			consumer_id: local.id(),
@@ -161,7 +161,7 @@ impl<D: Datum> Receiver<D> {
 				// Used to break out of the loop when an unrecoverable error occurs.
 				_ = conn_state.wait_for(|s| *s == State::Terminated) => {
 					tracing::debug!(
-							stream_id = %D::stream_id(),
+							stream_id = %Short(self.config.stream_id),
 							producer_id = %Short(&self.peer.id()),
 							"receiver worker terminated",
 						);
@@ -237,7 +237,7 @@ impl<D: Datum> Receiver<D> {
 
 		let net_id = *self.local.network_id();
 		let cancel = self.cancel.clone();
-		let criteria = self.config.criteria.clone();
+		let config = Arc::clone(&self.config);
 		let peer_id = *self.peer.id();
 		let peer_addr = self.peer.address().clone();
 		let backoff_fut = self.apply_backoff();
@@ -251,9 +251,9 @@ impl<D: Datum> Receiver<D> {
 			}
 
 			tracing::debug!(
-				stream_id = %D::stream_id(),
+				stream_id = %Short(config.stream_id),
 				producer_id = %Short(&peer_id),
-				criteria = ?criteria,
+				criteria = ?config.criteria,
 				"connecting to stream producer",
 			);
 
@@ -262,7 +262,11 @@ impl<D: Datum> Receiver<D> {
 
 			// Send the consumer handshake to the producer
 			link
-				.send(&ConsumerHandshake::new::<D>(net_id, criteria))
+				.send(&ConsumerHandshake::new(
+					net_id,
+					config.stream_id,
+					config.criteria.clone(),
+				))
 				.await?;
 
 			// await the producer's handshake response
@@ -271,7 +275,7 @@ impl<D: Datum> Receiver<D> {
 			// confirm that the producer is on the correct network
 			if start.network_id() != net_id {
 				tracing::warn!(
-					stream_id = %D::stream_id(),
+					stream_id = %Short(config.stream_id),
 					producer_id = %Short(&peer_id),
 					expected_network = %Short(net_id),
 					received_network = %Short(start.network_id()),
@@ -282,9 +286,9 @@ impl<D: Datum> Receiver<D> {
 			}
 
 			// confirm that the producer is producing the requested stream
-			if start.stream_id() != D::stream_id() {
+			if start.stream_id() != config.stream_id {
 				tracing::warn!(
-					stream_id = %D::stream_id(),
+					stream_id = %Short(config.stream_id),
 					producer_id = %Short(&peer_id),
 					"producer is producing a different stream than requested",
 				);
@@ -325,7 +329,7 @@ impl<D: Datum> Receiver<D> {
 
 			($msg:expr, $e:expr) => {
 				tracing::warn!(
-					stream_id = %D::stream_id(),
+					stream_id = %Short(self.config.stream_id),
 					producer_id = %Short(&self.peer.id()),
 					criteria = ?self.config.criteria,
 					error = %$e,
@@ -394,7 +398,7 @@ impl<D: Datum> Receiver<D> {
 				// error that is not explicitly handled above and is not known
 				// to be unrecoverable. Log and attempt to reconnect.
 				tracing::warn!(
-					stream_id = %D::stream_id(),
+					stream_id = %Short(self.config.stream_id),
 					producer_id = %Short(&self.peer.id()),
 					reason = %reason,
 					"subscription refused by producer",
@@ -404,7 +408,7 @@ impl<D: Datum> Receiver<D> {
 				// io error occurred, drop the current link and attempt to reconnect
 				tracing::warn!(
 					error = %e,
-					stream_id = %D::stream_id(),
+					stream_id = %Short(self.config.stream_id),
 					producer_id = %Short(self.peer.id()),
 				);
 			}
@@ -422,7 +426,7 @@ impl<D: Datum> Receiver<D> {
 			Ok(link) => {
 				// successfully connected and performed handshake
 				tracing::info!(
-					stream_id = %D::stream_id(),
+					stream_id = %Short(self.config.stream_id),
 					producer_id = %Short(&self.peer.id()),
 					criteria = ?self.config.criteria,
 					"connected to stream producer",
@@ -461,7 +465,7 @@ impl<D: Datum> Receiver<D> {
 				} else {
 					// backoff policy has been exhausted, terminate the worker
 					tracing::debug!(
-						stream_id = %D::stream_id(),
+						stream_id = %Short(self.config.stream_id),
 						producer_id = %Short(producer_id),
 						criteria = ?self.config.criteria,
 						"exhausted all reconnection attempts, terminating",
@@ -476,13 +480,14 @@ impl<D: Datum> Receiver<D> {
 		};
 
 		let cancel = self.cancel.clone();
+		let stream_id = self.config.stream_id;
 
 		async move {
 			match next_step {
 				Ok(step) => step,
 				Err(duration) => {
 					tracing::debug!(
-						stream_id = %D::stream_id(),
+						stream_id = %Short(stream_id),
 						producer_id = %Short(producer_id),
 						"waiting {duration:?} before reconnecting",
 					);
@@ -508,13 +513,13 @@ impl<D: Datum> Receiver<D> {
 		&mut self,
 		peer_addr: EndpointAddr,
 	) -> impl Future<Output = Result<Link<Streams>, LinkError>> + 'static {
+		let stream_id = self.config.stream_id;
 		let discovery = self.discovery.clone();
 		let producer_id = *self.peer.id();
 		let connect_fut = self.connect();
-		let stream_id = D::stream_id();
 
 		tracing::trace!(
-			stream_id = %D::stream_id(),
+			stream_id = %Short(stream_id),
 			producer_id = %Short(producer_id),
 			"producer is not recognizing this consumer, will sync catalog then reconnect",
 		);
@@ -522,7 +527,7 @@ impl<D: Datum> Receiver<D> {
 		async move {
 			discovery.sync_with(peer_addr).await.map_err(|e| {
 				tracing::warn!(
-					stream_id = %stream_id,
+					stream_id = %Short(stream_id),
 					producer_id = %Short(&producer_id),
 					error = %e,
 					"failed to sync discovery catalog with producer",

@@ -14,15 +14,15 @@ use {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error<D: Datum> {
-	/// A producer for the given datum type already exists.
+	/// A producer for the given stream id already exists.
 	///
 	/// This error is returned when attempting to create a new producer
-	/// through the builder while one already exists for the same datum type.
+	/// through the builder while one already exists for the same stream id.
 	///
 	/// If you need multiple producers for the same datum type, consider using
 	/// the default `produce` method which allows multiple instances to
 	/// share the same underlying stream.
-	#[error("Producer for datum type already exists")]
+	#[error("Producer for this stream id already exists")]
 	AlreadyExists(Producer<D>),
 }
 
@@ -41,16 +41,16 @@ pub struct ProducerConfig {
 	/// accept or reject incoming consumer connections.
 	pub accept_if: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
 
-	/// A function that produces channel conditions under which a datum can be
-	/// considered publishable to a consumer. Here you can specify conditions
-	/// such as minimum number of subscribers, required tags, or custom
-	/// predicates, that must be met before publishing is allowed otherwise
-	/// sending data through the producer will fail.
+	/// A function that specifies conditions under which a channel is
+	/// considered online and can publish data to consumers. Here you can
+	/// specify conditions such as minimum number of subscribers, required tags,
+	/// or custom predicates, that must be met before publishing is allowed
+	/// otherwise sending data through the producer will fail.
 	///
 	/// This follows the same API as the `producer.when().subscribed()` method.
 	/// By default this is set to allow publishing if there is at least one
 	/// subscriber.
-	pub publish_if:
+	pub online_when:
 		Box<dyn Fn(ChannelConditions) -> ChannelConditions + Send + Sync>,
 
 	/// The network id this producer is associated with.
@@ -93,11 +93,11 @@ impl<D: Datum> Builder<'_, D> {
 	/// By default this is set to allow publishing if there is at least one
 	/// subscriber.
 	#[must_use]
-	pub fn publish_if<F>(mut self, f: F) -> Self
+	pub fn online_when<F>(mut self, f: F) -> Self
 	where
 		F: Fn(ChannelConditions) -> ChannelConditions + Send + Sync + 'static,
 	{
-		self.config.publish_if = Box::new(f);
+		self.config.online_when = Box::new(f);
 		self
 	}
 
@@ -118,12 +118,22 @@ impl<D: Datum> Builder<'_, D> {
 		self
 	}
 
+	/// Sets the stream id this producer is associated is producing for.
+	/// There can only be one producer per stream id on one network node.
+	///
+	/// If not set, defaults to the stream id of datum type `D`.
+	#[must_use]
+	pub fn with_stream_id(mut self, stream_id: impl Into<StreamId>) -> Self {
+		self.config.stream_id = stream_id.into();
+		self
+	}
+
 	/// Builds a new producer with the given configuration for this stream id.
 	/// If there is already an existing producer for this stream id, an error
 	/// is returned containing the existing producer created using the original
 	/// configuration.
 	pub fn build(self) -> Result<Producer<D>, Error<D>> {
-		if let Some(existing) = self.streams.sinks.open(D::stream_id()) {
+		if let Some(existing) = self.streams.sinks.open(self.config.stream_id) {
 			return Err(Error::AlreadyExists(existing.sender()));
 		}
 
@@ -142,9 +152,9 @@ impl<'s, D: Datum> Builder<'s, D> {
 			streams,
 			config: ProducerConfig {
 				buffer_size: 1024,
-				stream_id: D::stream_id(),
+				stream_id: D::derived_stream_id(),
 				accept_if: Box::new(|_| true),
-				publish_if: Box::new(|c| c.minimum_of(1)),
+				online_when: Box::new(|c| c.minimum_of(1)),
 				max_subscribers: usize::MAX,
 				network_id: *streams.local.network_id(),
 			},

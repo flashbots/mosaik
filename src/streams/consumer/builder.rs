@@ -5,13 +5,16 @@ use {
 		Datum,
 		worker,
 	},
-	crate::{Criteria, discovery::PeerEntry},
+	crate::{Criteria, StreamId, discovery::PeerEntry},
 	backoff::backoff::Backoff,
 	core::marker::PhantomData,
 	std::sync::Arc,
 };
 
-pub(in crate::streams) struct ConsumerConfig {
+pub struct ConsumerConfig {
+	/// The stream id this consumer is subscribing to.
+	pub stream_id: StreamId,
+
 	/// Specifies the criteria for the range of data this consumer is interested
 	/// in.
 	pub criteria: Criteria,
@@ -64,6 +67,15 @@ impl<D: Datum> Builder<'_, D> {
 		self.config.backoff = Arc::new(move || Box::new(backoff.clone()));
 		self
 	}
+
+	/// Sets the stream id this consumer is subscribing to.
+	///
+	/// If not set, defaults to the stream id of datum type `D`.
+	#[must_use]
+	pub fn with_stream_id(mut self, stream_id: impl Into<StreamId>) -> Self {
+		self.config.stream_id = stream_id.into();
+		self
+	}
 }
 
 impl<D: Datum> Builder<'_, D> {
@@ -77,6 +89,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 	pub(in crate::streams) fn new(streams: &'s Streams) -> Self {
 		Self {
 			config: ConsumerConfig {
+				stream_id: D::derived_stream_id(),
 				criteria: Criteria::default(),
 				subscribe_if: Box::new(|_| true),
 				backoff: streams.config.backoff.clone(),

@@ -52,7 +52,7 @@ impl Sinks {
 		&self,
 		config: ProducerConfig,
 	) -> Result<SinkHandle, SinkHandle> {
-		let stream_id = D::stream_id();
+		let stream_id = config.stream_id;
 		match self.active.entry(stream_id) {
 			Entry::Vacant(entry) => {
 				// Create a new fanout sink worker loop for this stream id

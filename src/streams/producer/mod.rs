@@ -6,6 +6,7 @@ use {
 		StreamId,
 		status::{ChannelInfo, When},
 	},
+	crate::primitives::Short,
 	builder::ProducerConfig,
 	core::{
 		fmt::Debug,
@@ -31,7 +32,7 @@ pub use {
 	error::Error,
 };
 
-/// a local stream producer handle for sending data to remote peers.
+/// A stream producer handle for sending data to remote peers.
 ///
 /// Notes:
 ///
@@ -41,6 +42,13 @@ pub use {
 ///
 /// - Producers implement [`Sink`] for sending datum of type `D` to the
 ///   underlying stream.
+///
+/// - Producers are either online or offline based on their publishing
+///   conditions as specified in the builder or configuration. When offline,
+///   attempts to send data will fail. Online conditions can be observed through
+///   the [`when()`](Producer::when) API. They can be things like minimum number
+///   of subscribers, required tags, or custom predicates on the current set of
+///   subscribers.
 #[derive(Clone)]
 pub struct Producer<D: Datum> {
 	status: When,
@@ -50,7 +58,12 @@ pub struct Producer<D: Datum> {
 
 impl<D: Datum> Debug for Producer<D> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		write!(f, "Producer<{}>", D::stream_id())
+		write!(
+			f,
+			"Producer<{}>({})",
+			Short(self.config.stream_id),
+			std::any::type_name::<D>()
+		)
 	}
 }
 

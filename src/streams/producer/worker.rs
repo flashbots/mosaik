@@ -62,14 +62,11 @@ impl Handle {
 	/// Returns a typed sender channel for sending datum of type `D` to the
 	/// sink worker loop.
 	pub fn sender<D: Datum>(&self) -> Producer<D> {
-		// Validate that the stream id matches the expected datum type
-		assert_eq!(self.config.stream_id, D::stream_id(), "StreamId mismatch");
-
 		// Downcast the type erased sender channel to the expected type
 		let data_tx = self
 			.data_tx
 			.downcast_ref::<mpsc::Sender<D>>()
-			.expect("Failed to downcast data sender channel");
+			.expect("datum type mismatch; this is a bug.");
 
 		Producer::new(
 			data_tx.clone(),
@@ -141,11 +138,11 @@ pub(super) struct WorkerLoop<D: Datum> {
 
 	/// Sets the online status of the producer when the worker loop is ready and
 	/// publishing conditions are met.
-	ready: watch::Sender<bool>,
+	online: watch::Sender<bool>,
 
 	/// A future that resolves when the producer can publish data based on
-	/// the configured publish conditions.
-	publish_if: ChannelConditions,
+	/// the configured online conditions.
+	online_when: ChannelConditions,
 }
 
 impl<D: Datum> WorkerLoop<D> {
@@ -153,15 +150,15 @@ impl<D: Datum> WorkerLoop<D> {
 	pub(super) fn spawn(sinks: &Sinks, config: ProducerConfig) -> Handle {
 		let cancel = sinks.local.termination().child_token();
 
-		let ready = watch::Sender::new(false);
+		let online = watch::Sender::new(false);
 		let config = Arc::new(config);
 		let active_info = watch::Sender::new(im::HashMap::new());
 		let (accepted_tx, accepted_rx) = mpsc::unbounded_channel();
 		let (data_tx, data_rx) = mpsc::channel(config.buffer_size);
-		let publish_if = (config.publish_if)(
-			When::new(active_info.subscribe(), ready.subscribe()).subscribed(),
+		let online_when = (config.online_when)(
+			When::new(active_info.subscribe(), online.subscribe()).subscribed(),
 		);
-		ready.send_replace(publish_if.is_condition_met());
+		online.send_replace(online_when.is_condition_met());
 
 		let worker = WorkerLoop::<D> {
 			cancel,
@@ -170,16 +167,16 @@ impl<D: Datum> WorkerLoop<D> {
 			config: Arc::clone(&config),
 			active: DenseSlotMap::with_key(),
 			accepted: accepted_rx,
-			ready: ready.clone(),
+			online: online.clone(),
 			dropped: FuturesUnordered::new(),
 			active_info: active_info.clone(),
-			publish_if,
+			online_when,
 		};
 
 		tokio::spawn(worker.run());
 
 		tracing::info!(
-			stream_id = %Short(D::stream_id()),
+			stream_id = %Short(config.stream_id),
 			network_id = %config.network_id,
 			"created new stream producer",
 		);
@@ -188,7 +185,7 @@ impl<D: Datum> WorkerLoop<D> {
 			config,
 			data_tx: Box::new(data_tx),
 			accepted: accepted_tx,
-			ready: ready.subscribe(),
+			ready: online.subscribe(),
 			active: active_info.subscribe(),
 		}
 	}
@@ -206,15 +203,15 @@ impl<D: Datum> WorkerLoop<D> {
 					break;
 				}
 
-				() = &mut self.publish_if => {
+				() = &mut self.online_when => {
 					tracing::info!(
-						met = %self.publish_if.is_condition_met(),
-						stream_id = %Short(D::stream_id()),
+						met = %self.online_when.is_condition_met(),
+						stream_id = %Short(self.config.stream_id),
 						consumers = %self.active.len(),
 						"producer publish conditions met, ready to send data",
 					);
 
-					self.ready.send_replace(self.publish_if.is_condition_met());
+					self.online.send_replace(self.online_when.is_condition_met());
 				}
 
 				// Triggered when [`Acceptor`] accepts a new connection from a
@@ -268,7 +265,7 @@ impl<D: Datum> WorkerLoop<D> {
 		for (res, _) in results {
 			if let Err(reason) = res {
 				tracing::warn!(
-					stream_id = %Short(D::stream_id()),
+					stream_id = %Short(self.config.stream_id),
 					reason = %reason,
 					"error sending datum to consumer",
 				);
@@ -294,7 +291,7 @@ impl<D: Datum> WorkerLoop<D> {
 		if self.active.len() >= self.config.max_subscribers {
 			tracing::warn!(
 				consumer_id = %Short(&link.remote_id()),
-				stream_id = %D::stream_id(),
+				stream_id = %Short(self.config.stream_id),
 				current_subscribers = %self.active.len(),
 				"rejected consumer connection: no capacity",
 			);
@@ -308,7 +305,7 @@ impl<D: Datum> WorkerLoop<D> {
 		// Check if we should accept this consumer based on the auth predicate
 		if !(self.config.accept_if)(&peer) {
 			tracing::warn!(
-				stream_id = %D::stream_id(),
+				stream_id = %Short(self.config.stream_id),
 				consumer_id = %Short(&peer),
 				"rejected unauthorized consumer",
 			);
@@ -320,7 +317,8 @@ impl<D: Datum> WorkerLoop<D> {
 		}
 
 		let mut link = link;
-		let start_stream = StartStream(self.config.network_id, D::stream_id());
+		let start_stream =
+			StartStream(self.config.network_id, self.config.stream_id);
 
 		if let Err(e) = link.send(&start_stream).await {
 			tracing::warn!(
@@ -338,7 +336,7 @@ impl<D: Datum> WorkerLoop<D> {
 
 		tracing::info!(
 			consumer_id = %Short(&link.remote_id()),
-			stream_id = %D::stream_id(),
+			stream_id = %Short(self.config.stream_id),
 			criteria = ?criteria,
 			total_consumers = %self.active.len() + 1,
 			"accepted new consumer",
@@ -361,13 +359,13 @@ impl<D: Datum> WorkerLoop<D> {
 		self.active_info.send_modify(|active| {
 			let sub_id = UniqueId::from_u64(sub_id.0.as_ffi());
 			active.insert(sub_id, ChannelInfo {
-				stream_id: D::stream_id(),
-				criteria,
-				producer_id: self.local_id,
 				consumer_id: *peer.id(),
-				stats,
-				peer,
+				producer_id: self.local_id,
+				stream_id: self.config.stream_id,
 				state: state.subscribe(),
+				peer,
+				stats,
+				criteria,
 			});
 		});
 	}
@@ -376,7 +374,7 @@ impl<D: Datum> WorkerLoop<D> {
 	/// subscriptions.
 	async fn shutdown(&mut self) {
 		tracing::debug!(
-			stream_id = %Short(D::stream_id()),
+			stream_id = %Short(self.config.stream_id),
 			"terminating stream producer",
 		);
 
@@ -396,7 +394,7 @@ impl<D: Datum> WorkerLoop<D> {
 				&& !reason.is_cancelled()
 			{
 				tracing::debug!(
-					stream_id = %Short(D::stream_id()),
+					stream_id = %Short(self.config.stream_id),
 					consumer_id = %Short(peer_id),
 					reason = %reason,
 					"error closing subscription link",
@@ -423,7 +421,7 @@ impl<D: Datum> WorkerLoop<D> {
 			});
 
 			tracing::info!(
-				stream_id = %Short(D::stream_id()),
+				stream_id = %Short(self.config.stream_id),
 				consumer_id = %Short(&subscription.link.remote_id()),
 				reason = %reason,
 				"consumer disconnected",

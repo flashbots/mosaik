@@ -5,11 +5,14 @@ use {
 		Datum,
 		status::{ChannelInfo, When},
 	},
+	crate::{primitives::Short, streams::consumer::builder::ConsumerConfig},
 	core::{
+		fmt::Debug,
 		pin::Pin,
 		task::{Context, Poll},
 	},
 	futures::Stream,
+	std::sync::Arc,
 	tokio::sync::mpsc,
 	tokio_util::sync::DropGuard,
 };
@@ -36,8 +39,20 @@ pub use builder::Builder;
 /// - Consumers implement [`Stream`] for receiving datum of type `D`.
 pub struct Consumer<D: Datum> {
 	status: When,
+	config: Arc<ConsumerConfig>,
 	chan: mpsc::UnboundedReceiver<D>,
 	_abort: DropGuard,
+}
+
+impl<D: Datum> Debug for Consumer<D> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(
+			f,
+			"Consumer<{}>({})",
+			Short(self.config.stream_id),
+			std::any::type_name::<D>()
+		)
+	}
 }
 
 impl<D: Datum> Consumer<D> {
@@ -61,6 +76,11 @@ impl<D: Datum> Consumer<D> {
 	/// from other peers.
 	pub fn is_online(&self) -> bool {
 		self.status.is_online()
+	}
+
+	/// Returns the configuration used to create this consumer.
+	pub fn config(&self) -> &ConsumerConfig {
+		&self.config
 	}
 
 	/// Returns an iterator over the currently connected producers for this

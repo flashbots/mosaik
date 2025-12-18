@@ -1,5 +1,6 @@
 use {
 	super::*,
+	crate::utils::timeout_s,
 	futures::{SinkExt, StreamExt},
 	mosaik::*,
 };
@@ -87,6 +88,57 @@ async fn subscription_triggers_catalog_sync() -> anyhow::Result<()> {
 	assert!(n0_info.tags().contains(&"tag1".into()));
 	assert!(n0_info.tags().contains(&"tag2".into()));
 	assert!(n0_info.tags().contains(&"tag3".into()));
+
+	Ok(())
+}
+
+#[tokio::test]
+async fn custom_stream_id() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+
+	// with custom stream ids we can have multiple producers of the
+	// same datum type on the same node differentiated by stream id
+	let mut p0_1 = n0
+		.streams()
+		.producer::<Data1>()
+		.with_stream_id("stream1234")
+		.build()?;
+
+	let mut p0_2 = n0
+		.streams()
+		.producer::<Data1>()
+		.with_stream_id("stream5678")
+		.build()?;
+
+	let mut c1_1 = n1
+		.streams()
+		.consumer::<Data1>()
+		.with_stream_id("stream1234")
+		.build();
+
+	let mut c1_2 = n1
+		.streams()
+		.consumer::<Data1>()
+		.with_stream_id("stream5678")
+		.build();
+
+	n1.discovery().dial(n0.local().addr()).await;
+
+	timeout_s(1, c1_1.when().subscribed()).await?;
+	timeout_s(1, c1_2.when().subscribed()).await?;
+
+	tracing::debug!("consumers successfully subscribed to producers");
+
+	p0_1.send(Data1("hello1234".into())).await?;
+	p0_2.send(Data1("hello5678".into())).await?;
+
+	let msg0 = c1_1.next().await.expect("expected message from c1_1");
+	assert_eq!(msg0, Data1("hello1234".into()));
+
+	let msg1 = c1_2.next().await.expect("expected message from c1_2");
+	assert_eq!(msg1, Data1("hello5678".into()));
 
 	Ok(())
 }

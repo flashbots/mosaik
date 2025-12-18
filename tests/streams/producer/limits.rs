@@ -107,14 +107,14 @@ async fn max_subs() -> anyhow::Result<()> {
 	Ok(())
 }
 
-/// This test verifies that the producer's `publish_if` condition is
+/// This test verifies that the producer's `online_when` condition is
 /// correctly applied to control when the producer is allowed to publish data.
 ///
 /// Producers in this test do not place any restrictions on which consumers
 /// can subscribe to them; all consumers are allowed to connect, but publishing
-/// is controlled by the `publish_if` condition.
+/// is controlled by the `online_when` condition.
 #[tokio::test]
-async fn publish_if() -> anyhow::Result<()> {
+async fn online_when() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 
 	// publishes data1 and data2 streams
@@ -124,7 +124,7 @@ async fn publish_if() -> anyhow::Result<()> {
 	let p0_1 = n0
 		.streams()
 		.producer::<Data1>()
-		.publish_if(|c| c.minimum_of(2))
+		.online_when(|c| c.minimum_of(2))
 		.build()?;
 
 	// default publish_if allows publishing with at least one subscriber
@@ -138,7 +138,7 @@ async fn publish_if() -> anyhow::Result<()> {
 	let p1_1 = n1
 		.streams()
 		.producer::<Data1>()
-		.publish_if(|c| c.with_tags("tag2").minimum_of(2))
+		.online_when(|c| c.with_tags("tag2").minimum_of(2))
 		.build()?;
 
 	// spin up a consumer node with no tags

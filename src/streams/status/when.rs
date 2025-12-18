@@ -25,7 +25,7 @@ pub struct When {
 	///
 	/// When the value is set to false the consumer or producer is not ready
 	/// to send or receive data.
-	pub(crate) ready: watch::Receiver<bool>,
+	pub(crate) online: watch::Receiver<bool>,
 
 	/// Observer for the most recent version of the active subscriptions info.
 	pub(crate) active: watch::Receiver<ActiveChannelsMap>,
@@ -33,7 +33,7 @@ pub struct When {
 
 impl Clone for When {
 	fn clone(&self) -> Self {
-		Self::new(self.active.clone(), self.ready.clone())
+		Self::new(self.active.clone(), self.online.clone())
 	}
 }
 
@@ -41,11 +41,11 @@ impl When {
 	/// Initialized by consumers and producers for each new stream subscription.
 	pub(crate) fn new(
 		mut active: watch::Receiver<ActiveChannelsMap>,
-		mut ready: watch::Receiver<bool>,
+		mut online: watch::Receiver<bool>,
 	) -> Self {
 		active.mark_changed();
-		ready.mark_changed();
-		Self { ready, active }
+		online.mark_changed();
+		Self { online, active }
 	}
 }
 
@@ -59,10 +59,10 @@ impl When {
 	///
 	/// By default for producers, this means at least one subscriber is connected.
 	pub fn online(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
-		let mut ready = self.ready.clone();
+		let mut online = self.online.clone();
 
 		async move {
-			if ready.wait_for(|v| *v).await.is_err() {
+			if online.wait_for(|v| *v).await.is_err() {
 				// if the watch channel is closed, consider the consumer/producer
 				// offline and never resolve this future
 				core::future::pending::<()>().await;
@@ -73,7 +73,7 @@ impl When {
 	/// Returns whether the consumer or producer is currently ready to send or
 	/// receive data from other peers.
 	pub fn is_online(&self) -> bool {
-		*self.ready.borrow()
+		*self.online.borrow()
 	}
 
 	/// Returns a future that resolves when the consumer or producer is not ready
@@ -81,12 +81,12 @@ impl When {
 	///
 	/// Resolves immediately if the consumer or producer is already offline.
 	pub fn offline(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
-		let mut ready = self.ready.clone();
+		let mut online = self.online.clone();
 
 		async move {
 			// if the watch channel is closed, consider the consumer/producer offline
 			// and always resolve this future
-			let _ = ready.wait_for(|v| !*v).await;
+			let _ = online.wait_for(|v| !*v).await;
 		}
 	}
 

@@ -1,5 +1,5 @@
 use {
-	super::{Criteria, Datum, StreamId, Streams, producer::Sinks},
+	super::{Criteria, StreamId, Streams, producer::Sinks},
 	crate::{
 		NetworkId,
 		discovery::Discovery,
@@ -167,8 +167,11 @@ pub(super) struct ConsumerHandshake {
 
 impl ConsumerHandshake {
 	/// Creates a new [`ConsumerHandshake`] instance.
-	pub fn new<D: Datum>(network_id: NetworkId, criteria: Criteria) -> Self {
-		let stream_id = D::stream_id();
+	pub fn new(
+		network_id: NetworkId,
+		stream_id: StreamId,
+		criteria: Criteria,
+	) -> Self {
 		Self {
 			network_id,
 			stream_id,

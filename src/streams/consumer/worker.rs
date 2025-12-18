@@ -58,7 +58,7 @@ pub(super) struct ConsumerWorker<D: Datum> {
 
 	/// A one-time set handle that is completed when the consumer worker loop is
 	/// ready.
-	ready: watch::Sender<bool>,
+	online: watch::Sender<bool>,
 }
 
 impl<D: Datum> ConsumerWorker<D> {
@@ -71,25 +71,26 @@ impl<D: Datum> ConsumerWorker<D> {
 		let local = streams.local.clone();
 		let cancel = local.termination().child_token();
 		let active = watch::Sender::new(ActiveChannelsMap::new());
-		let ready = watch::Sender::new(true);
+		let online = watch::Sender::new(true);
 		let (data_tx, data_rx) = mpsc::unbounded_channel();
 
 		let worker = ConsumerWorker {
-			config,
 			local,
 			data_tx,
+			config: Arc::clone(&config),
 			discovery: streams.discovery.clone(),
 			cancel: cancel.clone(),
 			active: active.clone(),
 			status_rx: StateUpdatesStream::new(),
-			ready: ready.clone(),
+			online: online.clone(),
 		};
 
 		tokio::spawn(worker.run());
 
 		Consumer {
+			config,
 			chan: data_rx,
-			status: When::new(active.subscribe(), ready.subscribe()),
+			status: When::new(active.subscribe(), online.subscribe()),
 			_abort: cancel.drop_guard(),
 		}
 	}
@@ -104,7 +105,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		catalog.mark_changed();
 
 		// mark the consumer as ready after initial setup is done
-		let _ = self.ready.send(true);
+		let _ = self.online.send(true);
 
 		loop {
 			tokio::select! {
@@ -136,13 +137,11 @@ impl<D: Datum> ConsumerWorker<D> {
 		          on the watcher while processing"
 	)]
 	fn on_catalog_update(&mut self, latest: Catalog) {
-		let stream_id = D::stream_id();
-
 		// identify all producers that are producing the desired stream id
 		// and satisfy the user-provided additional eligibility criteria.
 		let producers = latest
 			.peers()
-			.filter(|peer| peer.streams().contains(&stream_id));
+			.filter(|peer| peer.streams().contains(&self.config.stream_id));
 
 		for producer in producers {
 			// for each discovered producer, create a receive worker if it is not
@@ -150,14 +149,14 @@ impl<D: Datum> ConsumerWorker<D> {
 			let sub_id = UniqueId::from_bytes(*producer.id().as_bytes());
 			if !self.active.borrow().contains_key(&sub_id) {
 				tracing::trace!(
-					stream_id = %stream_id,
+					stream_id = %Short(self.config.stream_id),
 					producer = %Short(producer),
 					"discovered new stream producer"
 				);
 
 				if !(self.config.subscribe_if)(producer) {
 					tracing::debug!(
-						stream_id = %stream_id,
+						stream_id = %Short(self.config.stream_id),
 						producer_id = %Short(producer),
 						"skipping producer that does not satisfy eligibility criteria"
 					);
@@ -204,7 +203,7 @@ impl<D: Datum> ConsumerWorker<D> {
 
 			tracing::info!(
 				producer_id = %Short(&peer_id),
-				stream_id = %D::stream_id(),
+				stream_id = %Short(self.config.stream_id),
 				criteria = ?self.config.criteria,
 				"connection with producer terminated"
 			);
@@ -218,7 +217,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		self.active.send_replace(ActiveChannelsMap::default());
 
 		tracing::debug!(
-			stream_id = %D::stream_id(),
+			stream_id = %Short(self.config.stream_id),
 			producers_count = producers_count,
 			criteria = ?self.config.criteria,
 			"consumer terminated"
