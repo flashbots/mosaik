@@ -3,7 +3,7 @@
 use {
 	crate::{
 		discovery::{announce::Announce, worker::WorkerCommand},
-		network::{LocalNode, PeerId, link::Protocol},
+		network::{LocalNode, PeerId, link::Protocol as _},
 		primitives::IntoIterOrSingle,
 	},
 	iroh::{

@@ -5,7 +5,7 @@ use {
 		discovery::Discovery,
 		network::{
 			error::DifferentNetwork,
-			link::{Link, Protocol},
+			link::{Link, Protocol as _},
 		},
 		primitives::Short,
 		streams::{StreamNotFound, UnknownPeer},

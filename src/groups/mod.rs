@@ -56,35 +56,92 @@
 use {
 	crate::{
 		discovery::Discovery,
+		groups::join::Join,
 		network::{LocalNode, ProtocolProvider},
 	},
-	iroh::protocol::RouterBuilder,
-	listen::Listener,
+	iroh::{EndpointId, PublicKey, protocol::RouterBuilder},
+	serde::{Deserialize, Serialize},
+	std::{collections::BTreeMap, sync::Arc},
+	tokio::sync::RwLock,
 };
 
 mod config;
-mod listen;
+mod error;
+mod join;
 
-pub use config::{Config, ConfigBuilder, ConfigBuilderError};
+pub use {
+	config::{Config, ConfigBuilder, ConfigBuilderError},
+	error::Error,
+};
+
+use crate::network::link::Protocol as _;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct GroupState {
+	public_key: iroh::PublicKey,
+	members: Vec<EndpointId>,
+}
+
+impl GroupState {
+	pub fn new(public_key: iroh::PublicKey, members: Vec<EndpointId>) -> Self {
+		Self {
+			public_key,
+			members,
+		}
+	}
+}
 
 pub struct Groups {
-	_local: LocalNode,
-	_discovery: Discovery,
+	local: LocalNode,
+	discovery: Discovery,
+	groups_to_join: Vec<config::Group>,
+	group_states: BTreeMap<PublicKey, Arc<RwLock<GroupState>>>,
 }
 
 impl Groups {
-	const ALPN: &'static [u8] = b"/mosaik/groups/1";
+	pub fn new(local: LocalNode, discovery: Discovery, config: Config) -> Self {
+		let Config { groups_to_join } = config;
+		let group_states = groups_to_join
+			.iter()
+			.map(|group| {
+				(
+					group.secret().public().clone(),
+					Arc::new(RwLock::new(GroupState::new(
+						group.secret().public().clone(),
+						vec![],
+					))),
+				)
+			})
+			.collect::<BTreeMap<_, _>>();
 
-	pub fn new(local: LocalNode, discovery: Discovery, _config: Config) -> Self {
 		Self {
-			_local: local,
-			_discovery: discovery,
+			local,
+			discovery,
+			groups_to_join,
+			group_states,
+		}
+	}
+
+	pub async fn run(self) {
+		let Self {
+			local,
+			discovery,
+			groups_to_join,
+			group_states,
+		} = self;
+
+		loop {
+			tokio::select! {
+				_ = local.termination().cancelled() => {
+					break;
+				}
+			}
 		}
 	}
 }
 
 impl ProtocolProvider for Groups {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
-		protocols.accept(Self::ALPN, Listener)
+		protocols.accept(Join::ALPN, Join::new(self.group_states.clone()))
 	}
 }

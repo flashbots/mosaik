@@ -6,8 +6,8 @@ use {
 };
 
 /// This tests the `When` conditions for stream consumers that allows public API
-/// users to await certain subscription states of the consumer. The analogous version
-/// of this test for producers is in `streams::producer::when::smoke`.
+/// users to await certain subscription states of the consumer. The analogous
+/// version of this test for producers is in `streams::producer::when::smoke`.
 #[tokio::test]
 async fn smoke() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
