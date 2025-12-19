@@ -3,16 +3,21 @@ use {
 		super::{
 			Criteria,
 			Streams,
+			accept::StartStream,
 			status::{ChannelInfo, State, Stats},
 		},
-		ProducerConfig,
+		builder::ProducerConfig,
 	},
 	crate::{
 		PeerId,
 		discovery::PeerEntry,
-		network::{Cancelled, GracefulShutdown, UnexpectedClose, link::Link},
+		network::{
+			Cancelled,
+			GracefulShutdown,
+			UnexpectedClose,
+			link::{Link, LinkError},
+		},
 		primitives::Short,
-		streams::accept::StartStream,
 	},
 	bytes::Bytes,
 	iroh::endpoint::{ApplicationClose, ConnectionError},
@@ -21,8 +26,11 @@ use {
 	tokio_util::sync::CancellationToken,
 };
 
-/// Represents an active subscription from a remote consumer.
+/// Represents an active subscription handle from a remote consumer.
 /// Each subscription is an independent transport-level connection.
+///
+/// This type is used to control and interact with the sender task
+/// responsible for sending datum to one connected consumer.
 pub(super) struct Subscription {
 	/// The `PeerEntry` of the remote consumer at the time of connection.
 	pub peer: Arc<PeerEntry>,
@@ -178,6 +186,8 @@ impl Sender {
 		}
 	}
 
+	/// Triggered when there is a datum to be sent to the remote consumer.
+	/// Responsible for delivering the datum over the transport link.
 	async fn send_item(&mut self, datum: Bytes) {
 		// SAFETY: `datum` is already serialized by the producer worker
 		let send_fut = unsafe { self.link.send_raw(datum) };
@@ -195,15 +205,7 @@ impl Sender {
 					"error while sending datum to consumer; disconnecting",
 				);
 
-				self
-					.drop
-					.set(
-						error
-							.close_reason()
-							.cloned()
-							.unwrap_or(UnexpectedClose.into()),
-					)
-					.ok();
+				self.request_disconnect(error);
 			}
 			_ => { /* ignore cancelled errors */ }
 		}
@@ -279,5 +281,16 @@ impl Sender {
 			consumer_id = %Short(*self.peer.id()),
 			"consumer subscription terminated",
 		);
+	}
+
+	/// Called when we want to initiate the termination of this consumer
+	/// connection.
+	fn request_disconnect(&self, error: impl Into<LinkError>) {
+		let error = error.into();
+		let reason = error
+			.close_reason()
+			.cloned()
+			.unwrap_or(UnexpectedClose.into());
+		self.drop.set(reason).ok();
 	}
 }

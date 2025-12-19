@@ -87,6 +87,12 @@ impl Stats {
 			.connected_at
 			.store(Utc::now().timestamp_millis(), Ordering::Relaxed);
 	}
+
+	pub(crate) fn default_connected() -> Self {
+		let stats = Self::default();
+		stats.connected();
+		stats
+	}
 }
 
 impl Default for Stats {

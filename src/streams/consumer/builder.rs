@@ -1,11 +1,16 @@
 use {
-	super::{
-		super::{Streams, config::BackoffFactory},
-		Consumer,
-		Datum,
-		worker,
+	crate::{
+		Criteria,
+		StreamId,
+		discovery::PeerEntry,
+		streams::{
+			Consumer,
+			Datum,
+			Streams,
+			config::BackoffFactory,
+			consumer::worker,
+		},
 	},
-	crate::{Criteria, StreamId, discovery::PeerEntry},
 	backoff::backoff::Backoff,
 	core::marker::PhantomData,
 	std::sync::Arc,

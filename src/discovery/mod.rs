@@ -172,6 +172,7 @@ impl Discovery {
 			let local_entry = catalog.local().clone();
 			let updated_entry = update(local_entry.into());
 			let signed_updated_entry = updated_entry
+				.increment_version()
 				.sign(self.0.local.secret_key())
 				.expect("signing updated local peer entry failed.");
 

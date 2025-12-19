@@ -1,11 +1,14 @@
 //! Stream Consumers
 
 use {
-	super::{
+	crate::{
 		Datum,
-		status::{ChannelInfo, When},
+		primitives::Short,
+		streams::{
+			consumer::builder::ConsumerConfig,
+			status::{ChannelInfo, Stats, When},
+		},
 	},
-	crate::{primitives::Short, streams::consumer::builder::ConsumerConfig},
 	core::{
 		fmt::Debug,
 		pin::Pin,
@@ -38,9 +41,24 @@ pub use builder::Builder;
 ///
 /// - Consumers implement [`Stream`] for receiving datum of type `D`.
 pub struct Consumer<D: Datum> {
+	/// Allows awaiting changes to the consumer's subscription status.
 	status: When,
+
+	/// The consumer-specific configuration as assembled by
+	/// `Network::streams().consumer()`. If some configuration values are not
+	/// set, they default to the values from `Streams` config.
 	config: Arc<ConsumerConfig>,
-	chan: mpsc::UnboundedReceiver<D>,
+
+	/// Aggregated statistics of the consumer.
+	stats: Stats,
+
+	/// Channel for receiving datum from the consumer worker task.
+	/// Each received datum is paired with its serialized byte length for stats
+	/// tracking.
+	chan: mpsc::UnboundedReceiver<(D, usize)>,
+
+	/// Drop guard that aborts the consumer worker task when this handle is
+	/// dropped.
 	_abort: DropGuard,
 }
 
@@ -48,13 +66,15 @@ impl<D: Datum> Debug for Consumer<D> {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
 		write!(
 			f,
-			"Consumer<{}>({})",
+			"Consumer<{}>({}, {} producers)",
 			Short(self.config.stream_id),
-			std::any::type_name::<D>()
+			std::any::type_name::<D>(),
+			self.status.active.borrow().len(),
 		)
 	}
 }
 
+// Public API
 impl<D: Datum> Consumer<D> {
 	/// Awaits changes to the consumer's status.
 	///
@@ -83,6 +103,11 @@ impl<D: Datum> Consumer<D> {
 		&self.config
 	}
 
+	/// Returns the current snapshot of aggregated statistics of the consumer.
+	pub const fn stats(&self) -> &Stats {
+		&self.stats
+	}
+
 	/// Returns an iterator over the currently connected producers for this
 	/// consumer. The `PeerEntry` values yielded by the iterator represent the
 	/// state of the peers at the time their subscription was established.
@@ -102,6 +127,15 @@ impl<D: Datum> Stream for Consumer<D> {
 		self: Pin<&mut Self>,
 		cx: &mut Context<'_>,
 	) -> Poll<Option<Self::Item>> {
-		self.get_mut().chan.poll_recv(cx)
+		let this = self.get_mut();
+		match this.chan.poll_recv(cx) {
+			Poll::Ready(Some((datum, bytes_len))) => {
+				this.stats.increment_datums();
+				this.stats.increment_bytes(bytes_len);
+				Poll::Ready(Some(datum))
+			}
+			Poll::Ready(None) => Poll::Ready(None),
+			Poll::Pending => Poll::Pending,
+		}
 	}
 }

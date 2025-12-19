@@ -50,7 +50,7 @@ pub(super) struct Receiver<D: Datum> {
 
 	/// Channel for sending received data to the consumer handle for the public
 	/// api to consume.
-	data_tx: mpsc::UnboundedSender<D>,
+	data_tx: mpsc::UnboundedSender<(D, usize)>,
 
 	/// Watch channel for reporting the current state of this receiver worker
 	/// connection with the remote producer.
@@ -90,7 +90,7 @@ impl<D: Datum> Receiver<D> {
 		local: &LocalNode,
 		discovery: &Discovery,
 		cancel: &CancellationToken,
-		data_tx: &mpsc::UnboundedSender<D>,
+		data_tx: &mpsc::UnboundedSender<(D, usize)>,
 		config: Arc<ConsumerConfig>,
 	) -> ChannelInfo {
 		let local = local.clone();
@@ -179,7 +179,7 @@ impl<D: Datum> Receiver<D> {
 			Ok((datum, bytes_len)) => {
 				// forward the received datum to the consumer worker
 				// for delivery to public api consumer handle.
-				self.data_tx.send(datum).ok();
+				self.data_tx.send((datum, bytes_len)).ok();
 
 				// update stats
 				self.stats.increment_datums();

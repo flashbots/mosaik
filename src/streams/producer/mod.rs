@@ -1,13 +1,15 @@
 //! Stream Producers
 
 use {
-	super::{
+	crate::{
 		Datum,
 		StreamId,
-		status::{ChannelInfo, When},
+		primitives::Short,
+		streams::{
+			producer::builder::ProducerConfig,
+			status::{ChannelInfo, When},
+		},
 	},
-	crate::primitives::Short,
-	builder::ProducerConfig,
 	core::{
 		fmt::Debug,
 		pin::{Pin, pin},
@@ -68,8 +70,15 @@ pub use {
 ///   consumers is slow or unresponsive.
 #[derive(Clone)]
 pub struct Producer<D: Datum> {
+	/// Allows awaiting changes to the producer's subscriptions status.
 	status: When,
+
+	/// Channel for sending datum to the underlying producer sink.
 	chan: PollSender<D>,
+
+	/// The producer-specific configuration as assembled by
+	/// `Network::streams().producer()`. If some configuration values are not
+	/// set, they default to the values from `Streams` config.
 	config: Arc<ProducerConfig>,
 }
 

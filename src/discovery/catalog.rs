@@ -4,6 +4,8 @@ use {
 		NetworkId,
 		network::{LocalNode, PeerId},
 	},
+	chrono::Utc,
+	std::sync::Arc,
 };
 
 /// A catalog of discovered nodes and their associated peer info.
@@ -50,8 +52,17 @@ use {
 /// - Signed entries have precedence over unsigned entries when a signed entry
 ///   is inserted into the catalog for a peer that already has an unsigned entry
 ///   with the same peer ID then the unsigned entry is removed.
+///
+/// - Peers that have not announced themselves within a certain time frame
+///   (configurable via `Config::purge_after`) are considered stale and are
+///   automatically removed from the catalog by the discovery system.
+///
+/// - The catalog will not return stale entries via its public API.
 #[derive(Debug, Clone)]
 pub struct Catalog {
+	/// Discovery configuration.
+	config: Arc<Config>,
+
 	/// The local node's peer ID.
 	///
 	/// This is used to exclude the local node from queries.
@@ -79,22 +90,24 @@ impl Catalog {
 	/// The iterator yields both signed and unsigned entries, with signed entries
 	/// being the first to be returned.
 	pub fn peers(&self) -> impl DoubleEndedIterator<Item = &PeerEntry> {
+		let last_valid = Utc::now() - self.config.purge_after;
 		self
 			.signed
 			.values()
 			.map(|signed| signed.as_ref())
 			.chain(self.unsigned.values())
-			.filter(|p| *p.id() != self.local_id)
+			.filter(move |p| *p.id() != self.local_id && p.updated_at() >= last_valid)
 	}
 
 	/// Returns an iterator over all peer entries that carry a valid signature in
 	/// the catalog excluding the local peer entry.
 	pub fn signed_peers(&self) -> impl DoubleEndedIterator<Item = &PeerEntry> {
-		self
-			.signed
-			.values()
-			.map(|signed| signed.as_ref())
-			.filter(|p: &&PeerEntry| *p.id() != self.local_id)
+		let last_valid = Utc::now() - self.config.purge_after;
+		self.signed.values().map(|signed| signed.as_ref()).filter(
+			move |p: &&PeerEntry| {
+				*p.id() != self.local_id && p.updated_at() >= last_valid
+			},
+		)
 	}
 
 	/// Returns an iterator over all peer entries that do not carry a signature in
@@ -111,10 +124,12 @@ impl Catalog {
 	/// The iterator yields both signed and unsigned entries including the local
 	/// peer entry, with signed entries being the first to be returned.
 	pub fn iter(&self) -> impl DoubleEndedIterator<Item = &PeerEntry> {
+		let last_valid = Utc::now() - self.config.purge_after;
 		self
 			.signed
 			.values()
 			.map(|signed| signed.as_ref())
+			.filter(move |p: &&PeerEntry| p.updated_at() >= last_valid)
 			.chain(self.unsigned.values())
 	}
 
@@ -125,16 +140,22 @@ impl Catalog {
 	pub fn iter_signed(
 		&self,
 	) -> impl DoubleEndedIterator<Item = &SignedPeerEntry> {
-		self.signed.values()
+		let last_valid = Utc::now() - self.config.purge_after;
+		self
+			.signed
+			.values()
+			.filter(move |p| p.updated_at() >= last_valid)
 	}
 
 	/// Returns a reference to the peer entry for the given peer ID, if it exists.
 	///
 	/// This method checks both signed and unsigned entries.
 	pub fn get(&self, peer_id: &PeerId) -> Option<&PeerEntry> {
+		let last_valid = Utc::now() - self.config.purge_after;
 		self
 			.signed
 			.get(peer_id)
+			.filter(|p| p.updated_at() >= last_valid)
 			.map(|signed| signed.as_ref())
 			.or_else(|| self.unsigned.get(peer_id))
 	}
@@ -142,21 +163,26 @@ impl Catalog {
 	/// Returns a reference to the signed peer entry for the given peer ID, if it
 	/// exists.
 	pub fn get_signed(&self, peer_id: &PeerId) -> Option<&SignedPeerEntry> {
-		self.signed.get(peer_id)
+		let last_valid = Utc::now() - self.config.purge_after;
+		self
+			.signed
+			.get(peer_id)
+			.filter(move |p| p.updated_at() >= last_valid)
 	}
 
-	/// Returns a reference to the local peer entry, if it exists.
-	#[allow(clippy::missing_panics_doc)]
+	/// Returns a reference to the local peer entry
 	pub fn local(&self) -> &SignedPeerEntry {
+		#[expect(clippy::missing_panics_doc)]
 		self
-			.get_signed(&self.local_id)
+			.signed
+			.get(&self.local_id)
 			.expect("local peer entry always exists")
 	}
 
 	/// Returns the number of all (signed and unsigned) peer entries in the
 	/// catalog, excluding the local peer entry.
 	pub fn peers_count(&self) -> usize {
-		self.signed.len() + self.unsigned.len() - 1
+		self.iter().count().saturating_sub(1)
 	}
 }
 
@@ -225,8 +251,8 @@ pub enum UpsertResult<'a> {
 	Updated(&'a SignedPeerEntry),
 
 	/// The insertion was rejected because the existing entry had an equal or
-	/// higher version number.
-	Rejected(&'a SignedPeerEntry),
+	/// higher version number, or the entry was stale.
+	Rejected(Box<SignedPeerEntry>),
 
 	/// The insertion was rejected because the entry belonged to a different
 	/// network.
@@ -255,7 +281,7 @@ impl UpsertResult<'_> {
 impl Catalog {
 	/// Creates a new catalog instance with the local node's peer entry as the
 	/// first and only entry.
-	pub(super) fn new(local: &LocalNode, config: &Config) -> Self {
+	pub(super) fn new(local: &LocalNode, config: &Arc<Config>) -> Self {
 		let local_entry = PeerEntry::new(*local.network_id(), local.addr().clone())
 			.add_tags(config.tags.clone())
 			.sign(local.secret_key())
@@ -267,6 +293,7 @@ impl Catalog {
 		Self {
 			local_id: local.id(),
 			network_id: *local.network_id(),
+			config: Arc::clone(config),
 			signed,
 			unsigned: im::OrdMap::new(),
 		}
@@ -288,6 +315,12 @@ impl Catalog {
 			return UpsertResult::DifferentNetwork(*entry.network_id());
 		}
 
+		// Reject stale entries updated before the purge threshold
+		let last_valid = Utc::now() - self.config.purge_after;
+		if entry.updated_at() < last_valid {
+			return UpsertResult::Rejected(Box::new(entry));
+		}
+
 		let peer_id = *entry.id();
 		self.unsigned.remove(entry.id());
 		match self.signed.entry(peer_id) {
@@ -299,9 +332,7 @@ impl Catalog {
 						self.signed.get(&peer_id).expect("entry exists"),
 					)
 				} else {
-					UpsertResult::Rejected(
-						self.signed.get(&peer_id).expect("entry exists"),
-					)
+					UpsertResult::Rejected(Box::new(entry))
 				}
 			}
 			im::ordmap::Entry::Vacant(vacant) => {
@@ -355,6 +386,30 @@ impl Catalog {
 		self.signed.clear();
 		self.signed.insert(self.local_id, local_entry);
 		self.unsigned.clear();
+	}
+
+	/// Removes all signed entries that are considered stale from the catalog.
+	pub(super) fn purge_stale_entries(
+		&mut self,
+	) -> impl Iterator<Item = PeerEntry> + 'static {
+		let last_valid = Utc::now() - self.config.purge_after;
+		let stale_signed: Vec<PeerEntry> = self
+			.signed
+			.iter()
+			.filter_map(|(peer_id, entry)| {
+				if *peer_id != self.local_id && entry.updated_at() < last_valid {
+					Some(entry.into())
+				} else {
+					None
+				}
+			})
+			.collect();
+
+		for peer_entry in &stale_signed {
+			self.signed.remove(peer_entry.id());
+		}
+
+		stale_signed.into_iter()
 	}
 
 	/// Absorbs all signed entries from the given iterator into the catalog.

@@ -1,19 +1,16 @@
 use {
-	super::{
-		super::{
-			Streams,
-			status::{ActiveChannelsMap, State},
-		},
-		Consumer,
-		Datum,
-		When,
-		receiver::Receiver,
-	},
 	crate::{
+		Datum,
+		PeerId,
 		discovery::{Catalog, Discovery},
-		network::{LocalNode, PeerId},
+		network::LocalNode,
 		primitives::{Short, UniqueId},
-		streams::consumer::builder::ConsumerConfig,
+		streams::{
+			Consumer,
+			Streams,
+			consumer::{builder::ConsumerConfig, receiver::Receiver},
+			status::{ActiveChannelsMap, State, Stats, When},
+		},
 	},
 	core::pin::Pin,
 	futures::{Stream, StreamExt, stream::SelectAll},
@@ -43,7 +40,7 @@ pub(super) struct ConsumerWorker<D: Datum> {
 	discovery: Discovery,
 
 	/// Channel for sending received data to the consumer handle.
-	data_tx: mpsc::UnboundedSender<D>,
+	data_tx: mpsc::UnboundedSender<(D, usize)>,
 
 	/// Triggered when the consumer handle is dropped.
 	cancel: CancellationToken,
@@ -88,8 +85,9 @@ impl<D: Datum> ConsumerWorker<D> {
 		tokio::spawn(worker.run());
 
 		Consumer {
-			config,
+			config: Arc::clone(&config),
 			chan: data_rx,
+			stats: Stats::default_connected(),
 			status: When::new(active.subscribe(), online.subscribe()),
 			_abort: cancel.drop_guard(),
 		}

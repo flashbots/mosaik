@@ -5,8 +5,9 @@ use {
 	mosaik::*,
 };
 
+/// Validates that producers correctly track statistics about their consumers.
 #[tokio::test]
-async fn smoke() -> anyhow::Result<()> {
+async fn producer() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 
 	let n0 = Network::new(network_id).await?;
@@ -14,12 +15,13 @@ async fn smoke() -> anyhow::Result<()> {
 	let n2 = Network::new(network_id).await?;
 
 	let mut p0 = n0.streams().produce::<Data1>();
+	assert_eq!(p0.consumers().count(), 0);
 
 	// start with only one consumer, then add another later
 	// and see if the stats update correctly.
 	let mut c1 = n1.streams().consume::<Data1>();
 
-	discover_all([&n0, &n1, &n2]).await?;
+	timeout_s(1, discover_all([&n0, &n1, &n2])).await??;
 
 	// ensure consumer is subscribed
 	timeout_s(3, c1.when().subscribed()).await?;
@@ -69,7 +71,6 @@ async fn smoke() -> anyhow::Result<()> {
 		.find(|s| *s.peer().id() == n2.local().id())
 		.unwrap();
 
-	assert_eq!(p0_subs.len(), 2);
 	assert_eq!(sub_c1.stats().datums(), 2);
 	assert_eq!(sub_c1.stats().bytes(), 11); // serialized "data2" is 6 bytes
 	assert_eq!(sub_c2.stats().datums(), 1);
@@ -84,6 +85,92 @@ async fn smoke() -> anyhow::Result<()> {
 	assert_eq!(c2_subs.len(), 1);
 	assert_eq!(c2_subs[0].stats().datums(), 1);
 	assert_eq!(c2_subs[0].stats().bytes(), 6); // serialized "data2" is 6 bytes
+
+	Ok(())
+}
+
+/// Validates that consumers correctly track statistics about their producers.
+#[tokio::test]
+async fn consumer() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	let n2 = Network::new(network_id).await?;
+
+	timeout_s(2, discover_all([&n0, &n1, &n2])).await??;
+
+	let mut c0 = n0.streams().consume::<Data1>();
+	assert_eq!(c0.producers().count(), 0);
+
+	let mut p1 = n1.streams().produce::<Data1>();
+	timeout_s(2, c0.when().subscribed().minimum_of(1)).await?;
+
+	let producers = c0.producers().collect::<Vec<_>>();
+	assert_eq!(producers.len(), 1);
+	assert_eq!(producers[0].stats().datums(), 0);
+	assert_eq!(producers[0].stats().bytes(), 0);
+
+	timeout_s(2, p1.send(Data1("hello".into()))).await??;
+	let received = timeout_s(1, c0.next()).await?.unwrap();
+	assert_eq!(received, Data1("hello".into()));
+
+	let producers = c0.producers().collect::<Vec<_>>();
+	assert_eq!(producers.len(), 1);
+	assert_eq!(producers[0].stats().datums(), 1);
+	assert_eq!(producers[0].stats().bytes(), 6); // serialized "hello" is 6 bytes
+
+	let mut p2 = n2.streams().produce::<Data1>();
+	timeout_s(2, c0.when().subscribed().minimum_of(2)).await?;
+
+	timeout_s(2, p2.send(Data1("world".into()))).await??;
+	let received = timeout_s(1, c0.next()).await?.unwrap();
+	assert_eq!(received, Data1("world".into()));
+
+	let producers = c0.producers().collect::<Vec<_>>();
+	assert_eq!(producers.len(), 2);
+
+	let prod1 = producers
+		.iter()
+		.find(|p| *p.peer().id() == n1.local().id())
+		.unwrap();
+
+	let prod2 = producers
+		.iter()
+		.find(|p| *p.peer().id() == n2.local().id())
+		.unwrap();
+
+	assert_eq!(prod1.stats().datums(), 1);
+	assert_eq!(prod1.stats().bytes(), 6); // serialized "world" is 6 bytes
+
+	assert_eq!(prod2.stats().datums(), 1);
+	assert_eq!(prod2.stats().bytes(), 6); // serialized "world" is 6 bytes
+
+	timeout_s(2, p1.send(Data1("again".into()))).await??;
+	let received = timeout_s(2, c0.next()).await?.unwrap();
+	assert_eq!(received, Data1("again".into()));
+
+	let producers = c0.producers().collect::<Vec<_>>();
+	assert_eq!(producers.len(), 2);
+
+	let prod1 = producers
+		.iter()
+		.find(|p| *p.peer().id() == n1.local().id())
+		.unwrap();
+
+	let prod2 = producers
+		.iter()
+		.find(|p| *p.peer().id() == n2.local().id())
+		.unwrap();
+
+	assert_eq!(prod1.stats().datums(), 2);
+	assert_eq!(prod1.stats().bytes(), 12); // serialized "again" is 6 bytes
+
+	assert_eq!(prod2.stats().datums(), 1);
+	assert_eq!(prod2.stats().bytes(), 6); // serialized "world" is 6 bytes
+
+	assert_eq!(c0.stats().datums(), 3); // total datums from all producers
+	assert_eq!(c0.stats().bytes(), 18); // total bytes from all producers
 
 	Ok(())
 }

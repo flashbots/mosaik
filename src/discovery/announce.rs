@@ -11,10 +11,8 @@ use {
 		serde::{decode_from_std_read, encode_to_vec},
 	},
 	bytes::Buf,
-	core::{
-		sync::atomic::{AtomicUsize, Ordering},
-		time::Duration,
-	},
+	chrono::Utc,
+	core::sync::atomic::{AtomicUsize, Ordering},
 	futures::StreamExt,
 	iroh::{EndpointAddr, discovery::Discovery, protocol::ProtocolHandler},
 	iroh_gossip::{
@@ -27,7 +25,6 @@ use {
 			GossipTopic,
 		},
 	},
-	rand::Rng,
 	serde::{Deserialize, Serialize},
 	std::sync::Arc,
 	tokio::sync::{
@@ -54,8 +51,10 @@ pub enum Event {
 ///
 /// - All announcements are signed by the peer's private key to ensure
 ///   authenticity.
+///
 /// - Announcements are broadcasted over the gossip topic to all subscribed
 ///   peers.
+///
 /// - The first announcement from a peer is broadcasted when they join the
 ///   gossip topic.
 ///
@@ -126,7 +125,6 @@ impl Announce {
 			neighbors_count: Arc::clone(&neighbors_count),
 			messages_in: UnboundedChannel::default(),
 			messages_out: UnboundedChannel::default(),
-			announce_interval: tokio::time::interval(config.announce_interval),
 		};
 
 		// Spawn the worker loop task
@@ -216,7 +214,6 @@ struct WorkerLoop {
 	messages_out: UnboundedChannel<AnnouncementMessage>,
 	neighbors_count: Arc<AtomicUsize>,
 	dials: UnboundedReceiver<(Vec<EndpointAddr>, oneshot::Sender<()>)>,
-	announce_interval: tokio::time::Interval,
 }
 
 impl WorkerLoop {
@@ -273,10 +270,6 @@ impl WorkerLoop {
 					self.dial_peers(peers, &mut topic_tx, tx).await;
 				}
 
-				// Periodic announcement tick
-				_ = self.announce_interval.tick() => {
-					self.on_periodic_announce_tick();
-				}
 			}
 		}
 	}
@@ -389,6 +382,26 @@ impl WorkerLoop {
 						peer_network = %Short(entry.network_id()),
 						this_network = %Short(self.local.network_id()),
 						"received peer entry from different network, ignoring"
+					);
+					return;
+				}
+
+				// Check for valid update timestamp within allowed drift
+				let Ok(time_diff) = (Utc::now() - entry.updated_at()).abs().to_std()
+				else {
+					tracing::trace!(
+						peer_id = %Short(&entry.id()),
+						"received peer entry with invalid timestamp, ignoring"
+					);
+					return;
+				};
+
+				if time_diff > self.config.max_time_drift {
+					tracing::trace!(
+						peer_id = %Short(&entry.id()),
+						time_diff = ?time_diff,
+						max_drift = ?self.config.max_time_drift,
+						"received peer entry with invalid timestamp, ignoring"
 					);
 					return;
 				}
@@ -526,20 +539,6 @@ impl WorkerLoop {
 		*topic_tx = new_topic_tx;
 		*topic_rx = new_topic_rx;
 		Ok(())
-	}
-
-	fn on_periodic_announce_tick(&mut self) {
-		// Broadcast our own info periodically
-		self.broadcast_self_info();
-
-		// Calculate next announce delay with jitter
-		let base = self.config.announce_interval;
-		let max_jitter = base.mul_f32(self.config.announce_jitter);
-		let jitter = rand::rng().random_range(Duration::ZERO..=max_jitter * 2);
-		let next_announce = (base + jitter).saturating_sub(max_jitter);
-
-		// Schedule the next announce with jitter
-		self.announce_interval.reset_after(next_announce);
 	}
 }
 

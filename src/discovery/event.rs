@@ -2,10 +2,11 @@ use {
 	super::PeerEntry,
 	crate::{network::PeerId, primitives::Short},
 	core::fmt,
+	derive_more::PartialEq,
 };
 
 /// Discovery system public API events.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Event {
 	/// A new peer has been discovered.
 	PeerDiscovered(PeerEntry),

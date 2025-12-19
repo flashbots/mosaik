@@ -14,6 +14,8 @@ use {
 		network::LocalNode,
 		primitives::{IntoIterOrSingle, Short},
 	},
+	chrono::Utc,
+	core::time::Duration,
 	futures::{StreamExt, TryFutureExt},
 	iroh::{
 		EndpointAddr,
@@ -21,6 +23,7 @@ use {
 		endpoint::Connection,
 		protocol::DynProtocolHandler,
 	},
+	rand::Rng,
 	std::{io, sync::Arc},
 	tokio::{
 		sync::{
@@ -30,6 +33,7 @@ use {
 			watch,
 		},
 		task::JoinSet,
+		time::interval,
 	},
 };
 
@@ -78,6 +82,7 @@ impl Handle {
 			let local_entry = catalog.local().clone();
 			let updated_entry = update(local_entry.into());
 			let signed_updated_entry = updated_entry
+				.increment_version()
 				.sign(self.local.secret_key())
 				.expect("signing updated local peer entry failed.");
 
@@ -103,6 +108,9 @@ impl Handle {
 ///
 /// Interactions with the worker loop are done through the [`Handle`] struct.
 pub(super) struct WorkerLoop {
+	/// Discovery configuration
+	config: Arc<Config>,
+
 	/// Allows the public API to interact with the internal worker loop.
 	handle: Arc<Handle>,
 
@@ -120,20 +128,31 @@ pub(super) struct WorkerLoop {
 
 	/// Incoming commands from the public API.
 	commands: UnboundedReceiver<WorkerCommand>,
+
+	/// Interval timer for periodic announcements of the local peer entry.
+	/// On each tick, the local peer entry is re-broadcasted with an updated
+	/// version to ensure peers remain aware of its presence.
+	announce_interval: tokio::time::Interval,
+
+	/// Interval timer for periodic purging of stale peer entries from the
+	/// discovery catalog.
+	purge_interval: tokio::time::Interval,
 }
 
 impl WorkerLoop {
 	/// Constructs a new discovery worker loop and spawns it as a background task.
 	/// Returns a handle to interact with the worker loop. This is called from
 	/// the `Discovery::new` method.
-	#[expect(clippy::needless_pass_by_value)]
 	pub(super) fn spawn(local: LocalNode, config: Config) -> Arc<Handle> {
+		let config = Arc::new(config);
 		let catalog = watch::Sender::new(Catalog::new(&local, &config));
 		let (commands_tx, commands_rx) = unbounded_channel();
 		let (events_tx, events_rx) = broadcast::channel(config.events_backlog);
 
 		let sync = CatalogSync::new(local.clone(), catalog.clone());
 		let announce = Announce::new(local.clone(), &config, catalog.subscribe());
+		let announce_interval = interval(config.announce_interval);
+		let purge_interval = interval(config.purge_after);
 
 		let handle = Arc::new(Handle {
 			local,
@@ -143,12 +162,15 @@ impl WorkerLoop {
 		});
 
 		let worker = Self {
+			config,
 			handle: Arc::clone(&handle),
 			sync,
 			announce,
 			events: events_tx,
 			syncs: JoinSet::new(),
 			commands: commands_rx,
+			announce_interval,
+			purge_interval,
 		};
 
 		// spawn the worker loop
@@ -233,6 +255,16 @@ impl WorkerLoop {
 							.expect("peer id changed for local node.")
 					});
 				}
+
+				// Periodic announcement tick
+				_ = self.announce_interval.tick() => {
+					self.on_periodic_announce_tick();
+				}
+
+				// Periodic catalog purge tick
+				_ = self.purge_interval.tick() => {
+					self.on_periodic_catalog_purge_tick();
+				}
 			}
 		}
 	}
@@ -282,8 +314,7 @@ impl WorkerLoop {
 		match event {
 			announce::Event::PeerEntryReceived(signed_peer_entry) => {
 				// Update the catalog with the received peer entry
-				self.handle.catalog.send_if_modified(|catalog| {
-					let incoming_version = signed_peer_entry.update_version();
+				let modified = self.handle.catalog.send_if_modified(|catalog| {
 					match catalog.upsert_signed(signed_peer_entry) {
 						UpsertResult::New(signed_peer_entry) => {
 							tracing::debug!(
@@ -312,7 +343,7 @@ impl WorkerLoop {
 							true
 						}
 						UpsertResult::Updated(signed_peer_entry) => {
-							tracing::debug!(
+							tracing::trace!(
 								info = %Short(signed_peer_entry),
 								network = %self.handle.local.network_id(),
 								"known peer updated"
@@ -329,10 +360,8 @@ impl WorkerLoop {
 						}
 						UpsertResult::Rejected(signed_peer_entry) => {
 							tracing::trace!(
-								current = %Short(signed_peer_entry),
+								incoming = %Short(signed_peer_entry.as_ref()),
 								network = %self.handle.local.network_id(),
-								incoming_version = %incoming_version,
-								current_version = %signed_peer_entry.update_version(),
 								"stale peer update rejected"
 							);
 							false
@@ -347,6 +376,11 @@ impl WorkerLoop {
 						}
 					}
 				});
+
+				if modified {
+					let purge_in = self.next_purge_deadline();
+					self.purge_interval.reset_after(purge_in);
+				}
 			}
 		}
 	}
@@ -359,6 +393,9 @@ impl WorkerLoop {
 			}
 			Event::PeerDeparted(_) => {}
 		}
+
+		let purge_in = self.next_purge_deadline();
+		self.purge_interval.reset_after(purge_in);
 	}
 
 	/// Invoked with an manual catalog sync request from the handle is initiated
@@ -384,6 +421,75 @@ impl WorkerLoop {
 				}
 			}
 		});
+	}
+
+	/// Periodically increment the local peer entry version and re-announce it
+	/// to ensure peers are aware of our continued presence on the network.
+	fn on_periodic_announce_tick(&mut self) {
+		// Calculate next announce delay with jitter
+		let base = self.config.announce_interval;
+		let max_jitter = base.mul_f32(self.config.announce_jitter);
+		let jitter = rand::rng().random_range(Duration::ZERO..=max_jitter * 2);
+		let next_announce = (base + jitter).saturating_sub(max_jitter);
+
+		// Schedule the next announce with jitter
+		self.announce_interval.reset_after(next_announce);
+
+		// update local peer entry by incrementing its version to the current time
+		// to trigger re-announcement
+		self
+			.handle
+			.update_local_entry(|entry| entry.increment_version());
+	}
+
+	/// Periodically purge stale peer entries from the catalog.
+	/// Configured via the `purge_interval` config parameter.
+	fn on_periodic_catalog_purge_tick(&mut self) {
+		let mut purged = vec![];
+		self.handle.catalog.send_if_modified(|catalog| {
+			purged = catalog.purge_stale_entries().collect();
+			!purged.is_empty()
+		});
+
+		if purged.is_empty() {
+			return;
+		}
+
+		for peer in &purged {
+			self.events.send(Event::PeerDeparted(*peer.id())).ok();
+		}
+
+		tracing::debug!(
+			peers = %Short::iter(purged.iter().map(|p| p.id())),
+			network = %self.handle.local.network_id(),
+			"purged {} stale peers", purged.len()
+		);
+
+		let next_purge_in = self.next_purge_deadline();
+		self.purge_interval.reset_after(next_purge_in);
+	}
+
+	/// Calculates the next deadline for purging stale entries from the catalog by
+	/// finding the soonest expiration time among all entries in the catalog.
+	fn next_purge_deadline(&self) -> Duration {
+		let now = Utc::now();
+		let mut deadline = self.config.purge_after;
+		let catalog = self.handle.catalog.borrow();
+
+		for peer in catalog.signed_peers() {
+			let expires_at = peer.updated_at() + self.config.purge_after;
+			let expires_in = expires_at
+				.signed_duration_since(now)
+				.to_std()
+				.unwrap_or_default();
+			deadline = deadline.min(expires_in);
+
+			if deadline.is_zero() {
+				break;
+			}
+		}
+
+		deadline
 	}
 }
 

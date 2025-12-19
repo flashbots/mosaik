@@ -27,6 +27,16 @@ pub struct Config {
 	#[builder(default = "Vec::new()", setter(custom))]
 	pub tags: Vec<Tag>,
 
+	/// The duration after which stale peer entries are purged from the
+	/// discovery catalog if no announcements are received from them.
+	#[builder(default = "Duration::from_secs(300)")]
+	pub purge_after: Duration,
+
+	/// The maximum allowed time drift for peer entries.
+	/// Entries with a timestamp outside this drift are considered invalid.
+	#[builder(default = "Duration::from_secs(10)")]
+	pub max_time_drift: Duration,
+
 	/// The interval at which to announce our presence to the network.
 	#[builder(default = "Duration::from_secs(15)")]
 	pub announce_interval: Duration,

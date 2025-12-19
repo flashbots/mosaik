@@ -41,7 +41,7 @@ pub struct ProducerConfig {
 	/// If set to true, the producer will disconnect slow consumers that are
 	/// unable to keep up with the data production rate. If the backlog of a
 	/// consumer inflight datums grows beyond `buffer_size` it will be
-	/// disconnected.
+	/// disconnected. Default to true.
 	pub disconnect_lagging: bool,
 
 	/// Sets a predicate function that is used to determine whether to
@@ -69,14 +69,8 @@ pub struct ProducerConfig {
 	pub max_subscribers: usize,
 
 	/// Optional sink for unsent datum that were not delivered to any consumers
-	/// because they did not meet any subscription criteria of active
-	/// subscriptions or because there were no active subscribers.
-	///
-	/// Note that in default configuration, when there are not active
-	/// subscribers, the producer is considered offline and will not accept any
-	/// new datum to be sent. However, if the `online_when` condition is
-	/// customized to allow publishing even when there are no subscribers, this
-	/// sink can be used to capture datum that would otherwise be dropped.
+	/// because the datum did not meet any subscription criteria of any active
+	/// consumers.
 	///
 	/// This is type-erased to allow config to be stored without
 	/// knowing the datum type but is expected to be of type
@@ -199,7 +193,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 			streams,
 			config: ProducerConfig {
 				buffer_size: 1024,
-				disconnect_lagging: false,
+				disconnect_lagging: true,
 				stream_id: D::derived_stream_id(),
 				accept_if: Box::new(|_| true),
 				online_when: Box::new(|c| c.minimum_of(1)),

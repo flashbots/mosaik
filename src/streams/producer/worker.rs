@@ -183,8 +183,6 @@ impl<D: Datum> WorkerLoop<D> {
 
 impl<D: Datum> WorkerLoop<D> {
 	pub async fn run(mut self) {
-		let mut offline_when = self.online_when.clone().unmet();
-
 		loop {
 			tokio::select! {
 				// Triggered when the network is shutting down or
@@ -199,12 +197,6 @@ impl<D: Datum> WorkerLoop<D> {
 				// are met and it is considered online.
 				() = &mut self.online_when => {
 					self.on_online();
-				}
-
-				// Triggered when the publishing conditions for this producer
-				// are no longer met and it is considered offline.
-				() = &mut offline_when => {
-					self.on_offline();
 				}
 
 				// Triggered when [`Acceptor`] accepts a new connection from a
@@ -222,7 +214,7 @@ impl<D: Datum> WorkerLoop<D> {
 				// Triggered when any of the active remote consumer connections
 				// is dropped for any reason.
 				Some(Ok(sub_id)) = self.dropped.join_next() => {
-					self.on_subscription_dropped(sub_id);
+					self.on_connection_dropped(sub_id);
 				}
 			}
 		}
@@ -382,8 +374,9 @@ impl<D: Datum> WorkerLoop<D> {
 		}
 	}
 
-	/// Handles a dropped connection from a remote consumer.
-	fn on_subscription_dropped(&mut self, sub_id: SubscriptionId) {
+	/// Triggered when we detect that a remote consumer connection has been
+	/// dropped for any reason.
+	fn on_connection_dropped(&mut self, sub_id: SubscriptionId) {
 		// Remove subscription from the active info map and signal
 		// to status observers that the subscription is gone.
 		self.active_info.send_modify(|active| {
@@ -399,6 +392,15 @@ impl<D: Datum> WorkerLoop<D> {
 				"consumer disconnected",
 			);
 		}
+
+		if !self.online_when.is_condition_met() {
+			tracing::trace!(
+				stream_id = %Short(self.config.stream_id),
+				consumers = %self.active.len(),
+				"producer is offline",
+			);
+			self.online.send_replace(false);
+		}
 	}
 
 	/// Triggered when the publishing conditions for this producer are met
@@ -411,18 +413,6 @@ impl<D: Datum> WorkerLoop<D> {
 		);
 
 		self.online.send_replace(true);
-	}
-
-	/// Triggered when the publishing conditions for this producer are no longer
-	/// met and it is considered offline.
-	fn on_offline(&mut self) {
-		tracing::trace!(
-			stream_id = %Short(self.config.stream_id),
-			consumers = %self.active.len(),
-			"producer is offline",
-		);
-
-		self.online.send_replace(false);
 	}
 }
 

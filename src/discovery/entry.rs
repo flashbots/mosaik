@@ -2,6 +2,7 @@ use {
 	super::Error,
 	crate::{NetworkId, StreamId, network::PeerId, primitives::*},
 	bincode::{config::standard, serde::encode_into_std_write},
+	chrono::{DateTime, Utc},
 	core::fmt,
 	derive_more::{AsRef, Debug, Deref, Into},
 	iroh::{EndpointAddr, SecretKey, Signature},
@@ -12,18 +13,23 @@ use {
 
 /// Version information for a [`PeerEntry`].
 ///
-/// The version is composed of a timestamp (in milliseconds since epoch)
-/// and a counter. The timestamp represents the time when the process was
-/// started and can be thought of as run-id and the counter is the update number
-/// withing that particular run.
+/// The version is composed of two timestamps (in milliseconds since epoch)
+/// The first timestamp represents the time when the process was
+/// started and can be thought of as run-id and the second timestamp is the
+/// update number withing that particular run that is updated on each change
+/// to the [`PeerEntry`] and on each periodic announcement.
+///
+/// Peers that have not announced themselves within a certain time frame
+/// (configurable via `Config::purge_after`) are considered stale and are
+/// automatically removed from the catalog by the discovery system.
 #[derive(
 	Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
-pub struct PeerEntryVersion(i64, u64);
+pub struct PeerEntryVersion(i64, i64);
 
 impl Default for PeerEntryVersion {
 	fn default() -> Self {
-		Self(chrono::Utc::now().timestamp_millis(), 0)
+		Self(Utc::now().timestamp_millis(), Utc::now().timestamp_millis())
 	}
 }
 
@@ -48,8 +54,15 @@ impl core::fmt::Display for Short<PeerEntryVersion> {
 impl PeerEntryVersion {
 	/// Increments the version's counter.
 	#[must_use]
-	pub fn increment(self) -> Self {
-		Self(self.0, self.1.saturating_add(1))
+	pub(crate) fn increment(self) -> Self {
+		let last_version = self.1.max(Utc::now().timestamp_millis());
+		Self(self.0, last_version.saturating_add(1))
+	}
+
+	/// Returns the timestamp when the peer entry was last updated.
+	/// Invalid timestamps default to Unix epoch.
+	pub fn updated_at(&self) -> DateTime<Utc> {
+		DateTime::<Utc>::from_timestamp_millis(self.1).unwrap_or_default()
 	}
 }
 
@@ -125,6 +138,11 @@ impl PeerEntry {
 	/// This is incremented each time the peer entry is updated.
 	pub const fn update_version(&self) -> PeerEntryVersion {
 		self.version
+	}
+
+	/// The timestamp when the peer entry was last updated.
+	pub fn updated_at(&self) -> DateTime<Utc> {
+		self.version.updated_at()
 	}
 
 	/// Computes a Blake3 digest of the `PeerEntry`.
@@ -214,6 +232,13 @@ impl PeerEntry {
 		for tag in tags.iterator() {
 			self.tags.remove(&tag);
 		}
+		self.version = self.version.increment();
+		self
+	}
+
+	/// Increments the version of the peer entry without making any other changes.
+	#[must_use]
+	pub(crate) fn increment_version(mut self) -> Self {
 		self.version = self.version.increment();
 		self
 	}
