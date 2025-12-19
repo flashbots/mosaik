@@ -2,7 +2,6 @@ use {
 	super::{
 		super::{
 			Criteria,
-			Streams,
 			status::{ChannelInfo, State, Stats},
 		},
 		ProducerConfig,
@@ -61,7 +60,7 @@ pub(super) struct Sender {
 
 	/// The physical transport link to the remote consumer over which datum
 	/// are sent.
-	link: Link<Streams>,
+	link: Link,
 
 	/// Statistics tracker for this consumer.
 	stats: Arc<Stats>,
@@ -87,7 +86,7 @@ impl Sender {
 	/// meet the subscription criteria of the connected consumer. It is the role
 	/// of the stream producer worker to enforce that.
 	pub fn spawn(
-		link: Link<Streams>,
+		link: Link,
 		config: &Arc<ProducerConfig>,
 		cancel: &CancellationToken,
 		local_id: PeerId,

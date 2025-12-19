@@ -8,4 +8,13 @@ pub enum Error {
 		 bytes"
 	)]
 	InvalidSignatureLength(usize),
+
+	#[error("failed to open link: {0}")]
+	OpenLinkFailed(#[from] crate::network::link::OpenError),
+
+	#[error("join request failed: {0}")]
+	JoinRequestFailed(#[from] crate::network::link::SendError),
+
+	#[error("failed to receive group state: {0}")]
+	ReceiveGroupStateFailed(#[from] crate::network::link::RecvError),
 }

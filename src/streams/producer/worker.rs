@@ -1,6 +1,6 @@
 use {
 	super::{
-		super::{Criteria, Datum, NoCapacity, NotAllowed, Streams},
+		super::{Criteria, Datum, NoCapacity, NotAllowed},
 		Producer,
 		Sinks,
 		When,
@@ -47,7 +47,7 @@ pub(in crate::streams) struct Handle {
 	/// This is populated by the [`Acceptor`] when a remote peer requests to
 	/// subscribe to this stream and then passed to the worker loop to be added
 	/// as a new subscription.
-	accepted: mpsc::UnboundedSender<(Link<Streams>, Criteria, PeerEntry)>,
+	accepted: mpsc::UnboundedSender<(Link, Criteria, PeerEntry)>,
 
 	/// Observer for the status of active subscriptions to this producer.
 	when: When,
@@ -74,10 +74,10 @@ impl Handle {
 	#[expect(clippy::result_large_err)]
 	pub fn accept(
 		&self,
-		link: Link<Streams>,
+		link: Link,
 		criteria: Criteria,
 		peer: PeerEntry,
-	) -> Result<(), Link<Streams>> {
+	) -> Result<(), Link> {
 		self
 			.accepted
 			.send((link, criteria, peer))
@@ -121,7 +121,7 @@ pub(super) struct WorkerLoop<D: Datum> {
 	///
 	/// Remote peers that arrive here are past the handshake phase and have an
 	/// open transport-level stream.
-	accepted: mpsc::UnboundedReceiver<(Link<Streams>, Criteria, PeerEntry)>,
+	accepted: mpsc::UnboundedReceiver<(Link, Criteria, PeerEntry)>,
 
 	/// Futures that resolve when a remote consumer connection is dropped for
 	/// whatever reason.
@@ -300,12 +300,7 @@ impl<D: Datum> WorkerLoop<D> {
 	///
 	/// Upon successful acceptance, a `StartStream` message is sent to the remote
 	/// consumer to initiate the stream.
-	async fn accept(
-		&mut self,
-		link: Link<Streams>,
-		criteria: Criteria,
-		peer: PeerEntry,
-	) {
+	async fn accept(&mut self, link: Link, criteria: Criteria, peer: PeerEntry) {
 		// Check if we have capacity to accept a new consumer
 		if self.active.len() >= self.config.max_subscribers {
 			tracing::warn!(

@@ -3,7 +3,7 @@ use {
 	crate::{
 		NetworkId,
 		discovery::PeerEntry,
-		network::{LocalNode, link::Protocol},
+		network::LocalNode,
 		primitives::{IntoIterOrSingle, Pretty, Short, UnboundedChannel},
 	},
 	bincode::{
@@ -83,16 +83,14 @@ pub(super) struct Announce {
 	neighbors_count: Arc<AtomicUsize>,
 }
 
-impl Protocol for Announce {
+/// Public API for the announcement protocol
+impl Announce {
 	/// ALPN identifier for the announcement protocol.
 	///
 	/// This overrides the default `iroh_gossip` ALPN to use a Mosaik-specific
 	/// namespace.
-	const ALPN: &'static [u8] = b"/mosaik/discovery/announce/1.0";
-}
+	pub(super) const ALPN: &'static [u8] = b"/mosaik/discovery/announce/1.0";
 
-/// Public API for the announcement protocol
-impl Announce {
 	/// Initializes the announcement protocol with the given local node and
 	/// configuration.
 	///

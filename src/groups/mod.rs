@@ -56,45 +56,28 @@
 use {
 	crate::{
 		discovery::Discovery,
-		groups::join::Join,
+		groups::{config::Group, join::Join},
 		network::{LocalNode, ProtocolProvider},
 	},
-	iroh::{EndpointId, PublicKey, protocol::RouterBuilder},
-	serde::{Deserialize, Serialize},
+	iroh::{PublicKey, protocol::RouterBuilder},
 	std::{collections::BTreeMap, sync::Arc},
 	tokio::sync::RwLock,
 };
 
 mod config;
 mod error;
+mod group;
 mod join;
 
+pub(crate) use group::GroupState;
 pub use {
 	config::{Config, ConfigBuilder, ConfigBuilderError},
 	error::Error,
 };
 
-use crate::network::link::Protocol as _;
+pub struct Groups(Arc<Handle>);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct GroupState {
-	public_key: iroh::PublicKey,
-	members: Vec<EndpointId>,
-}
-
-impl GroupState {
-	pub fn new(public_key: iroh::PublicKey, members: Vec<EndpointId>) -> Self {
-		Self {
-			public_key,
-			members,
-		}
-	}
-}
-
-pub struct Groups {
-	local: LocalNode,
-	discovery: Discovery,
-	groups_to_join: Vec<config::Group>,
+struct Handle {
 	group_states: BTreeMap<PublicKey, Arc<RwLock<GroupState>>>,
 }
 
@@ -114,21 +97,76 @@ impl Groups {
 			})
 			.collect::<BTreeMap<_, _>>();
 
-		Self {
-			local,
-			discovery,
-			groups_to_join,
-			group_states,
-		}
+		let (worker_loop, handle) = WorkerLoop::new(
+			local.clone(),
+			discovery.clone(),
+			groups_to_join.clone(),
+			group_states.clone(),
+		);
+		tokio::spawn(worker_loop.run());
+
+		Self(handle)
+	}
+}
+
+impl ProtocolProvider for Groups {
+	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
+		protocols.accept(Join::ALPN, Join::new(self.0.group_states.clone()))
+	}
+}
+
+struct WorkerLoop {
+	local: LocalNode,
+	discovery: Discovery,
+	groups_to_join: Vec<Group>,
+	group_states: BTreeMap<PublicKey, Arc<RwLock<GroupState>>>,
+}
+
+impl WorkerLoop {
+	fn new(
+		local: LocalNode,
+		discovery: Discovery,
+		groups_to_join: Vec<Group>,
+		group_states: BTreeMap<PublicKey, Arc<RwLock<GroupState>>>,
+	) -> (Self, Arc<Handle>) {
+		let handle = Arc::new(Handle {
+			group_states: group_states.clone(),
+		});
+		(
+			Self {
+				local,
+				discovery,
+				groups_to_join,
+				group_states,
+			},
+			handle,
+		)
 	}
 
-	pub async fn run(self) {
+	async fn run(self) {
 		let Self {
 			local,
 			discovery,
 			groups_to_join,
 			group_states,
 		} = self;
+
+		for group in groups_to_join {
+			let discovery = discovery.clone();
+			let local = local.clone();
+			let group_state = group_states
+				.get(&group.secret().public())
+				.expect("group state must exist")
+				.clone();
+			tokio::spawn(async move {
+				if let Err(e) =
+					crate::groups::join::join_group(local, discovery, group, group_state)
+						.await
+				{
+					tracing::error!(%e, "failed to join group");
+				}
+			});
+		}
 
 		loop {
 			tokio::select! {
@@ -137,11 +175,5 @@ impl Groups {
 				}
 			}
 		}
-	}
-}
-
-impl ProtocolProvider for Groups {
-	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
-		protocols.accept(Join::ALPN, Join::new(self.group_states.clone()))
 	}
 }

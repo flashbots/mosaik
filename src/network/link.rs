@@ -17,7 +17,7 @@ use {
 		serde::{decode_from_std_read, encode_into_std_write},
 	},
 	bytes::{Buf, BufMut, BytesMut},
-	core::{fmt, marker::PhantomData},
+	core::fmt,
 	futures::{FutureExt, SinkExt, StreamExt},
 	iroh::{EndpointAddr, endpoint::*, protocol::AcceptError as IrohAcceptError},
 	n0_error::Meta,
@@ -29,14 +29,6 @@ use {
 		sync::CancellationToken,
 	},
 };
-
-/// Protocol trait for defining ALPN identifiers for network protocols.
-///
-/// This trait ensures that a given [`Link`] instance is always associated with
-/// a specific application-level protocol and uses the correct ALPN identifier.
-pub trait Protocol {
-	const ALPN: &'static [u8];
-}
 
 /// Represents a transport level open bidirectional stream between two peers
 /// using a specific application-level protocol.
@@ -63,15 +55,15 @@ pub trait Protocol {
 ///   receive messages over the same link.
 ///
 /// - Connections in cancelled links are closed with a `Cancelled` close reason.
-pub struct Link<P: Protocol> {
+pub struct Link {
 	connection: Connection,
 	cancel: CancellationToken,
 	stream: Framed<Join<RecvStream, SendStream>, LengthDelimitedCodec>,
-	_protocol: PhantomData<P>,
+	alpn: &'static [u8],
 }
 
 // Public API
-impl<P: Protocol> Link<P> {
+impl Link {
 	/// Accepts a new incoming connection, opens a bidirectional stream and
 	/// initializes message framing.
 	///
@@ -82,12 +74,11 @@ impl<P: Protocol> Link<P> {
 	/// peer that `accept`s can begin accepting the connection.
 	pub async fn accept_with_cancel(
 		connection: Connection,
+		alpn: &'static [u8],
 		cancel: CancellationToken,
 	) -> Result<Self, AcceptError> {
 		// reject any connection that does not match the expected typed ALPN
-		if P::ALPN != connection.alpn() {
-			let alpn = connection.alpn().to_vec();
-
+		if alpn != connection.alpn() {
 			// close the connection with invalid alpn reason, the remote peer should
 			// receive this reason as part of the application close frame.
 			if let Some(reason) = close_connection(&connection, InvalidAlpn).await {
@@ -97,8 +88,8 @@ impl<P: Protocol> Link<P> {
 			}
 
 			return Err(AcceptError::InvalidAlpn {
-				expected: P::ALPN,
-				received: alpn,
+				expected: alpn,
+				received: connection.alpn().to_vec(),
 			});
 		}
 
@@ -117,7 +108,7 @@ impl<P: Protocol> Link<P> {
 			connection,
 			stream,
 			cancel,
-			_protocol: PhantomData,
+			alpn,
 		})
 	}
 
@@ -130,8 +121,11 @@ impl<P: Protocol> Link<P> {
 	/// Note: the peer that calls `open` must send the first message before the
 	/// peer that `accept`s can begin accepting the connection.
 	#[allow(unused)]
-	pub async fn accept(connection: Connection) -> Result<Self, AcceptError> {
-		Self::accept_with_cancel(connection, CancellationToken::new()).await
+	pub async fn accept(
+		connection: Connection,
+		alpn: &'static [u8],
+	) -> Result<Self, AcceptError> {
+		Self::accept_with_cancel(connection, alpn, CancellationToken::new()).await
 	}
 
 	/// Initiates a new outgoing connection to a remote peer, opens a
@@ -145,9 +139,10 @@ impl<P: Protocol> Link<P> {
 	pub async fn open_with_cancel(
 		local: &LocalNode,
 		remote: impl Into<EndpointAddr>,
+		alpn: &'static [u8],
 		cancel: CancellationToken,
 	) -> Result<Self, OpenError> {
-		let fut = local.endpoint().connect(remote.into(), P::ALPN);
+		let fut = local.endpoint().connect(remote.into(), alpn);
 		let Some(connection) = cancel.run_until_cancelled(fut).await else {
 			return Err(OpenError::Cancelled);
 		};
@@ -177,7 +172,7 @@ impl<P: Protocol> Link<P> {
 			connection,
 			stream,
 			cancel,
-			_protocol: PhantomData,
+			alpn,
 		})
 	}
 
@@ -193,14 +188,14 @@ impl<P: Protocol> Link<P> {
 	pub async fn open(
 		local: &LocalNode,
 		remote: impl Into<EndpointAddr>,
+		alpn: &'static [u8],
 	) -> Result<Self, OpenError> {
-		Self::open_with_cancel(local, remote, CancellationToken::new()).await
+		Self::open_with_cancel(local, remote, alpn, CancellationToken::new()).await
 	}
 
 	/// Returns the ALPN identifier for this link.
-	#[expect(clippy::unused_self)]
-	pub fn alpn(&self) -> &[u8] {
-		P::ALPN
+	pub fn alpn(&self) -> &'static [u8] {
+		self.alpn
 	}
 
 	/// Returns remote peer id.
@@ -762,7 +757,7 @@ impl From<ConnectionError> for AcceptError {
 	}
 }
 
-impl<P: Protocol> fmt::Debug for Link<P> {
+impl fmt::Debug for Link {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("Link")
 			.field("alpn", &String::from_utf8_lossy(self.alpn()))
@@ -771,7 +766,7 @@ impl<P: Protocol> fmt::Debug for Link<P> {
 	}
 }
 
-impl<P: Protocol> fmt::Display for Link<P> {
+impl fmt::Display for Link {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,

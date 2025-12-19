@@ -2,10 +2,7 @@ use {
 	super::link::Link,
 	crate::{
 		SecretKey,
-		network::{
-			NetworkId,
-			link::{OpenError, Protocol},
-		},
+		network::{NetworkId, link::OpenError},
 		primitives::IntoIterOrSingle,
 	},
 	iroh::{Endpoint, EndpointAddr, discovery::Discovery},
@@ -80,12 +77,16 @@ impl LocalNode {
 	///
 	/// This is used by the [`super::NetworkBuilder`] to construct the local node
 	/// as part of building the overall network instance.
-	pub(crate) fn new(network_id: NetworkId, endpoint: Endpoint) -> Self {
+	pub(crate) fn new(
+		network_id: NetworkId,
+		endpoint: Endpoint,
+		termination: CancellationToken,
+	) -> Self {
 		Self(Arc::new(Inner {
 			network_id,
 			endpoint,
 			ready_signal: SetOnce::new(),
-			termination: CancellationToken::new(),
+			termination,
 		}))
 	}
 
@@ -113,14 +114,15 @@ impl LocalNode {
 	///
 	/// Gets cancelled when the network is shutting down.
 	#[allow(unused)]
-	pub(crate) fn connect<P: Protocol>(
+	pub(crate) fn connect(
 		&self,
 		remote: impl Into<EndpointAddr>,
-	) -> impl Future<Output = Result<Link<P>, OpenError>> + Send + 'static {
+		alpn: &'static [u8],
+	) -> impl Future<Output = Result<Link, OpenError>> + Send + 'static {
 		let local = self.clone();
 		let remote = remote.into();
 		let cancel = self.termination().clone();
-		async move { Link::open_with_cancel(&local, remote, cancel).await }
+		async move { Link::open_with_cancel(&local, remote, alpn, cancel).await }
 	}
 
 	/// Establishes a new outgoing connection to a remote peer on the protocol
@@ -129,14 +131,15 @@ impl LocalNode {
 	/// defined by the [`Link`] type.
 	///
 	/// Gets cancelled when the provided cancellation token is triggered.
-	pub(crate) fn connect_with_cancel<P: Protocol>(
+	pub(crate) fn connect_with_cancel(
 		&self,
 		remote: impl Into<EndpointAddr>,
+		alpn: &'static [u8],
 		cancel: CancellationToken,
-	) -> impl Future<Output = Result<Link<P>, OpenError>> + Send + 'static {
+	) -> impl Future<Output = Result<Link, OpenError>> + Send + 'static {
 		let local = self.clone();
 		let remote = remote.into();
-		async move { Link::open_with_cancel(&local, remote, cancel).await }
+		async move { Link::open_with_cancel(&local, remote, alpn, cancel).await }
 	}
 
 	/// Adds the given peers to the iroh addressing system to associate peer ids

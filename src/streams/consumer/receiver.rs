@@ -64,13 +64,13 @@ pub(super) struct Receiver<D: Datum> {
 	/// The receiver future always carries the current physical link along with
 	/// it to enable repairing dropped connections according to the backoff
 	/// policy.
-	next_recv: ReusableBoxFuture<'static, (DatumRecvResult<D>, Link<Streams>)>,
+	next_recv: ReusableBoxFuture<'static, (DatumRecvResult<D>, Link)>,
 
 	/// Reusable future for connecting to the remote producer.
 	///
 	/// This is used to keep track of the ongoing connection attempt when
 	/// reconnections are needed on recoverable errors.
-	next_connect: ReusableBoxFuture<'static, Result<Link<Streams>, LinkError>>,
+	next_connect: ReusableBoxFuture<'static, Result<Link, LinkError>>,
 
 	/// Backoff policy for reconnecting to the remote producer on recoverable
 	/// errors that is currently being applied since the last successful receive.
@@ -173,7 +173,7 @@ impl<D: Datum> Receiver<D> {
 	///
 	/// Ensures that the next receive future is properly set up for the next datum
 	/// and honors the cancellation signal.
-	fn on_next_recv(&mut self, result: DatumRecvResult<D>, link: Link<Streams>) {
+	fn on_next_recv(&mut self, result: DatumRecvResult<D>, link: Link) {
 		match result {
 			// a datum was successfully received
 			Ok((datum, bytes_len)) => {
@@ -213,9 +213,8 @@ impl<D: Datum> Receiver<D> {
 	#[expect(clippy::unused_self)]
 	fn make_next_recv_future(
 		&self,
-		mut link: Link<Streams>,
-	) -> impl Future<Output = (Result<(D, usize), LinkError>, Link<Streams>)> + 'static
-	{
+		mut link: Link,
+	) -> impl Future<Output = (Result<(D, usize), LinkError>, Link)> + 'static {
 		// bind the the receive future along with the transport link it is using so
 		// we can repair the connection if needed.
 		async move {
@@ -230,7 +229,7 @@ impl<D: Datum> Receiver<D> {
 	/// to the backoff policy specified in the configuration.
 	fn connect(
 		&mut self,
-	) -> impl Future<Output = Result<Link<Streams>, LinkError>> + 'static {
+	) -> impl Future<Output = Result<Link, LinkError>> + 'static {
 		self.state_tx.send(State::Connecting).ok();
 
 		let net_id = *self.local.network_id();
@@ -240,7 +239,9 @@ impl<D: Datum> Receiver<D> {
 		let peer_addr = self.peer.address().clone();
 		let backoff_fut = self.apply_backoff();
 		let connect_fut =
-			self.local.connect_with_cancel::<Streams>(peer_addr, cancel);
+			self
+				.local
+				.connect_with_cancel(peer_addr, Streams::ALPN, cancel);
 
 		async move {
 			// apply backoff before attempting to reconnect
@@ -313,7 +314,7 @@ impl<D: Datum> Receiver<D> {
 	///
 	/// Inside this method, if the error is unrecoverable, the worker's
 	/// cancellation token is triggered to initiate shutdown.
-	fn handle_recv_error(&mut self, error: LinkError, _: Option<Link<Streams>>) {
+	fn handle_recv_error(&mut self, error: LinkError, _: Option<Link>) {
 		let close_reason = error.close_reason().cloned();
 
 		// indicates an unrecoverable error that should terminate the worker
@@ -417,10 +418,7 @@ impl<D: Datum> Receiver<D> {
 		self.next_connect.set(fut);
 	}
 
-	fn handle_connect_result(
-		&mut self,
-		result: Result<Link<Streams>, LinkError>,
-	) {
+	fn handle_connect_result(&mut self, result: Result<Link, LinkError>) {
 		match result {
 			Ok(link) => {
 				// successfully connected and performed handshake
@@ -511,7 +509,7 @@ impl<D: Datum> Receiver<D> {
 	fn sync_catalog_then_connect(
 		&mut self,
 		peer_addr: EndpointAddr,
-	) -> impl Future<Output = Result<Link<Streams>, LinkError>> + 'static {
+	) -> impl Future<Output = Result<Link, LinkError>> + 'static {
 		let stream_id = self.config.stream_id;
 		let discovery = self.discovery.clone();
 		let producer_id = *self.peer.id();

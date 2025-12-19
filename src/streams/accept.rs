@@ -3,10 +3,7 @@ use {
 	crate::{
 		NetworkId,
 		discovery::Discovery,
-		network::{
-			error::DifferentNetwork,
-			link::{Link, Protocol as _},
-		},
+		network::{error::DifferentNetwork, link::Link},
 		primitives::Short,
 		streams::{StreamNotFound, UnknownPeer},
 	},
@@ -69,7 +66,8 @@ impl fmt::Debug for Acceptor {
 impl ProtocolHandler for Acceptor {
 	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
 		let cancel = self.sinks.local.termination().clone();
-		let mut link = Link::accept_with_cancel(connection, cancel).await?;
+		let mut link =
+			Link::accept_with_cancel(connection, Streams::ALPN, cancel).await?;
 		let remote_peer_id = link.remote_id();
 		let catalog = self.discovery.catalog();
 		let Some(peer) = catalog.get(&remote_peer_id) else {

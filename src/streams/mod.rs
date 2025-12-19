@@ -14,12 +14,7 @@
 use {
 	crate::{
 		discovery::Discovery,
-		network::{
-			self,
-			LocalNode,
-			ProtocolProvider,
-			link::{self, Protocol},
-		},
+		network::{self, LocalNode, ProtocolProvider},
 		primitives::UniqueId,
 	},
 	accept::Acceptor,
@@ -115,6 +110,9 @@ impl Streams {
 
 /// Internal construction API
 impl Streams {
+	/// ALPN identifier for the streams protocol.
+	const ALPN: &'static [u8] = b"/mosaik/streams/1.0";
+
 	/// Internally used by [`super::NetworkBuilder`] to create a new Streams
 	/// subsystem instance as part of the overall [`super::Network`] instance.
 	pub(crate) fn new(
@@ -135,11 +133,6 @@ impl ProtocolProvider for Streams {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
 		protocols.accept(Self::ALPN, Acceptor::new(self))
 	}
-}
-
-impl link::Protocol for Streams {
-	/// ALPN identifier for the streams protocol.
-	const ALPN: &'static [u8] = b"/mosaik/streams/1.0";
 }
 
 network::error::make_close_reason!(

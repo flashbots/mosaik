@@ -4,7 +4,7 @@ use {
 		network::{
 			LocalNode,
 			error::Success,
-			link::{Link, LinkError, Protocol},
+			link::{Link, LinkError},
 		},
 		primitives::{Short, UnboundedChannel},
 	},
@@ -37,13 +37,11 @@ pub(super) struct CatalogSync {
 	events: UnboundedChannel<Event>,
 }
 
-impl Protocol for CatalogSync {
-	/// ALPN identifier for the catalog sync protocol.
-	const ALPN: &'static [u8] = b"/mosaik/discovery/sync/1.0";
-}
-
 /// Internal methods
 impl CatalogSync {
+	/// ALPN identifier for the catalog sync protocol.
+	pub(super) const ALPN: &'static [u8] = b"/mosaik/discovery/sync/1.0";
+
 	/// Creates a new `CatalogSync` protocol handler instance.
 	///
 	/// This is used internally by the discovery system to handle incoming
@@ -111,7 +109,7 @@ impl CatalogSync {
 			// Establish a direct connection with remote peer on the catalog sync ALPN
 			let cancel = local.termination().clone();
 			let mut link = local
-				.connect_with_cancel::<CatalogSync>(peer.clone(), cancel)
+				.connect_with_cancel(peer.clone(), CatalogSync::ALPN, cancel)
 				.await
 				.map_err(LinkError::from)?;
 
@@ -213,7 +211,7 @@ impl ProtocolHandler for CatalogSync {
 
 			// Accept the incoming link for the catalog sync protocol
 			let mut link =
-				Link::<CatalogSync>::accept_with_cancel(connection, cancel)
+				Link::accept_with_cancel(connection, CatalogSync::ALPN, cancel)
 					.await
 					.inspect_err(|e| {
 						if !e.is_cancelled() {

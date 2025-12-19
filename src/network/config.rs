@@ -15,6 +15,7 @@ use {
 		protocol::Router,
 	},
 	std::collections::BTreeSet,
+	tokio_util::sync::CancellationToken,
 };
 
 /// Configuration options for the discovery subsystem.
@@ -70,6 +71,9 @@ pub struct NetworkConfig {
 	/// See [`groups::Config`] for details.
 	#[builder(default = "groups::Config::builder()")]
 	groups: groups::ConfigBuilder,
+
+	#[builder(default = "CancellationToken::new()")]
+	cancel: CancellationToken,
 }
 
 /// Public API
@@ -79,7 +83,7 @@ impl NetworkBuilder {
 		let compiled = self.compile().map_err(|_| Error::MissingNetworkId)?;
 
 		let endpoint = compiled.bind_endpoint().await?;
-		let local = LocalNode::new(compiled.network_id, endpoint);
+		let local = LocalNode::new(compiled.network_id, endpoint, compiled.cancel);
 
 		// each components contributes its set of protocols to the router
 		// when we have all protocols installed then we set the ready signal
