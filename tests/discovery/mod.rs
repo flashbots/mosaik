@@ -1,2 +1,2 @@
 mod catalog;
-mod purge;
+mod depart;

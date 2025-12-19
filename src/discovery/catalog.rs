@@ -363,7 +363,6 @@ impl Catalog {
 	/// Removes the signed entry for the given peer ID.
 	/// Returns the removed signed entry if it existed.
 	/// Removing the local peer entry is not allowed and always returns `None`.
-	#[expect(unused)]
 	pub(super) fn remove_signed(
 		&mut self,
 		peer_id: &PeerId,

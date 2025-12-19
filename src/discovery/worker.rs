@@ -11,6 +11,7 @@ use {
 	},
 	crate::{
 		PeerId,
+		discovery::{PeerEntryVersion, SignedPeerEntry},
 		network::LocalNode,
 		primitives::{IntoIterOrSingle, Short},
 	},
@@ -313,75 +314,127 @@ impl WorkerLoop {
 	fn on_announce_event(&mut self, event: announce::Event) {
 		match event {
 			announce::Event::PeerEntryReceived(signed_peer_entry) => {
-				// Update the catalog with the received peer entry
-				let modified = self.handle.catalog.send_if_modified(|catalog| {
-					match catalog.upsert_signed(signed_peer_entry) {
-						UpsertResult::New(signed_peer_entry) => {
-							tracing::debug!(
-								info = %Short(signed_peer_entry),
-								network = %self.handle.local.network_id(),
-								"new peer discovered"
-							);
+				self.on_peer_entry_received(signed_peer_entry);
+			}
 
-							// Publish the new peer entry to the static provider
-							self.handle.local.observe(signed_peer_entry.address());
+			announce::Event::PeerDeparted(peer_id, entry_version) => {
+				self.on_peer_departed(peer_id, entry_version);
+			}
+		}
+	}
 
-							// Trigger a full catalog sync with the newly discovered peer
-							let peer_id = *signed_peer_entry.id();
-							self.syncs.spawn(
-								self
-									.sync
-									.sync_with(signed_peer_entry.address().clone())
-									.map_err(move |e| (e, peer_id)),
-							);
+	/// Invoked when a new signed peer entry is received from the announce
+	/// protocol over gossip. Attempts to upsert the entry into the local catalog
+	/// and triggers appropriate actions based on whether the entry is new,
+	/// updated, or rejected.
+	fn on_peer_entry_received(&mut self, peer_entry: SignedPeerEntry) {
+		let modified = self.handle.catalog.send_if_modified(|catalog| {
+			match catalog.upsert_signed(peer_entry) {
+				UpsertResult::New(peer_entry) => {
+					tracing::debug!(
+						info = %Short(peer_entry),
+						network = %self.handle.local.network_id(),
+						"new peer discovered"
+					);
 
-							self
-								.events
-								.send(Event::PeerDiscovered(signed_peer_entry.into()))
-								.ok();
+					// Publish the new peer entry to the static provider
+					self.handle.local.observe(peer_entry.address());
 
-							true
-						}
-						UpsertResult::Updated(signed_peer_entry) => {
-							tracing::trace!(
-								info = %Short(signed_peer_entry),
-								network = %self.handle.local.network_id(),
-								"known peer updated"
-							);
+					// Trigger a full catalog sync with the newly discovered peer
+					let peer_id = *peer_entry.id();
+					self.syncs.spawn(
+						self
+							.sync
+							.sync_with(peer_entry.address().clone())
+							.map_err(move |e| (e, peer_id)),
+					);
 
-							// Publish the new peer entry to the static provider
-							self.handle.local.observe(signed_peer_entry.address());
+					self
+						.events
+						.send(Event::PeerDiscovered(peer_entry.into()))
+						.ok();
 
-							self
-								.events
-								.send(Event::PeerUpdated(signed_peer_entry.clone().into()))
-								.ok();
-							true
-						}
-						UpsertResult::Rejected(signed_peer_entry) => {
-							tracing::trace!(
-								incoming = %Short(signed_peer_entry.as_ref()),
-								network = %self.handle.local.network_id(),
-								"stale peer update rejected"
-							);
-							false
-						}
-						UpsertResult::DifferentNetwork(peer_network) => {
-							tracing::trace!(
-								peer_network = %Short(peer_network),
-								this_network = %Short(self.handle.local.network_id()),
-								"peer entry from different network rejected"
-							);
-							false
-						}
-					}
-				});
+					true
+				}
+				UpsertResult::Updated(peer_entry) => {
+					tracing::trace!(
+						info = %Short(peer_entry),
+						network = %self.handle.local.network_id(),
+						"known peer updated"
+					);
 
-				if modified {
-					let purge_in = self.next_purge_deadline();
-					self.purge_interval.reset_after(purge_in);
+					// Publish the new peer entry to the static provider
+					self.handle.local.observe(peer_entry.address());
+
+					self
+						.events
+						.send(Event::PeerUpdated(peer_entry.clone().into()))
+						.ok();
+					true
+				}
+				UpsertResult::Rejected(peer_entry) => {
+					tracing::trace!(
+						incoming = %Short(peer_entry.as_ref()),
+						network = %self.handle.local.network_id(),
+						"stale peer update rejected"
+					);
+					false
+				}
+				UpsertResult::DifferentNetwork(peer_network) => {
+					tracing::trace!(
+						peer_network = %Short(peer_network),
+						this_network = %Short(self.handle.local.network_id()),
+						"peer entry from different network rejected"
+					);
+					false
 				}
 			}
+		});
+
+		if modified {
+			let purge_in = self.next_purge_deadline();
+			self.purge_interval.reset_after(purge_in);
+		}
+	}
+
+	/// Handles a graceful peer departure event received from the announce
+	/// protocol. Marks the peer as departed in the local catalog if the last
+	/// known version is equal or newer than the current entry and the timestamp
+	/// of the departure message is recent enough.
+	fn on_peer_departed(
+		&mut self,
+		peer_id: PeerId,
+		entry_version: PeerEntryVersion,
+	) {
+		let Some(last_known_version) = self
+			.handle
+			.catalog
+			.borrow()
+			.get_signed(&peer_id)
+			.map(|e| e.update_version())
+		else {
+			// unknown peer, nothing to do
+			return;
+		};
+
+		if entry_version < last_known_version {
+			// stale departure event, ignore
+			return;
+		}
+
+		let modified = self
+			.handle
+			.catalog
+			.send_if_modified(|catalog| catalog.remove_signed(&peer_id).is_some());
+
+		if modified {
+			tracing::trace!(
+				peer_id = %Short(&peer_id),
+				network = %self.handle.local.network_id(),
+				"peer gracefully departed the network"
+			);
+
+			self.events.send(Event::PeerDeparted(peer_id)).ok();
 		}
 	}
 

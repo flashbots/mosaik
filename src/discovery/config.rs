@@ -44,6 +44,11 @@ pub struct Config {
 	/// The maximum jitter factor to apply to the announce interval.
 	#[builder(default = "0.5")]
 	pub announce_jitter: f32,
+
+	/// The duration the announcement protocol will wait for the graceful
+	/// departure gossip message to propagate before shutting down.
+	#[builder(setter(skip), default = "Duration::from_millis(500)")]
+	pub graceful_departure_wait: Duration,
 }
 
 impl Config {

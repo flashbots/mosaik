@@ -25,7 +25,7 @@ use {
 #[derive(
 	Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
-pub struct PeerEntryVersion(i64, i64);
+pub struct PeerEntryVersion(pub(crate) i64, pub(crate) i64);
 
 impl Default for PeerEntryVersion {
 	fn default() -> Self {

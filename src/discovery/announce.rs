@@ -2,6 +2,8 @@ use {
 	super::{Catalog, Config, Error, PeerEntryVersion, SignedPeerEntry},
 	crate::{
 		NetworkId,
+		PeerId,
+		Signature,
 		discovery::PeerEntry,
 		network::{LocalNode, link::Protocol},
 		primitives::{IntoIterOrSingle, Pretty, Short, UnboundedChannel},
@@ -12,7 +14,10 @@ use {
 	},
 	bytes::Buf,
 	chrono::Utc,
-	core::sync::atomic::{AtomicUsize, Ordering},
+	core::{
+		sync::atomic::{AtomicUsize, Ordering},
+		time::Duration,
+	},
 	futures::StreamExt,
 	iroh::{EndpointAddr, discovery::Discovery, protocol::ProtocolHandler},
 	iroh_gossip::{
@@ -37,9 +42,13 @@ use {
 };
 
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum Event {
 	/// A valid and signed peer entry has been updated.
 	PeerEntryReceived(SignedPeerEntry),
+
+	/// A peer has gracefully departed the network.
+	PeerDeparted(PeerId, PeerEntryVersion),
 }
 
 /// The announcement protocol for broadcasting peer presence and metadata.
@@ -233,11 +242,7 @@ impl WorkerLoop {
 			tokio::select! {
 				// Network is terminating, exit the loop
 				() = self.cancel.cancelled() => {
-					tracing::trace!(
-						network = %self.local.network_id(),
-						peer_id = %Short(&self.local.id()),
-						"Discovery announcement protocol terminating"
-					);
+					self.shutdown(&mut topic_tx, &mut topic_rx).await;
 					return Ok(());
 				}
 
@@ -370,6 +375,7 @@ impl WorkerLoop {
 	/// A message has been received from the gossip topic.
 	fn on_message_received(&mut self, message: AnnouncementMessage) {
 		match message {
+			// a peer is announcing an updated version of its own entry
 			AnnouncementMessage::OwnEntryUpdate(entry) => {
 				tracing::trace!(
 						info = %Short(&entry),
@@ -408,6 +414,37 @@ impl WorkerLoop {
 
 				// Update local state or catalog as needed
 				let _ = self.events.send(Event::PeerEntryReceived(entry));
+			}
+
+			// a peer is gracefully departing the network
+			AnnouncementMessage::GracefulDeparture(departure) => {
+				if !departure.valid_signature() {
+					tracing::trace!(
+						peer_id = %Short(&departure.peer_id),
+						"received graceful departure with invalid signature, ignoring"
+					);
+					return;
+				}
+
+				let time_diff = (Utc::now() - departure.timestamp)
+					.abs()
+					.to_std()
+					.unwrap_or(Duration::MAX);
+
+				if time_diff > self.config.max_time_drift {
+					tracing::trace!(
+						peer_id = %Short(&departure.peer_id),
+						time_diff = ?time_diff,
+						max_drift = ?self.config.max_time_drift,
+						"received graceful departure with invalid timestamp, ignoring"
+					);
+					return;
+				}
+
+				let _ = self.events.send(Event::PeerDeparted(
+					departure.peer_id,
+					departure.last_version,
+				));
 			}
 		}
 	}
@@ -540,6 +577,53 @@ impl WorkerLoop {
 		*topic_rx = new_topic_rx;
 		Ok(())
 	}
+
+	/// Triggered when the network is shutting down.
+	///
+	/// This broadcasts a graceful departure message to inform peers
+	/// of the impending disconnection.
+	///
+	/// It then waits for a configured duration to allow the message
+	/// to propagate before completing the shutdown process.
+	async fn shutdown(
+		self,
+		topic_tx: &mut GossipSender,
+		topic_rx: &mut GossipReceiver,
+	) {
+		tracing::trace!(
+			network = %self.local.network_id(),
+			peer_id = %Short(&self.local.id()),
+			"Discovery announcement protocol shutting down"
+		);
+
+		if topic_rx.is_joined() {
+			let goodbye = AnnouncementMessage::GracefulDeparture(
+				GracefulDeparture::new(&self.local, self.last_own_version),
+			);
+
+			let encoded = encode_to_vec(&goodbye, standard())
+				.expect("GracefulDeparture Encoding failed")
+				.into();
+
+			if let Err(e) = topic_tx.broadcast(encoded).await {
+				tracing::warn!(
+					error = %e,
+					network = %self.local.network_id(),
+					"failed to broadcast graceful departure message"
+				);
+			} else {
+				tracing::trace!(
+					network = %self.local.network_id(),
+					peer_id = %Short(&self.local.id()),
+					"broadcasted graceful departure message"
+				);
+
+				// give the broadcasted message some time to propagate before
+				// disconnecting from the gossip topic
+				tokio::time::sleep(self.config.graceful_departure_wait).await;
+			}
+		}
+	}
 }
 
 /// Wire format for announcement messages.
@@ -547,4 +631,53 @@ impl WorkerLoop {
 enum AnnouncementMessage {
 	/// Broadcasted when a peer updates its own entry.
 	OwnEntryUpdate(SignedPeerEntry),
+
+	/// Broadcasted when a peer is gracefully departing the network.
+	GracefulDeparture(GracefulDeparture),
+}
+
+/// A message indicating a peer is gracefully departing the network.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GracefulDeparture {
+	peer_id: PeerId,
+	last_version: PeerEntryVersion,
+	timestamp: chrono::DateTime<Utc>,
+	signature: Signature,
+}
+
+impl GracefulDeparture {
+	pub fn new(local: &LocalNode, last_version: PeerEntryVersion) -> Self {
+		let timestamp = Utc::now();
+		let mut hasher = blake3::Hasher::default();
+
+		hasher.update(local.id().as_bytes());
+		hasher.update(&last_version.0.to_be_bytes());
+		hasher.update(&last_version.1.to_be_bytes());
+		hasher.update(&timestamp.timestamp_millis().to_be_bytes());
+		let hash = hasher.finalize();
+
+		let signature = local.secret_key().sign(hash.as_bytes());
+
+		Self {
+			peer_id: local.id(),
+			last_version,
+			timestamp,
+			signature,
+		}
+	}
+
+	pub fn valid_signature(&self) -> bool {
+		let mut hasher = blake3::Hasher::default();
+
+		hasher.update(self.peer_id.as_bytes());
+		hasher.update(&self.last_version.0.to_be_bytes());
+		hasher.update(&self.last_version.1.to_be_bytes());
+		hasher.update(&self.timestamp.timestamp_millis().to_be_bytes());
+		let hash = hasher.finalize();
+
+		self
+			.peer_id
+			.verify(hash.as_bytes(), &self.signature)
+			.is_ok()
+	}
 }
