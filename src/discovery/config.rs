@@ -48,7 +48,7 @@ pub struct Config {
 	/// The duration the announcement protocol will wait for the graceful
 	/// departure gossip message to propagate before shutting down.
 	#[builder(setter(skip), default = "Duration::from_millis(500)")]
-	pub graceful_departure_wait: Duration,
+	pub graceful_departure_window: Duration,
 }
 
 impl Config {

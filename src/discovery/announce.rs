@@ -265,7 +265,7 @@ impl WorkerLoop {
 					self.on_topic_rx(gossip_event, &mut topic_rx, &mut topic_tx).await?;
 				}
 
-				// The local peer entry has been updated
+				// The local catalog has been updated
 				Ok(()) = self.catalog.changed() => {
 					self.on_catalog_update();
 				}
@@ -274,7 +274,6 @@ impl WorkerLoop {
 				Some((peers, tx)) = self.dials.recv() => {
 					self.dial_peers(peers, &mut topic_tx, tx).await;
 				}
-
 			}
 		}
 	}
@@ -313,9 +312,12 @@ impl WorkerLoop {
 			}
 			Some(Err(e)) => {
 				tracing::warn!(
+					error = %e,
 					network = %self.local.network_id(),
-					"announcement gossip network error: {e}"
+					"announcement gossip network down"
 				);
+				self.neighbors_count.store(0, Ordering::SeqCst);
+				self.rejoin_topic(topic_tx, topic_rx).await?;
 			}
 			Some(Ok(event)) => {
 				self.on_gossip_event(event);
@@ -367,6 +369,8 @@ impl WorkerLoop {
 				self.on_message_received(decoded);
 			}
 			GossipEvent::Lagged => {
+				// we lost track of some updates, put the system in a safe state
+				// and re-sync the catalog with the next peer interaction
 				self.neighbors_count.store(0, Ordering::SeqCst);
 			}
 		}
@@ -392,7 +396,7 @@ impl WorkerLoop {
 					return;
 				}
 
-				// Check for valid update timestamp within allowed drift
+				// Check if the update timestamp is within allowed drift
 				let Ok(time_diff) = (Utc::now() - entry.updated_at()).abs().to_std()
 				else {
 					tracing::trace!(
@@ -418,7 +422,7 @@ impl WorkerLoop {
 
 			// a peer is gracefully departing the network
 			AnnouncementMessage::GracefulDeparture(departure) => {
-				if !departure.valid_signature() {
+				if !departure.has_valid_signature() {
 					tracing::trace!(
 						peer_id = %Short(&departure.peer_id),
 						"received graceful departure with invalid signature, ignoring"
@@ -530,6 +534,8 @@ impl WorkerLoop {
 			}
 		} else {
 			let neighbor_count = topic_rx.neighbors().count();
+			self.neighbors_count.store(neighbor_count, Ordering::SeqCst);
+
 			tracing::trace!(
 				network = %self.local.network_id(),
 				neighbors = neighbor_count,
@@ -620,7 +626,7 @@ impl WorkerLoop {
 
 				// give the broadcasted message some time to propagate before
 				// disconnecting from the gossip topic
-				tokio::time::sleep(self.config.graceful_departure_wait).await;
+				tokio::time::sleep(self.config.graceful_departure_window).await;
 			}
 		}
 	}
@@ -666,7 +672,7 @@ impl GracefulDeparture {
 		}
 	}
 
-	pub fn valid_signature(&self) -> bool {
+	pub fn has_valid_signature(&self) -> bool {
 		let mut hasher = blake3::Hasher::default();
 
 		hasher.update(self.peer_id.as_bytes());

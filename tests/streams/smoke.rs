@@ -1,12 +1,15 @@
 use {
 	super::*,
 	crate::utils::timeout_s,
-	futures::{SinkExt, StreamExt},
+	futures::{SinkExt, StreamExt, join},
 	mosaik::*,
+	tokio::sync::watch,
 };
 
 #[tokio::test]
-async fn send_recv_smoke() -> anyhow::Result<()> {
+async fn send_recv() -> anyhow::Result<()> {
+	const MSG_COUNT: usize = 100;
+
 	let network_id = NetworkId::random();
 	let n0 = Network::new(network_id).await?;
 	let n1 = Network::new(network_id).await?;
@@ -20,22 +23,47 @@ async fn send_recv_smoke() -> anyhow::Result<()> {
 	n2.discovery().dial(n0.local().id()).await;
 
 	let mut p0 = n0.streams().produce::<Data1>();
-	let mut p1 = n1.streams().produce::<Data2>();
 
-	let mut c1 = n2.streams().consume::<Data1>();
-	let mut c2 = n0.streams().consume::<Data2>();
+	let mut c1 = n1.streams().consume::<Data1>();
+	let mut c2 = n2.streams().consume::<Data1>();
 
 	c1.when().subscribed().await;
 	c2.when().subscribed().await;
-
 	tracing::debug!("consumers successfully subscribed to producers");
-	p0.send(Data1("hello from n0".into())).await?;
-	p1.send(Data2("hello from n1".into())).await?;
 
-	let msg0 = c1.next().await.expect("expected message from c1");
-	let msg1 = c2.next().await.expect("expected message from c2");
-	assert_eq!(msg0, Data1("hello from n0".into()));
-	assert_eq!(msg1, Data2("hello from n1".into()));
+	join!(
+		async {
+			for _ in 0..MSG_COUNT {
+				let msg = Data1("hello from n0".into());
+				p0.send(msg).await.unwrap();
+			}
+		},
+		async {
+			let (sum, mut sum_watch) = watch::channel(0);
+
+			loop {
+				tokio::select! {
+					recv = c1.next() => {
+						let msg = recv.expect("expected message from c1");
+						assert_eq!(msg, Data1("hello from n0".into()));
+						sum.send_modify(|s| *s += 1);
+					},
+					recv = c2.next() => {
+						let msg = recv.expect("expected message from c2");
+						assert_eq!(msg, Data1("hello from n0".into()));
+						sum.send_modify(|s| *s += 1);
+					}
+					_ = sum_watch.wait_for(|s| *s >= MSG_COUNT * 2) => {
+						tracing::debug!("received {} messages, ending test", MSG_COUNT * 2);
+						break;
+					}
+				}
+			}
+		}
+	);
+
+	assert_eq!(c1.stats().datums(), MSG_COUNT);
+	assert_eq!(c2.stats().datums(), MSG_COUNT);
 
 	Ok(())
 }

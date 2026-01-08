@@ -49,7 +49,7 @@ use {
 /// - The local node's peer entry is always signed. Inserting an unsigned local
 ///   peer entry is not allowed.
 ///
-/// - Signed entries have precedence over unsigned entries when a signed entry
+/// - Signed entries have precedence over unsigned entries, when a signed entry
 ///   is inserted into the catalog for a peer that already has an unsigned entry
 ///   with the same peer ID then the unsigned entry is removed.
 ///
@@ -57,7 +57,9 @@ use {
 ///   (configurable via `Config::purge_after`) are considered stale and are
 ///   automatically removed from the catalog by the discovery system.
 ///
-/// - The catalog will not return stale entries via its public API.
+/// - The catalog will not return stale entries via its public API. Stale
+///   entries are those that have not been updated within the `purge_after`
+///   duration.
 #[derive(Debug, Clone)]
 pub struct Catalog {
 	/// Discovery configuration.

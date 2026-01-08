@@ -39,11 +39,11 @@ pub use {
 ///
 /// The discovery system is composed of two main protocols:
 ///
-/// - The announcement protocol that peers use to broadcast their presence and
-///   changes to their own state and metadata in real time as they happen.
+///   - The announcement protocol that peers use to broadcast their presence and
+///     changes to their own state and metadata in real time as they happen.
 ///
-/// - The synchronization protocol that peers use to exchange and synchronize
-///   their catalogs of known peers and their associated metadata.
+///   - The synchronization protocol that peers use to exchange and synchronize
+///     their catalogs of known peers and their associated metadata.
 ///
 /// - The discovery system maintains a local catalog of known peers and their
 ///   metadata, which is updated through gossip messages and catalog syncs.

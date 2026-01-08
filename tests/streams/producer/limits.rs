@@ -27,11 +27,11 @@ async fn max_subs() -> anyhow::Result<()> {
 	let prod = n_p
 		.streams()
 		.producer::<Data1>()
-		.with_max_subscribers(MAX_CAPACITY)
+		.with_max_consumers(MAX_CAPACITY)
 		.build()?;
 
-	assert!(prod.config().max_subscribers == MAX_CAPACITY);
-	assert!(prod.config().max_subscribers < CONSUMERS_COUNT);
+	assert!(prod.config().max_consumers == MAX_CAPACITY);
+	assert!(prod.config().max_consumers < CONSUMERS_COUNT);
 
 	let consumers = n_cs
 		.iter()

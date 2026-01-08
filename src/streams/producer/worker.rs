@@ -299,7 +299,7 @@ impl<D: Datum> WorkerLoop<D> {
 		peer: PeerEntry,
 	) {
 		// Check if we have capacity to accept a new consumer
-		if self.active.len() >= self.config.max_subscribers {
+		if self.active.len() >= self.config.max_consumers {
 			tracing::warn!(
 				consumer_id = %Short(&link.remote_id()),
 				stream_id = %Short(self.config.stream_id),

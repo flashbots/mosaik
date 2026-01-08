@@ -66,7 +66,7 @@ pub struct ProducerConfig {
 	/// Maximum number of subscribers allowed for this producer.
 	///
 	/// Defaults to unlimited if not set.
-	pub max_subscribers: usize,
+	pub max_consumers: usize,
 
 	/// Optional sink for unsent datum that were not delivered to any consumers
 	/// because the datum did not meet any subscription criteria of any active
@@ -139,8 +139,8 @@ impl<D: Datum> Builder<'_, D> {
 	/// Sets the maximum number of subscribers allowed for this producer.
 	/// Defaults to unlimited if not set.
 	#[must_use]
-	pub fn with_max_subscribers(mut self, max: usize) -> Self {
-		self.config.max_subscribers = max;
+	pub fn with_max_consumers(mut self, max: usize) -> Self {
+		self.config.max_consumers = max;
 		self
 	}
 
@@ -197,7 +197,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 				stream_id: D::derived_stream_id(),
 				accept_if: Box::new(|_| true),
 				online_when: Box::new(|c| c.minimum_of(1)),
-				max_subscribers: usize::MAX,
+				max_consumers: usize::MAX,
 				network_id: *streams.local.network_id(),
 				undelivered: None,
 			},
