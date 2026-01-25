@@ -50,6 +50,7 @@ impl PartialOrd for UniqueId {
 		Some(self.cmp(other))
 	}
 }
+
 impl Ord for UniqueId {
 	fn cmp(&self, other: &Self) -> core::cmp::Ordering {
 		self.0.as_bytes().cmp(other.0.as_bytes())
@@ -235,12 +236,77 @@ impl UniqueId {
 	}
 
 	/// Creates a unique id from the given bytes.
-	pub fn from_bytes(bytes: impl Into<[u8; 32]>) -> Self {
-		UniqueId(blake3::Hash::from_bytes(bytes.into()))
+	pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+		UniqueId(blake3::Hash::from_bytes(bytes))
 	}
 
 	/// Generates a random unique id.
 	pub fn random() -> Self {
 		UniqueId(blake3::Hash::from_bytes(rand::random()))
 	}
+
+	/// Derives a new unique id from this one using the given info as
+	/// context. This is used when you want to create a new unique id that is
+	/// deterministically related to an existing one, such as replay streams for
+	/// streams.
+	#[must_use]
+	pub fn derive(&self, info: impl AsRef<[u8]>) -> Self {
+		let mut hasher = blake3::Hasher::new();
+		hasher.update(self.as_bytes());
+		hasher.update(info.as_ref());
+		UniqueId(hasher.finalize())
+	}
+}
+
+/// Converts a hex string literal into a `UniqueId` at compile time.
+///
+/// This macro accepts a 64-character hex string (representing 32 bytes) and
+/// produces a `UniqueId` that can be used in const contexts.
+///
+/// # Examples
+///
+/// ```
+/// use mosaik::unique_id;
+///
+/// const MY_ID: UniqueId = unique_id!(
+/// 	"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+/// );
+/// ```
+///
+/// # Compile-time Errors
+///
+/// This macro will fail to compile if:
+/// - The hex string is not exactly 64 characters long
+/// - The hex string contains invalid hex characters
+#[macro_export]
+macro_rules! unique_id {
+	($hex:expr) => {{
+		const fn hex_char_to_nibble(c: u8) -> u8 {
+			match c {
+				b'0'..=b'9' => c - b'0',
+				b'a'..=b'f' => c - b'a' + 10,
+				b'A'..=b'F' => c - b'A' + 10,
+				_ => panic!("invalid hex character"),
+			}
+		}
+
+		const fn hex_to_bytes<const N: usize>(hex: &str) -> [u8; N] {
+			let hex = hex.as_bytes();
+			if hex.len() != N * 2 {
+				panic!("hex string must be exactly 64 characters for UniqueId");
+			}
+			let mut bytes = [0u8; N];
+			let mut i = 0;
+			while i < N {
+				let high = hex_char_to_nibble(hex[i * 2]);
+				let low = hex_char_to_nibble(hex[i * 2 + 1]);
+				bytes[i] = (high << 4) | low;
+				i += 1;
+			}
+			bytes
+		}
+
+		const BYTES: [u8; 32] = hex_to_bytes::<32>($hex);
+		$crate::primitives::UniqueId::from_bytes(BYTES)
+	}};
 }

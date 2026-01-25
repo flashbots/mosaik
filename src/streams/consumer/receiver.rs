@@ -10,7 +10,7 @@ use {
 		discovery::{Discovery, PeerEntry},
 		network::{LocalNode, error::*, link::*},
 		primitives::Short,
-		streams::{NotAllowed, StreamNotFound, UnknownPeer, status::ChannelInfo},
+		streams::{NotAllowed, StreamNotFound, status::ChannelInfo},
 	},
 	backoff::backoff::Backoff,
 	core::{future::pending, ops::ControlFlow, time::Duration},

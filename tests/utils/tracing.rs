@@ -1,6 +1,12 @@
 #[ctor::ctor]
 fn init_test_logging() {
 	use tracing_subscriber::{filter::filter_fn, prelude::*};
+
+	// Avoid re-initializing if a global default subscriber is already set
+	if tracing::dispatcher::has_been_set() {
+		return;
+	}
+
 	if let Ok(v) = std::env::var("TEST_TRACE") {
 		let level = match v.as_str() {
 			"true" | "debug" | "on" => tracing::Level::DEBUG,
@@ -13,8 +19,7 @@ fn init_test_logging() {
 
 		// disable noisy modules from dependencies
 		let muted: &[&'static str] = &[
-			"iroh::",
-			"iroh_",
+			"iroh",
 			"rustls",
 			"igd_next",
 			"hickory_",

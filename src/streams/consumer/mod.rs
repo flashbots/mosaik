@@ -25,6 +25,7 @@ mod receiver;
 mod worker;
 
 pub use builder::Builder;
+use tokio::sync::mpsc::error::TryRecvError;
 
 /// A local stream consumer handle that allows receiving data from a stream
 /// produced by a remote peer.
@@ -117,6 +118,37 @@ impl<D: Datum> Consumer<D> {
 		// on the watch channel as soon as possible.
 		let active = self.status.active.borrow().clone();
 		active.into_iter().map(|(_, info)| info)
+	}
+
+	/// Asynchronously receives the next datum from the stream.
+	///
+	/// Returns `None` if the consumer has been closed and all data has been
+	/// received.
+	///
+	/// Blocks until data is available.
+	pub async fn recv(&mut self) -> Option<D> {
+		match self.chan.recv().await {
+			Some((datum, bytes_len)) => {
+				self.stats.increment_datums();
+				self.stats.increment_bytes(bytes_len);
+				Some(datum)
+			}
+			None => None,
+		}
+	}
+
+	/// Attempts to receive the next datum from the stream.
+	/// Returns `None` if no datum is currently available.
+	/// Does not block.
+	pub fn try_recv(&mut self) -> Result<D, TryRecvError> {
+		match self.chan.try_recv() {
+			Ok((datum, bytes_len)) => {
+				self.stats.increment_datums();
+				self.stats.increment_bytes(bytes_len);
+				Ok(datum)
+			}
+			Err(e) => Err(e),
+		}
 	}
 }
 

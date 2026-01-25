@@ -4,11 +4,12 @@ use {
 		NetworkId,
 		discovery::Discovery,
 		network::{
+			UnknownPeer,
 			error::DifferentNetwork,
 			link::{Link, Protocol},
 		},
 		primitives::Short,
-		streams::{StreamNotFound, UnknownPeer},
+		streams::StreamNotFound,
 	},
 	core::fmt,
 	iroh::{

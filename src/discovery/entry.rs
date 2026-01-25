@@ -1,6 +1,13 @@
 use {
 	super::Error,
-	crate::{NetworkId, StreamId, network::PeerId, primitives::*},
+	crate::{
+		NetworkId,
+		StreamId,
+		groups::GroupId,
+		network::PeerId,
+		primitives::*,
+		store::StoreId,
+	},
 	bincode::{config::standard, serde::encode_into_std_write},
 	chrono::{DateTime, Utc},
 	core::fmt,
@@ -93,6 +100,8 @@ pub struct PeerEntry {
 	address: EndpointAddr,
 	tags: BTreeSet<Tag>,
 	streams: BTreeSet<StreamId>,
+	stores: BTreeSet<StoreId>,
+	groups: BTreeSet<GroupId>,
 }
 
 /// Public query API for `PeerEntry`.
@@ -131,6 +140,16 @@ impl PeerEntry {
 	/// List of streams produced by the peer.
 	pub const fn streams(&self) -> &BTreeSet<StreamId> {
 		&self.streams
+	}
+
+	/// List of stores available on this peer.
+	pub const fn stores(&self) -> &BTreeSet<StoreId> {
+		&self.stores
+	}
+
+	/// List of groups this peer is a member of.
+	pub const fn groups(&self) -> &BTreeSet<GroupId> {
+		&self.groups
 	}
 
 	/// The update version of the peer entry.
@@ -173,6 +192,8 @@ impl PeerEntry {
 			address,
 			tags: BTreeSet::new(),
 			streams: BTreeSet::new(),
+			stores: BTreeSet::new(),
+			groups: BTreeSet::new(),
 			version: PeerEntryVersion::default(),
 			protocol: env!("CARGO_PKG_VERSION")
 				.parse()
@@ -200,8 +221,13 @@ impl PeerEntry {
 		mut self,
 		streams: impl IntoIterOrSingle<StreamId, V>,
 	) -> Self {
+		let count = self.streams.len();
 		self.streams.extend(streams.iterator());
-		self.version = self.version.increment();
+
+		if count != self.streams.len() {
+			self.version = self.version.increment();
+		}
+
 		self
 	}
 
@@ -211,28 +237,111 @@ impl PeerEntry {
 		mut self,
 		streams: impl IntoIterOrSingle<StreamId, V>,
 	) -> Self {
+		let mut was_present = false;
 		for stream in streams.iterator() {
-			self.streams.remove(&stream);
+			was_present |= self.streams.remove(&stream);
 		}
-		self.version = self.version.increment();
+
+		if was_present {
+			self.version = self.version.increment();
+		}
+
+		self
+	}
+
+	/// Adds store id(s) to the list of stores available on the peer.
+	#[must_use]
+	pub fn add_stores<V>(
+		mut self,
+		stores: impl IntoIterOrSingle<StoreId, V>,
+	) -> Self {
+		let count = self.stores.len();
+		self.stores.extend(stores.iterator());
+
+		if count != self.stores.len() {
+			self.version = self.version.increment();
+		}
+
+		self
+	}
+
+	/// Removes store id(s) from the list of stores available on the peer.
+	#[must_use]
+	pub fn remove_stores<V>(
+		mut self,
+		stores: impl IntoIterOrSingle<StoreId, V>,
+	) -> Self {
+		let mut was_present = false;
+		for store in stores.iterator() {
+			was_present |= self.stores.remove(&store);
+		}
+
+		if was_present {
+			self.version = self.version.increment();
+		}
+
+		self
+	}
+
+	/// Adds group id(s) to the list of groups this peer is a member of.
+	#[must_use]
+	pub fn add_groups<V>(
+		mut self,
+		groups: impl IntoIterOrSingle<GroupId, V>,
+	) -> Self {
+		let count = self.groups.len();
+		self.groups.extend(groups.iterator());
+
+		if count != self.groups.len() {
+			self.version = self.version.increment();
+		}
+
+		self
+	}
+
+	/// Removes group id(s) from the list of groups this peer is a member of.
+	#[must_use]
+	pub fn remove_groups<V>(
+		mut self,
+		groups: impl IntoIterOrSingle<GroupId, V>,
+	) -> Self {
+		let mut was_present = false;
+		for group in groups.iterator() {
+			was_present |= self.groups.remove(&group);
+		}
+
+		if was_present {
+			self.version = self.version.increment();
+		}
+
 		self
 	}
 
 	/// Adds tag(s) to the list of tags associated with the peer.
 	#[must_use]
 	pub fn add_tags<V>(mut self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
+		let count = self.tags.len();
 		self.tags.extend(tags.iterator());
-		self.version = self.version.increment();
+
+		if count != self.tags.len() {
+			self.version = self.version.increment();
+		}
+
 		self
 	}
 
 	/// Removes tag(s) from the list of tags associated with the peer.
 	#[must_use]
 	pub fn remove_tags<V>(mut self, tags: impl IntoIterOrSingle<Tag, V>) -> Self {
+		let mut was_present = false;
 		for tag in tags.iterator() {
-			self.tags.remove(&tag);
+			was_present |= self.tags.remove(&tag);
 		}
-		self.version = self.version.increment();
+
+		if was_present {
+			self.version = self.version.increment();
+		}
+
 		self
 	}
 
@@ -304,12 +413,14 @@ impl fmt::Debug for Pretty<'_, PeerEntry> {
 		)?;
 
 		writeln!(f, "  tags: {}", FmtIter::<Short<_>, _>::new(&self.tags))?;
+		writeln!(f, "  groups: {}", FmtIter::<Short<_>, _>::new(&self.groups))?;
 		writeln!(
 			f,
 			"  streams: {}",
 			FmtIter::<Short<_>, _>::new(&self.streams)
 		)?;
 
+		writeln!(f, "  stores: {}", FmtIter::<Short<_>, _>::new(&self.stores))?;
 		writeln!(f, "  update: {}", self.update_version())?;
 		writeln!(f, "  protocol: {}", self.protocol)
 	}

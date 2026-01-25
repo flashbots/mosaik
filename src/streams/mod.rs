@@ -119,14 +119,14 @@ impl Streams {
 	/// subsystem instance as part of the overall [`super::Network`] instance.
 	pub(crate) fn new(
 		local: LocalNode,
-		discovery: Discovery,
+		discovery: &Discovery,
 		config: Config,
 	) -> Self {
 		Self {
 			local: local.clone(),
 			config: Arc::new(config),
 			discovery: discovery.clone(),
-			sinks: Arc::new(Sinks::new(local, discovery)),
+			sinks: Arc::new(Sinks::new(local, discovery.clone())),
 		}
 	}
 }
@@ -141,12 +141,6 @@ impl link::Protocol for Streams {
 	/// ALPN identifier for the streams protocol.
 	const ALPN: &'static [u8] = b"/mosaik/streams/1.0";
 }
-
-network::error::make_close_reason!(
-	/// A remote consumer is trying to subscribe to a string that is not in the
-	/// producer's catalog. Indicates that the consumer should re-sync its
-	/// catalog and retry the subscription.
-	struct UnknownPeer, 10_401);
 
 network::error::make_close_reason!(
 	/// The requested stream was not found on the producer node.

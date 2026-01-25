@@ -5,6 +5,7 @@ use {
 		discovery::{self, Discovery},
 		groups::{self, Groups},
 		network::{LocalNode, ProtocolProvider},
+		store::{self, Stores},
 		streams::{self, Streams},
 	},
 	core::net::SocketAddr,
@@ -65,6 +66,12 @@ pub struct NetworkConfig {
 	#[builder(default = "streams::Config::builder()")]
 	streams: streams::ConfigBuilder,
 
+	/// Configuration options for the kv-stores subsystem.
+	///
+	/// See [`store::Config`] for details.
+	#[builder(default = "store::Config::builder()")]
+	stores: store::ConfigBuilder,
+
 	/// Configuration options for the groups subsystem.
 	///
 	/// See [`groups::Config`] for details.
@@ -92,13 +99,18 @@ impl NetworkBuilder {
 
 		// streams
 		let config = compiled.streams.build()?;
-		let streams = Streams::new(local.clone(), discovery.clone(), config);
+		let streams = Streams::new(local.clone(), &discovery, config);
 		protocols = streams.install(protocols);
 
 		// groups
 		let config = compiled.groups.build()?;
-		let groups = Groups::new(local.clone(), discovery.clone(), config);
+		let groups = Groups::new(local.clone(), &discovery, config);
 		protocols = groups.install(protocols);
+
+		// stores
+		let config = compiled.stores.build()?;
+		let stores = Stores::new(local.clone(), &discovery, config);
+		protocols = stores.install(protocols);
 
 		// finalize router it will route incoming connections to protocols
 		let router = protocols.spawn();
@@ -115,6 +127,7 @@ impl NetworkBuilder {
 			discovery,
 			streams,
 			groups,
+			stores,
 			router,
 		})
 	}

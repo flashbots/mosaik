@@ -1,4 +1,4 @@
-use crate::{discovery, groups, streams};
+use crate::{discovery, groups, store, streams};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -16,12 +16,27 @@ pub enum Error {
 
 	#[error("Groups config error: {0}")]
 	GroupsConfig(#[from] groups::ConfigBuilderError),
+
+	#[error("Stores config error: {0}")]
+	StoreConfig(#[from] store::ConfigBuilderError),
+}
+
+pub trait CloseReason:
+	std::error::Error
+	+ Into<iroh::endpoint::ApplicationClose>
+	+ PartialEq<iroh::endpoint::ApplicationClose>
+	+ Clone
+	+ Send
+	+ Sync
+	+ 'static
+{
 }
 
 macro_rules! make_close_reason {
 	($(#[$meta:meta])* $vis:vis struct $name:ident, $code:expr) => {
 		$(#[$meta])*
-		#[derive(Debug, Clone, Copy)]
+		#[derive(Debug, Clone, Copy, thiserror::Error)]
+		#[error("{}", stringify!($name))]
 		$vis struct $name;
 
 		const _: () = {
@@ -48,6 +63,9 @@ macro_rules! make_close_reason {
 					self.error_code == iroh::endpoint::VarInt::from($code as u32)
 				}
 			}
+
+			#[automatically_derived]
+			impl crate::network::error::CloseReason for $name { }
 		};
 	};
 }
@@ -84,3 +102,9 @@ make_close_reason!(
 make_close_reason!(
 	/// The remote peer sent a message that violates the protocol.
 	pub(crate) struct ProtocolViolation, 400);
+
+make_close_reason!(
+	/// A remote peer is trying to connect but is not known in the discovery catalog and the
+	/// protocol requires knowledge of the peer. Indicates that the connecting peer should re-sync
+	/// its catalog and retry the connection.
+	pub(crate) struct UnknownPeer, 401);

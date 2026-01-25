@@ -5,7 +5,7 @@ members = [
   "actors/canon",
   "actors/gc",
   "actors/pending",
-  "actors/rpc",
+  "actors/ingress",
   "actors/reputation",
   "actors/sim",
   "actors/engine-api",
@@ -127,12 +127,13 @@ derive_builder = "0.20.2"
 backoff = { version = "0.4", features = ["futures", "tokio"] }
 humansize = "2.0.0"
 humantime = "2.3"
+fjall = "3.0"
 
 # CLI only dependencies
 clap = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
-rblib = { workspace = true, features = ["test-utils"] }
+rblib = { workspace = true }
 tracing-subscriber = { workspace = true }
 ctor = { version = "0.6" }

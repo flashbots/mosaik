@@ -10,7 +10,10 @@ use {
 			UnexpectedClose,
 		},
 	},
-	crate::primitives::{Bytes, Short},
+	crate::{
+		UniqueId,
+		primitives::{Bytes, Short},
+	},
 	bincode::{
 		config::standard,
 		error::{DecodeError, EncodeError},
@@ -44,7 +47,7 @@ pub trait Protocol {
 /// Notes:
 ///
 /// - A link can be instantiated either by accepting an incoming connection or
-///   by opening an outgoing connection to a remote peer.
+///   by opening a new connection to a remote peer.
 ///
 /// - This is where the framing semantics are defined. We use [`Framed`] with
 ///   [`LengthDelimitedCodec`] to frame individual messages on the wire.
@@ -393,6 +396,24 @@ impl<P: Protocol> Link<P> {
 	/// token after being created with a general one.
 	pub fn replace_cancel_token(&mut self, cancel: CancellationToken) {
 		self.cancel = cancel;
+	}
+
+	/// Derives keying material from this connection's TLS session secrets.
+	///
+	/// When both peers call this method with the same `label` and ALPN, they will
+	/// get the same [`UniqueId`]`. These bytes are cryptographically
+	/// strong and pseudorandom, and are suitable for use as keying material.
+	///
+	/// See [RFC5705](https://tools.ietf.org/html/rfc5705) for more information.
+	pub fn shared_random(&self, label: impl AsRef<[u8]>) -> UniqueId {
+		let mut shared_secret = [0u8; 32];
+
+		self
+			.connection()
+			.export_keying_material(&mut shared_secret, label.as_ref(), self.alpn())
+			.expect("exporting keying material should not fail for this buffer len");
+
+		UniqueId::from_bytes(shared_secret)
 	}
 }
 

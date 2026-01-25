@@ -1,12 +1,6 @@
-use serde::{Deserialize, Serialize};
+use super::{Data1, Data2};
 
 mod consumer;
 mod producer;
 mod smoke;
 mod stats;
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct Data1(pub String);
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-struct Data2(pub String);

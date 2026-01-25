@@ -187,11 +187,14 @@ impl<D: Datum> Sink<D> for Producer<D> {
 		cx: &mut Context<'_>,
 	) -> Poll<Result<(), Self::Error>> {
 		let this = self.get_mut();
-		let mut online_fut = pin!(this.status.online.wait_for(|s| *s));
+		let online_fut = pin!(this.status.online.wait_for(|s| *s));
 
-		match Pin::new(&mut online_fut).poll(cx) {
+		match online_fut.poll(cx) {
 			Poll::Ready(_) => {}
-			Poll::Pending => return Poll::Pending,
+			Poll::Pending => {
+				cx.waker().wake_by_ref();
+				return Poll::Pending;
+			}
 		}
 
 		this

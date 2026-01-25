@@ -1,5 +1,6 @@
 pub use backoff;
 use {
+	crate::primitives::BackoffFactory,
 	backoff::{ExponentialBackoffBuilder, backoff::Backoff},
 	core::{fmt::Debug, time::Duration},
 	derive_builder::Builder,
@@ -58,7 +59,3 @@ impl core::fmt::Debug for ConfigBuilder {
 			.finish()
 	}
 }
-
-pub type BackoffFactory = Arc<
-	dyn Fn() -> Box<dyn Backoff + Send + Sync + 'static> + Send + Sync + 'static,
->;

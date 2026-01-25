@@ -17,3 +17,9 @@ pub(crate) use {channel::UnboundedChannel, iter::IntoIterOrSingle};
 /// Used internally as a sentinel type for generic parameters.
 #[doc(hidden)]
 pub enum Variant<const U: usize = 0> {}
+
+use {backoff::backoff::Backoff, std::sync::Arc};
+
+pub type BackoffFactory = Arc<
+	dyn Fn() -> Box<dyn Backoff + Send + Sync + 'static> + Send + Sync + 'static,
+>;

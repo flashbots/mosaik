@@ -55,36 +55,100 @@
 
 use {
 	crate::{
+		UniqueId,
 		discovery::Discovery,
-		network::{LocalNode, ProtocolProvider},
+		network::{self, LocalNode, ProtocolProvider, link::Protocol},
 	},
+	accept::Listener,
+	dashmap::{DashMap, Entry},
 	iroh::protocol::RouterBuilder,
-	listen::Listener,
+	std::sync::Arc,
 };
 
+mod accept;
 mod config;
-mod listen;
+mod error;
+mod group;
+mod key;
+mod status;
 
-pub use config::{Config, ConfigBuilder, ConfigBuilderError};
+pub use {
+	config::{Config, ConfigBuilder, ConfigBuilderError},
+	error::Error,
+	group::Group,
+	key::GroupKey,
+};
+
+/// A unique identifier for a group that is derived from the group key.
+pub type GroupId = UniqueId;
 
 pub struct Groups {
-	_local: LocalNode,
-	_discovery: Discovery,
+	local: LocalNode,
+	config: Arc<Config>,
+	discovery: Discovery,
+	active: Arc<DashMap<GroupId, Group>>,
 }
 
+/// Public API
 impl Groups {
-	const ALPN: &'static [u8] = b"/mosaik/groups/1";
+	pub fn join(&self, group_key: GroupKey) -> Result<Group, Error> {
+		let id = group_key.id();
+		match self.active.entry(id) {
+			Entry::Occupied(entry) => Ok(entry.get().clone()),
+			Entry::Vacant(entry) => {
+				let group = Group::new(self, group_key);
+				let group = entry.insert(group).clone();
 
-	pub fn new(local: LocalNode, discovery: Discovery, _config: Config) -> Self {
-		Self {
-			_local: local,
-			_discovery: discovery,
+				self
+					.discovery
+					.update_local_entry(move |entry| entry.add_groups(id));
+
+				Ok(group)
+			}
 		}
 	}
 }
 
-impl ProtocolProvider for Groups {
-	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
-		protocols.accept(Self::ALPN, Listener)
+impl Groups {
+	pub fn new(local: LocalNode, discovery: &Discovery, config: Config) -> Self {
+		let config = Arc::new(config);
+
+		Self {
+			local,
+			config,
+			discovery: discovery.clone(),
+			active: Arc::new(DashMap::new()),
+		}
 	}
 }
+
+impl Protocol for Groups {
+	/// ALPN identifier for the groups protocol.
+	const ALPN: &'static [u8] = b"/mosaik/groups/1";
+}
+
+impl ProtocolProvider for Groups {
+	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
+		protocols.accept(Self::ALPN, Listener::new(self))
+	}
+}
+
+network::make_close_reason!(
+	/// An error occurred during the handshake receive or decode process.
+	struct InvalidHandshake, 30_400);
+
+network::make_close_reason!(
+	/// The group id specified in the handshake is not known to the accepting node.
+	struct GroupNotFound, 30_404);
+
+network::make_close_reason!(
+	/// The handshake process timed out while waiting for a message from the remote peer.
+	struct HandshakeTimeout, 30_408);
+
+network::make_close_reason!(
+	/// The authentication proof provided in the handshake is invalid.
+	struct InvalidAuth, 30_405);
+
+network::make_close_reason!(
+	/// A link between those two peers in the same group already exists.
+	struct AlreadyConnected, 30_429);
