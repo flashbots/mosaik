@@ -92,7 +92,7 @@ pub struct Groups {
 /// Public API
 impl Groups {
 	pub fn join(&self, group_key: GroupKey) -> Result<Group, Error> {
-		let id = group_key.id();
+		let id = *group_key.id();
 		match self.active.entry(id) {
 			Entry::Occupied(entry) => Ok(entry.get().clone()),
 			Entry::Vacant(entry) => {
@@ -151,4 +151,4 @@ network::make_close_reason!(
 
 network::make_close_reason!(
 	/// A link between those two peers in the same group already exists.
-	struct AlreadyConnected, 30_429);
+	struct AlreadyBonded, 30_429);

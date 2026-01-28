@@ -3,14 +3,12 @@ use {
 		NetworkId,
 		UniqueId,
 		groups::{
-			AlreadyConnected,
 			Config,
 			Group,
 			GroupId,
 			GroupNotFound,
 			Groups,
 			HandshakeTimeout,
-			InvalidAuth,
 			InvalidHandshake,
 		},
 		network::{
@@ -65,6 +63,9 @@ impl fmt::Debug for Listener {
 }
 
 impl ProtocolHandler for Listener {
+	/// Invoked when a new incoming connection is established on the groups
+	/// protocol. This method performs the handshake process and routes the
+	/// connection to the appropriate group instance.
 	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
 		// wrap the connection in a Link that speaks the Groups protocol
 		let link = Link::<Groups>::accept_with_cancel(
@@ -83,23 +84,9 @@ impl ProtocolHandler for Listener {
 		let Some(group) = self.active.get(&start.group_id) else {
 			return Err(self.abort(link, GroupNotFound).await);
 		};
-
-		// ensure that we are not already connected to this peer in this group
-		let link = self.ensure_not_connected(&group, link).await?;
-
-		// verify the the proof of knowledge of the secret provided in the handshake
-		let link = self.validate_auth(group.value(), link, start).await?;
-
-		// complete the handshake by sending our own proof of knowledge of the
-		// secret
-		let link = self.complete_handshake(group.value(), link).await?;
-
 		// hand off the established link to the group instance for management,
 		// aborting if we are already connected to this peer in this group
-		match group.value().accept(link) {
-			Ok(()) => Ok(()),
-			Err((link, e)) => Err(self.abort(link, e).await),
-		}
+		group.value().accept(link, start).await
 	}
 }
 
@@ -169,92 +156,6 @@ impl Listener {
 		Ok(link)
 	}
 
-	/// Ensures that the initiating peer is not already connected to this node in
-	/// this group.
-	///
-	/// There is no predefined logic that decides which peer should initiate the
-	/// connection and which should accept it. The first peer that discovers the
-	/// other and initiates the connection will be accepted, while the other
-	/// peer's attempt will be rejected.
-	async fn ensure_not_connected(
-		&self,
-		group: &Group,
-		link: Link<Groups>,
-	) -> Result<Link<Groups>, AcceptError> {
-		if group.has_member(&link.remote_id()) {
-			tracing::trace!(
-				network = %self.local.network_id(),
-				peer = %Short(link.remote_id()),
-				group = %Short(group.id()),
-				"duplicate group connection attempt",
-			);
-
-			return Err(self.abort(link, AlreadyConnected).await);
-		}
-
-		Ok(link)
-	}
-
-	/// Validates the authentication proof of knowledge of the group secret that
-	/// is sent by the initiating peer during the handshake process.
-	async fn validate_auth(
-		&self,
-		group: &Group,
-		link: Link<Groups>,
-		start: HandshakeStart,
-	) -> Result<Link<Groups>, AcceptError> {
-		let expected_auth = group
-			.key()
-			.secret()
-			.derive(link.shared_random(start.group_id))
-			.derive(link.remote_id().as_bytes());
-
-		if start.auth != expected_auth {
-			tracing::warn!(
-				network = %self.local.network_id(),
-				peer = %Short(link.remote_id()),
-				group = %start.group_id,
-				"invalid group authentication attempt",
-			);
-
-			return Err(self.abort(link, InvalidAuth).await);
-		}
-
-		Ok(link)
-	}
-
-	/// After successfully validating the handshake from the initiating peer, the
-	/// accepting peer also sends its proof of knowledge of the group secret back
-	/// to the initiator and signals that a link has been successfully
-	/// established.
-	async fn complete_handshake(
-		&self,
-		group: &Group,
-		mut link: Link<Groups>,
-	) -> Result<Link<Groups>, AcceptError> {
-		let auth = group
-			.key()
-			.secret()
-			.derive(link.shared_random(group.id()))
-			.derive(self.local.id().as_bytes());
-
-		link
-			.send(&HandshakeEnd { auth })
-			.await
-			.inspect_err(|e| {
-				tracing::debug!(
-					network = %self.local.network_id(),
-					peer = %Short(link.remote_id()),
-					group = %Short(group.id()),
-					error = %e,
-					"failed to send handshake response",
-				);
-			})
-			.map_err(AcceptError::from_err)?;
-
-		Ok(link)
-	}
-
 	/// Terminates an incoming connection during the handshake process due to an
 	/// error. This closes the link with the remote peer using the provided
 	/// application-level close reason and returns an `AcceptError` that can be
@@ -282,7 +183,7 @@ impl Listener {
 
 /// This is the initial message sent by the peer initiating a connection on the
 /// groups protocol to another member of the group.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct HandshakeStart {
 	/// The unique identifier of the network that the group belongs to.
 	pub network_id: NetworkId,

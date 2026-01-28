@@ -53,7 +53,6 @@ impl Connection {
 	}
 
 	pub fn accept(
-		&self,
 		config: Arc<Config>,
 		link: Link<Groups>,
 		local: LocalNode,

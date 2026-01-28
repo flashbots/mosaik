@@ -65,6 +65,13 @@ macro_rules! make_close_reason {
 			}
 
 			#[automatically_derived]
+			impl PartialEq<$name> for &iroh::endpoint::ApplicationClose {
+				fn eq(&self, _: &$name) -> bool {
+					self.error_code == iroh::endpoint::VarInt::from($code as u32)
+				}
+			}
+
+			#[automatically_derived]
 			impl crate::network::error::CloseReason for $name { }
 		};
 	};

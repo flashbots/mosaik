@@ -68,7 +68,7 @@ impl Discovery {
 		self.catalog().local().clone()
 	}
 
-	/// Returns a snapshot of the current peers catalog.
+	/// Returns a the most recent snapshot of the discovered peers catalog.
 	pub fn catalog(&self) -> Catalog {
 		self.0.catalog.borrow().clone()
 	}

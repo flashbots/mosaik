@@ -7,7 +7,7 @@ async fn smoke() -> anyhow::Result<()> {
 	let n0 = Network::new(network_id).await?;
 	let n1 = Network::new(network_id).await?;
 
-	let key = GroupKey::with_secret("test-group-key-123".into());
+	let key = GroupKey::from_secret("test-group-key-123".into());
 	let g1 = n0.groups().join(key)?;
 
 	let store_id = StoreId::from("test-store-1");
