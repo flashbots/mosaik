@@ -23,7 +23,8 @@ async fn members_can_see_each_other() -> anyhow::Result<()> {
 	let g0_1 = n0.groups().join(key1.clone());
 	let g1_1 = n1.groups().join(key1.clone());
 
-	// group2: n2 and n3
+	// group2: n0, n2 and n3
+	let g0_2 = n0.groups().join(key2.clone());
 	let g2_2 = n2.groups().join(key2.clone());
 	let g3_2 = n3.groups().join(key2.clone());
 

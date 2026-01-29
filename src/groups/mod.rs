@@ -58,6 +58,7 @@ use {
 		UniqueId,
 		discovery::Discovery,
 		network::{self, LocalNode, ProtocolProvider, link::Protocol},
+		primitives::Short,
 	},
 	accept::Listener,
 	dashmap::{DashMap, Entry},
@@ -66,6 +67,7 @@ use {
 };
 
 mod accept;
+mod bond;
 mod config;
 mod error;
 mod group;
@@ -92,6 +94,12 @@ pub struct Groups {
 /// Public API
 impl Groups {
 	pub fn join(&self, group_key: GroupKey) -> Result<Group, Error> {
+		tracing::info!(
+			group = %Short(group_key.id()),
+			network = %self.local.network_id(),
+			"joining",
+		);
+
 		let id = *group_key.id();
 		match self.active.entry(id) {
 			Entry::Occupied(entry) => Ok(entry.get().clone()),
@@ -147,7 +155,7 @@ network::make_close_reason!(
 
 network::make_close_reason!(
 	/// The authentication proof provided in the handshake is invalid.
-	struct InvalidAuth, 30_405);
+	struct InvalidProof, 30_405);
 
 network::make_close_reason!(
 	/// A link between those two peers in the same group already exists.

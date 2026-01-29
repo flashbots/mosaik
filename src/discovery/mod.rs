@@ -90,18 +90,20 @@ impl Discovery {
 	/// Performs a full catalog synchronization with the specified peer.
 	///
 	/// This async method resolves when the sync is complete or fails.
-	pub async fn sync_with(
+	pub fn sync_with(
 		&self,
 		peer_addr: impl Into<EndpointAddr>,
-	) -> Result<(), Error> {
+	) -> impl Future<Output = Result<(), Error>> + Send + Sync + 'static {
 		let peer_addr = peer_addr.into();
-		let (tx, rx) = oneshot::channel();
-		self
-			.0
-			.commands
-			.send(WorkerCommand::SyncWith(peer_addr, tx))
-			.map_err(|_| Error::Cancelled)?;
-		rx.await.map_err(|_| Error::Cancelled)?
+		let commands_tx = self.0.commands.clone();
+
+		async move {
+			let (tx, rx) = oneshot::channel();
+			commands_tx
+				.send(WorkerCommand::SyncWith(peer_addr, tx))
+				.map_err(|_| Error::Cancelled)?;
+			rx.await.map_err(|_| Error::Cancelled)?
+		}
 	}
 
 	/// Inserts an unsigned [`PeerEntry`] into the local catalog.

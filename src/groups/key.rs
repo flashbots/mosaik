@@ -98,7 +98,7 @@ impl<'de> serde::Deserialize<'de> for GroupKey {
 	{
 		struct GroupKeyVisitor;
 
-		impl<'de> serde::de::Visitor<'de> for GroupKeyVisitor {
+		impl serde::de::Visitor<'_> for GroupKeyVisitor {
 			type Value = GroupKey;
 
 			fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {

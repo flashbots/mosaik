@@ -578,6 +578,12 @@ impl From<CloseError> for AcceptError {
 	}
 }
 
+impl From<ApplicationClose> for AcceptError {
+	fn from(val: ApplicationClose) -> Self {
+		AcceptError::Io(ConnectionError::ApplicationClosed(val).into())
+	}
+}
+
 impl From<ApplicationClose> for RecvError {
 	fn from(val: ApplicationClose) -> Self {
 		RecvError::Io(ReadError::ConnectionLost(
@@ -732,6 +738,15 @@ impl From<SendError> for LinkError {
 		match err {
 			SendError::Cancelled => LinkError::Cancelled,
 			error => LinkError::Write(error),
+		}
+	}
+}
+
+impl From<CloseError> for LinkError {
+	fn from(err: CloseError) -> Self {
+		match err {
+			CloseError::Cancelled => LinkError::Cancelled,
+			error => LinkError::Close(error),
 		}
 	}
 }

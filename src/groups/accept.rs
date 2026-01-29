@@ -2,6 +2,7 @@ use {
 	crate::{
 		NetworkId,
 		UniqueId,
+		discovery::{Discovery, PeerEntry},
 		groups::{
 			Config,
 			Group,
@@ -15,6 +16,7 @@ use {
 			CloseReason,
 			DifferentNetwork,
 			LocalNode,
+			UnknownPeer,
 			link::{Link, Protocol},
 		},
 		primitives::Short,
@@ -41,6 +43,7 @@ use {
 pub(super) struct Listener {
 	local: LocalNode,
 	config: Arc<Config>,
+	discovery: Discovery,
 	active: Arc<DashMap<GroupId, Group>>,
 }
 
@@ -49,6 +52,7 @@ impl Listener {
 	pub(super) fn new(groups: &Groups) -> Self {
 		Self {
 			local: groups.local.clone(),
+			discovery: groups.discovery.clone(),
 			config: Arc::clone(&groups.config),
 			active: Arc::clone(&groups.active),
 		}
@@ -67,6 +71,8 @@ impl ProtocolHandler for Listener {
 	/// protocol. This method performs the handshake process and routes the
 	/// connection to the appropriate group instance.
 	async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+		let peer_id = connection.remote_id();
+
 		// wrap the connection in a Link that speaks the Groups protocol
 		let link = Link::<Groups>::accept_with_cancel(
 			connection,
@@ -74,19 +80,33 @@ impl ProtocolHandler for Listener {
 		)
 		.await?;
 
+		// ensure that the remote peer is known in our discovery catalog.
+		let (link, peer) = self.ensure_known_peer(link).await?;
+
 		// wait for the initiating peer to send the handshake start message.
-		let (start, link) = self.wait_for_handshake(link).await?;
+		let (handshake, link) = self.wait_for_handshake(link).await?;
 
 		// ensure that the initiating peer is connecting to the same network
-		let link = self.ensure_same_network(link, &start).await?;
+		let link = self.ensure_same_network(link, &handshake).await?;
 
 		// look up the group instance for the requested group id
-		let Some(group) = self.active.get(&start.group_id) else {
+		let Some(group) = self.active.get(&handshake.group_id) else {
 			return Err(self.abort(link, GroupNotFound).await);
 		};
 		// hand off the established link to the group instance for management,
 		// aborting if we are already connected to this peer in this group
-		group.value().accept(link, start).await
+		group
+			.value()
+			.accept(link, peer, handshake)
+			.await
+			.inspect_err(|e| {
+				tracing::trace!(
+					network = %self.local.network_id(),
+					peer = %Short(peer_id),
+					error = %e,
+					"failed to accept group bond",
+				);
+			})
 	}
 }
 
@@ -156,6 +176,25 @@ impl Listener {
 		Ok(link)
 	}
 
+	/// Ensures that the remote peer is known in our discovery catalog. If the
+	/// peer is not known, the connection is aborted.
+	async fn ensure_known_peer(
+		&self,
+		link: Link<Groups>,
+	) -> Result<(Link<Groups>, PeerEntry), AcceptError> {
+		let Some(peer) = self.discovery.catalog().get(&link.remote_id()).cloned()
+		else {
+			tracing::trace!(
+				network = %self.local.network_id(),
+				peer = %Short(&link.remote_id()),
+				"rejecting unknown peer",
+			);
+			return Err(self.abort(link, UnknownPeer).await);
+		};
+
+		Ok((link, peer))
+	}
+
 	/// Terminates an incoming connection during the handshake process due to an
 	/// error. This closes the link with the remote peer using the provided
 	/// application-level close reason and returns an `AcceptError` that can be
@@ -193,7 +232,7 @@ pub struct HandshakeStart {
 
 	/// A proof of knowledge of the secret group key by hashing the secret with
 	/// the TLS-derived shared secret and the peer id.
-	pub auth: UniqueId,
+	pub proof: UniqueId,
 }
 
 /// This is the second message exchanged during the handshake process. The
@@ -204,5 +243,5 @@ pub struct HandshakeStart {
 pub struct HandshakeEnd {
 	/// A proof of knowledge of the secret group key by hashing the secret with
 	/// the TLS-derived shared secret and the peer id.
-	pub auth: UniqueId,
+	pub proof: UniqueId,
 }

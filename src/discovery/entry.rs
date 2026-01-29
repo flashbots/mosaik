@@ -519,11 +519,12 @@ impl fmt::Display for Short<&SignedPeerEntry> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
-			"SignedPeerEntry[#{}]({}, tags: {}, streams: {})",
+			"SignedPeerEntry[#{}]({}, tags: {}, streams: {}, groups: {})",
 			Short(self.0.update_version()),
 			Short(self.0.id()),
 			FmtIter::<Short<_>, _>::new(&self.0.tags),
 			FmtIter::<Short<_>, _>::new(&self.0.streams),
+			FmtIter::<Short<_>, _>::new(&self.0.groups),
 		)
 	}
 }

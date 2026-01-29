@@ -21,7 +21,7 @@
         }
       },
       "args": [
-        "streams::sync::replay_aggregates_smoke"
+        "groups::members_can_see_each_other"
       ],
       "env": {
         "TEST_TRACE": "on"

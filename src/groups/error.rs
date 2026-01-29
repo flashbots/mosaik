@@ -15,5 +15,5 @@ pub enum Error {
 	LinkError(#[from] LinkError),
 
 	#[error("An active bond already exists with this peer")]
-	AlreadyBonded(Link<Groups>),
+	AlreadyBonded(Box<Link<Groups>>),
 }

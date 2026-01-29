@@ -26,6 +26,7 @@ pub trait CloseReason:
 	+ Into<iroh::endpoint::ApplicationClose>
 	+ PartialEq<iroh::endpoint::ApplicationClose>
 	+ Clone
+	+ Sized
 	+ Send
 	+ Sync
 	+ 'static
