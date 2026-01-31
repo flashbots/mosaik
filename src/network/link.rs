@@ -20,15 +20,14 @@ use {
 		serde::{decode_from_std_read, encode_into_std_write},
 	},
 	bytes::{Buf, BufMut, BytesMut},
-	core::{fmt, marker::PhantomData},
+	core::{fmt, marker::PhantomData, time::Duration},
 	futures::{FutureExt, SinkExt, StreamExt},
 	iroh::{EndpointAddr, endpoint::*, protocol::AcceptError as IrohAcceptError},
 	n0_error::Meta,
 	serde::{Serialize, de::DeserializeOwned},
 	std::io,
-	tokio::io::{Join, join},
 	tokio_util::{
-		codec::{Framed, LengthDelimitedCodec},
+		codec::{FramedRead, FramedWrite, LengthDelimitedCodec},
 		sync::CancellationToken,
 	},
 };
@@ -69,12 +68,56 @@ pub trait Protocol {
 pub struct Link<P: Protocol> {
 	connection: Connection,
 	cancel: CancellationToken,
-	stream: Framed<Join<RecvStream, SendStream>, LengthDelimitedCodec>,
+	sender: FramedWrite<SendStream, LengthDelimitedCodec>,
+	receiver: FramedRead<RecvStream, LengthDelimitedCodec>,
 	_protocol: PhantomData<P>,
 }
 
 // Public API
 impl<P: Protocol> Link<P> {
+	/// Reconciles a sender and receiver into a bidirectional link.
+	pub fn join(sender: LinkSender<P>, receiver: LinkReceiver<P>) -> Self {
+		assert_eq!(
+			sender.connection.stable_id(),
+			receiver.connection.stable_id(),
+			"sender and receiver must belong to the same connection",
+		);
+
+		Self {
+			connection: sender.connection,
+			sender: sender.sender,
+			receiver: receiver.receiver,
+			cancel: sender.cancel,
+			_protocol: PhantomData,
+		}
+	}
+
+	/// Splits the link into a sender and receiver half.
+	pub fn split(self) -> (LinkSender<P>, LinkReceiver<P>) {
+		let Link {
+			connection,
+			sender,
+			receiver,
+			cancel,
+			..
+		} = self;
+
+		(
+			LinkSender {
+				connection: connection.clone(),
+				sender,
+				cancel: cancel.clone(),
+				_protocol: PhantomData,
+			},
+			LinkReceiver {
+				connection,
+				receiver,
+				cancel,
+				_protocol: PhantomData,
+			},
+		)
+	}
+
 	/// Accepts a new incoming connection, opens a bidirectional stream and
 	/// initializes message framing.
 	///
@@ -114,11 +157,13 @@ impl<P: Protocol> Link<P> {
 		};
 
 		let (tx, rx) = accept_result?;
-		let stream = Framed::new(join(rx, tx), LengthDelimitedCodec::new());
+		let sender = FramedWrite::new(tx, LengthDelimitedCodec::new());
+		let receiver = FramedRead::new(rx, LengthDelimitedCodec::new());
 
 		Ok(Self {
 			connection,
-			stream,
+			sender,
+			receiver,
 			cancel,
 			_protocol: PhantomData,
 		})
@@ -173,12 +218,13 @@ impl<P: Protocol> Link<P> {
 			}
 		};
 
-		let combined = join(rx, tx);
-		let stream = Framed::new(combined, LengthDelimitedCodec::new());
+		let sender = FramedWrite::new(tx, LengthDelimitedCodec::new());
+		let receiver = FramedRead::new(rx, LengthDelimitedCodec::new());
 
 		Ok(Self {
 			connection,
-			stream,
+			sender,
+			receiver,
 			cancel,
 			_protocol: PhantomData,
 		})
@@ -233,7 +279,8 @@ impl<P: Protocol> Link<P> {
 	pub async fn recv_with_size<D: DeserializeOwned>(
 		&mut self,
 	) -> Result<(D, usize), RecvError> {
-		let Some(frame) = self.cancel.run_until_cancelled(self.stream.next()).await
+		let Some(frame) =
+			self.cancel.run_until_cancelled(self.receiver.next()).await
 		else {
 			close_connection(&self.connection, Cancelled).await;
 			return Err(RecvError::Cancelled);
@@ -308,7 +355,7 @@ impl<P: Protocol> Link<P> {
 		bytes: Bytes,
 	) -> Result<usize, SendError> {
 		let msg_len = bytes.len();
-		let fut = self.stream.send(bytes);
+		let fut = self.sender.send(bytes);
 		let Some(send_result) = self.cancel.run_until_cancelled(fut).await else {
 			close_connection(&self.connection, Cancelled).await;
 			return Err(SendError::Cancelled);
@@ -345,8 +392,8 @@ impl<P: Protocol> Link<P> {
 
 		// flush any pending outgoing data before closing and receive any incoming
 		// close frames.
-		let _ = self.cancel.run_until_cancelled(self.stream.flush()).await;
-		let _ = self.cancel.run_until_cancelled(self.stream.close()).await;
+		let _ = self.cancel.run_until_cancelled(self.sender.flush()).await;
+		let _ = self.cancel.run_until_cancelled(self.sender.close()).await;
 
 		// await the link closure confirmation and return any error reason
 		// other than locally closed.
@@ -413,6 +460,12 @@ impl<P: Protocol> Link<P> {
 			.expect("exporting keying material should not fail for this buffer len");
 
 		UniqueId::from_bytes(shared_secret)
+	}
+
+	/// Returns the last measured round-trip time (RTT) of the underlying
+	/// connection.
+	pub fn rtt(&self) -> Duration {
+		self.connection.rtt()
 	}
 }
 
@@ -814,5 +867,126 @@ impl<P: Protocol> fmt::Display for Link<P> {
 			String::from_utf8_lossy(self.alpn()),
 			Short(self.remote_id())
 		)
+	}
+}
+
+pub struct LinkSender<P: Protocol> {
+	connection: Connection,
+	cancel: CancellationToken,
+	sender: FramedWrite<SendStream, LengthDelimitedCodec>,
+	_protocol: PhantomData<P>,
+}
+
+impl<P: Protocol> LinkSender<P> {
+	/// Sends a framed message over the link.
+	///
+	/// The message is serialized using bincode serialization and sent as a
+	/// length-delimited frame.
+	///
+	/// If the serialization fails, the link is closed with a [`UnexpectedClose`].
+	/// Returns the number of bytes sent on success.
+	pub async fn send<D: Serialize>(
+		&mut self,
+		datum: &D,
+	) -> Result<usize, SendError> {
+		let mut writer = BytesMut::new().writer();
+		if let Err(e) = encode_into_std_write(datum, &mut writer, standard()) {
+			close_connection(&self.connection, ProtocolViolation).await;
+			return Err(e.into());
+		}
+
+		// SAFETY: the bytes written into the writer are guaranteed to be
+		// well-formed bincode serialized `D`.
+		unsafe { self.send_raw(writer.into_inner().freeze()).await }
+	}
+
+	/// Sends raw bytes over the link without serialization.
+	///
+	/// It is the caller's responsibility to ensure that the bytes
+	/// are properly formatted according to the protocol's expectations.
+	///
+	/// This variant of `send` is unsafe because it is intended for advanced
+	/// use cases where the caller needs to optimize performance by avoiding
+	/// serialization overhead. Improper use may lead to protocol violations.
+	///
+	/// Returns the number of bytes sent on success.
+	pub async unsafe fn send_raw(
+		&mut self,
+		bytes: Bytes,
+	) -> Result<usize, SendError> {
+		let msg_len = bytes.len();
+		let fut = self.sender.send(bytes);
+		let Some(send_result) = self.cancel.run_until_cancelled(fut).await else {
+			close_connection(&self.connection, Cancelled).await;
+			return Err(SendError::Cancelled);
+		};
+
+		match send_result {
+			Ok(()) => Ok(msg_len),
+			Err(err) => match err.downcast::<WriteError>() {
+				Ok(io_err) => Err(SendError::Io(io_err)),
+				Err(other_err) => Err(SendError::Unknown(other_err)),
+			},
+		}
+	}
+}
+
+pub struct LinkReceiver<P: Protocol> {
+	connection: Connection,
+	cancel: CancellationToken,
+	receiver: FramedRead<RecvStream, LengthDelimitedCodec>,
+	_protocol: PhantomData<P>,
+}
+
+impl<P: Protocol> LinkReceiver<P> {
+	/// Receives the next framed message and deserializes it into the given
+	/// data type `D` using bincode deserialization.
+	pub async fn recv<D: DeserializeOwned>(&mut self) -> Result<D, RecvError> {
+		self.recv_with_size().await.map(|(d, _)| d)
+	}
+
+	/// Receives the next framed message and deserializes it into the given data
+	/// type `D`, returning a deserialized value along with the size of the
+	/// message in bytes.
+	pub async fn recv_with_size<D: DeserializeOwned>(
+		&mut self,
+	) -> Result<(D, usize), RecvError> {
+		let Some(frame) =
+			self.cancel.run_until_cancelled(self.receiver.next()).await
+		else {
+			close_connection(&self.connection, Cancelled).await;
+			return Err(RecvError::Cancelled);
+		};
+
+		let Some(read_result) = frame else {
+			let Some(reason) =
+				close_connection(&self.connection, UnexpectedClose).await
+			else {
+				return Err(RecvError::closed(UnexpectedClose));
+			};
+			return Err(reason.into());
+		};
+
+		let mut reader = match read_result {
+			Ok(bytes) => bytes.reader(),
+			Err(err) => match err.downcast::<ReadError>() {
+				Ok(read_err) => return Err(RecvError::Io(read_err)),
+				Err(other_err) => return Err(RecvError::Unknown(other_err)),
+			},
+		};
+
+		let bytes_len = reader.get_ref().len();
+
+		// deserialize the received bytes into the expected data type, if
+		// deserialization fails, close the connection with protocol violation
+		let decoded = match decode_from_std_read(&mut reader, standard()) {
+			Ok(datum) => datum,
+			Err(err) => {
+				close_connection(&self.connection, ProtocolViolation).await;
+				return Err(RecvError::Decode(err));
+			}
+		};
+
+		Ok((decoded, bytes_len))
 	}
 }

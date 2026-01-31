@@ -57,7 +57,7 @@ use {
 	crate::{
 		UniqueId,
 		discovery::Discovery,
-		network::{self, LocalNode, ProtocolProvider, link::Protocol},
+		network::{LocalNode, ProtocolProvider, link::Protocol},
 		primitives::Short,
 	},
 	accept::Listener,
@@ -72,12 +72,12 @@ mod config;
 mod error;
 mod group;
 mod key;
-mod status;
 
 pub use {
+	bond::Bond,
 	config::{Config, ConfigBuilder, ConfigBuilderError},
 	error::Error,
-	group::Group,
+	group::{Bonds, Group},
 	key::GroupKey,
 };
 
@@ -140,23 +140,3 @@ impl ProtocolProvider for Groups {
 		protocols.accept(Self::ALPN, Listener::new(self))
 	}
 }
-
-network::make_close_reason!(
-	/// An error occurred during the handshake receive or decode process.
-	struct InvalidHandshake, 30_400);
-
-network::make_close_reason!(
-	/// The group id specified in the handshake is not known to the accepting node.
-	struct GroupNotFound, 30_404);
-
-network::make_close_reason!(
-	/// The handshake process timed out while waiting for a message from the remote peer.
-	struct HandshakeTimeout, 30_408);
-
-network::make_close_reason!(
-	/// The authentication proof provided in the handshake is invalid.
-	struct InvalidProof, 30_405);
-
-network::make_close_reason!(
-	/// A link between those two peers in the same group already exists.
-	struct AlreadyBonded, 30_429);

@@ -1,20 +1,25 @@
 use {
-	super::{Bond, BondHandle, Error},
+	super::{Bond, BondWorker, Error},
 	crate::{
 		Groups,
-		discovery::PeerEntry,
+		discovery::SignedPeerEntry,
 		groups::{
-			InvalidProof,
 			accept::{HandshakeEnd, HandshakeStart},
+			bond::BondEvents,
+			error::InvalidProof,
 			group::GroupState,
 		},
-		network::{UnknownPeer, link::Link},
+		network::{
+			UnknownPeer,
+			link::{Link, RecvError},
+		},
 		primitives::Short,
 	},
 	std::sync::Arc,
+	tokio::time::timeout,
 };
 
-impl Bond {
+impl BondWorker {
 	/// Initiates the process of creating a new bond connection to a remote
 	/// peer in the group.
 	///
@@ -23,8 +28,8 @@ impl Bond {
 	/// already known in the discovery catalog.
 	pub async fn create(
 		group: Arc<GroupState>,
-		peer: PeerEntry,
-	) -> Result<BondHandle, Error> {
+		peer: SignedPeerEntry,
+	) -> Result<(Bond, BondEvents), Error> {
 		tracing::trace!(
 			network = %group.local.network_id(),
 			peer = %Short(peer.id()),
@@ -56,7 +61,23 @@ impl Bond {
 		// After sending our handshake with a proof of knowledge of the group
 		// secret, wait for the accepting peer to respond with its own proof of
 		// knowledge of the group secret.
-		let confirm = match link.recv::<HandshakeEnd>().await {
+		let Ok(recv_result) = timeout(
+			group.config.handshake_timeout, //
+			link.recv::<HandshakeEnd>(),
+		)
+		.await
+		else {
+			tracing::debug!(
+				network = %group.local.network_id(),
+				peer = %Short(peer.id()),
+				group = %Short(group.key.id()),
+				"handshake timeout waiting for bond confirmation",
+			);
+
+			return Err(Error::Link(RecvError::Cancelled.into()));
+		};
+
+		let confirm = match recv_result {
 			Ok(resp) => resp,
 			Err(e) => match e.close_reason() {
 				// the remote peer closed the link during handshake because the local
@@ -78,7 +99,19 @@ impl Bond {
 				// schemes and most likely indicates an incompatible version of the peer
 				// or a malicious actor.
 				Some(reason) if reason == InvalidProof => {
-					todo!()
+					tracing::warn!(
+						network = %group.local.network_id(),
+						peer = %Short(peer.id()),
+						group = %Short(group.key.id()),
+						"remote peer rejected bond handshake due to invalid proof",
+					);
+
+					link
+						.close(InvalidProof)
+						.await
+						.map_err(|e| Error::Link(e.into()))?;
+
+					return Err(Error::InvalidGroupKeyProof);
 				}
 				// Bonding failed for some other reason.
 				_ => return Err(Error::Link(e.into())),
@@ -98,10 +131,10 @@ impl Bond {
 				.close(InvalidProof)
 				.await
 				.map_err(|e| Error::Link(e.into()))?;
-			return Err(Error::InvalidProof);
+			return Err(Error::InvalidGroupKeyProof);
 		}
 
-		Ok(Bond::spawn(group, peer, link))
+		Ok(BondWorker::spawn(group, peer, link))
 	}
 
 	/// Accepts an incoming bond connection for this group.
@@ -119,9 +152,9 @@ impl Bond {
 	pub async fn accept(
 		group: Arc<GroupState>,
 		link: Link<Groups>,
-		peer: PeerEntry,
+		peer: SignedPeerEntry,
 		handshake: HandshakeStart,
-	) -> Result<BondHandle, Error> {
+	) -> Result<(Bond, BondEvents), Error> {
 		let mut link = link;
 
 		// verify the remote peer's proof of knowledge of the group secret
@@ -138,7 +171,7 @@ impl Bond {
 				.await
 				.map_err(|e| Error::Link(e.into()))?;
 
-			return Err(Error::InvalidProof);
+			return Err(Error::InvalidGroupKeyProof);
 		}
 
 		// After verifying the remote peer's proof of knowledge of the group secret,
@@ -147,6 +180,6 @@ impl Bond {
 		let resp = HandshakeEnd { proof };
 		link.send(&resp).await.map_err(|e| Error::Link(e.into()))?;
 
-		Ok(Bond::spawn(group, peer, link))
+		Ok(BondWorker::spawn(group, peer, link))
 	}
 }

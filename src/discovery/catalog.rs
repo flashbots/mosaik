@@ -103,13 +103,13 @@ impl Catalog {
 
 	/// Returns an iterator over all peer entries that carry a valid signature in
 	/// the catalog excluding the local peer entry.
-	pub fn signed_peers(&self) -> impl DoubleEndedIterator<Item = &PeerEntry> {
+	pub fn signed_peers(
+		&self,
+	) -> impl DoubleEndedIterator<Item = &SignedPeerEntry> {
 		let last_valid = Utc::now() - self.config.purge_after;
-		self.signed.values().map(|signed| signed.as_ref()).filter(
-			move |p: &&PeerEntry| {
-				*p.id() != self.local_id && p.updated_at() >= last_valid
-			},
-		)
+		self.signed.values().filter(move |p: &&SignedPeerEntry| {
+			*p.id() != self.local_id && p.updated_at() >= last_valid
+		})
 	}
 
 	/// Returns an iterator over all peer entries that do not carry a signature in

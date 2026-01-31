@@ -30,6 +30,7 @@ pub use config::{Config, ConfigBuilder, ConfigBuilderError};
 use iroh::protocol::RouterBuilder;
 
 #[derive(Clone)]
+#[expect(dead_code)]
 pub struct Stores(Arc<Handle>);
 
 impl Stores {

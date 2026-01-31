@@ -17,23 +17,25 @@ impl<T> Default for UnboundedChannel<T> {
 
 impl<T> UnboundedChannel<T> {
 	#[allow(dead_code)]
-	pub(crate) const fn sender(&self) -> &mpsc::UnboundedSender<T> {
+	pub const fn sender(&self) -> &mpsc::UnboundedSender<T> {
 		&self.sender
 	}
 
 	#[allow(dead_code)]
-	pub(crate) const fn receiver(&mut self) -> &mut mpsc::UnboundedReceiver<T> {
+	pub const fn receiver(&mut self) -> &mut mpsc::UnboundedReceiver<T> {
 		&mut self.receiver
 	}
 
-	pub(crate) fn send(&self, message: T) {
-		self
-			.sender
-			.send(message)
-			.expect("Receiver lifetime bound to sender lifetime");
+	pub fn send(&self, message: T) {
+		let _ = self.sender.send(message);
 	}
 
-	pub(crate) async fn recv(&mut self) -> Option<T> {
+	pub async fn recv(&mut self) -> Option<T> {
 		self.receiver.recv().await
+	}
+
+	/// Checks if the receiver has no messages pending.
+	pub fn is_empty(&self) -> bool {
+		self.receiver.is_empty()
 	}
 }

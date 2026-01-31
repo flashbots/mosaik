@@ -2,7 +2,11 @@
 
 use {
 	crate::{
-		discovery::{announce::Announce, worker::WorkerCommand},
+		discovery::{
+			announce::Announce,
+			catalog::UpsertResult,
+			worker::WorkerCommand,
+		},
 		network::{LocalNode, PeerId, link::Protocol},
 		primitives::IntoIterOrSingle,
 	},
@@ -104,6 +108,20 @@ impl Discovery {
 				.map_err(|_| Error::Cancelled)?;
 			rx.await.map_err(|_| Error::Cancelled)?
 		}
+	}
+
+	/// Feeds the discovery system with a signed peer entry outside of the normal
+	/// gossip and catalog sync mechanisms. If the entry is new or updated, it is
+	/// inserted into the local catalog.
+	///
+	/// Returns `true` if the entry was added or updated.
+	pub fn feed(&self, entry: SignedPeerEntry) -> bool {
+		self.0.catalog.send_if_modified(|catalog| {
+			matches!(
+				catalog.upsert_signed(entry),
+				UpsertResult::New(_) | UpsertResult::Updated(_)
+			)
+		})
 	}
 
 	/// Inserts an unsigned [`PeerEntry`] into the local catalog.

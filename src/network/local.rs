@@ -1,6 +1,7 @@
 use {
 	super::link::Link,
 	crate::{
+		PeerId,
 		SecretKey,
 		network::{
 			NetworkId,
@@ -52,7 +53,7 @@ impl LocalNode {
 
 	/// Returns the globally unique identifier of the local node.
 	/// This is also the public key derived from the node's secret key.
-	pub fn id(&self) -> iroh::EndpointId {
+	pub fn id(&self) -> PeerId {
 		self.0.endpoint.id()
 	}
 

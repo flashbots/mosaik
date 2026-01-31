@@ -2,15 +2,13 @@ use {
 	crate::{
 		NetworkId,
 		UniqueId,
-		discovery::{Discovery, PeerEntry},
+		discovery::{Discovery, SignedPeerEntry},
 		groups::{
 			Config,
 			Group,
 			GroupId,
-			GroupNotFound,
 			Groups,
-			HandshakeTimeout,
-			InvalidHandshake,
+			error::{GroupNotFound, InvalidHandshake, Timeout},
 		},
 		network::{
 			CloseReason,
@@ -149,7 +147,7 @@ impl Listener {
 					peer = %Short(link.remote_id()),
 					"group handshake timed out",
 				);
-				Err(self.abort(link, HandshakeTimeout).await)
+				Err(self.abort(link, Timeout).await)
 			}
 		}
 	}
@@ -181,8 +179,12 @@ impl Listener {
 	async fn ensure_known_peer(
 		&self,
 		link: Link<Groups>,
-	) -> Result<(Link<Groups>, PeerEntry), AcceptError> {
-		let Some(peer) = self.discovery.catalog().get(&link.remote_id()).cloned()
+	) -> Result<(Link<Groups>, SignedPeerEntry), AcceptError> {
+		let Some(peer) = self
+			.discovery
+			.catalog()
+			.get_signed(&link.remote_id())
+			.cloned()
 		else {
 			tracing::trace!(
 				network = %self.local.network_id(),

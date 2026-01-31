@@ -72,12 +72,6 @@ impl fmt::Display for GroupKey {
 	}
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-	#[error("Invalid group key provided")]
-	InvalidSecretKey,
-}
-
 impl serde::Serialize for GroupKey {
 	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
 	where

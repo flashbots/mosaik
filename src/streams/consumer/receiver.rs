@@ -159,10 +159,10 @@ impl<D: Datum> Receiver<D> {
 				// Used to break out of the loop when an unrecoverable error occurs.
 				_ = conn_state.wait_for(|s| *s == State::Terminated) => {
 					tracing::debug!(
-							stream_id = %Short(self.config.stream_id),
-							producer_id = %Short(&self.peer.id()),
-							"stream subscription terminated",
-						);
+						stream_id = %Short(self.config.stream_id),
+						producer_id = %Short(&self.peer.id()),
+						"stream subscription terminated",
+					);
 					break;
 				}
 			}

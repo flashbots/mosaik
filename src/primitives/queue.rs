@@ -32,8 +32,16 @@ impl<T: Send + Sync + 'static> AsyncWorkQueue<T> {
 		Self(inner)
 	}
 
+	/// Checks if the work queue has any pending futures.
+	#[allow(dead_code)]
+	pub fn is_empty(&self) -> bool {
+		// Internally the work queue always has at
+		// least one future (the forever pending one).
+		self.0.len() == 1
+	}
+
 	/// Adds a new future to the work queue.
-	pub fn enqueue<F>(&mut self, fut: F)
+	pub fn enqueue<F>(&self, fut: F)
 	where
 		F: Future<Output = T> + Send + Sync + 'static,
 	{
