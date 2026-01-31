@@ -1,5 +1,6 @@
 use {
-	crate::utils::discover_all,
+	crate::utils::{discover_all, timeout_s},
+	futures::future::join_all,
 	mosaik::{primitives::Short, *},
 };
 
@@ -35,25 +36,54 @@ async fn members_can_see_each_other() -> anyhow::Result<()> {
 	let g3_1 = n1.groups().join(key3.clone())?;
 	let g3_2 = n2.groups().join(key3.clone())?;
 
-	loop {
-		tokio::select! {
-			() = observe_group_bonds(&g1_0, &n0, "g1_0") => {}
-			() = observe_group_bonds(&g1_1, &n1, "g1_1") => {}
+	join_all([
+		timeout_s(10, ensure_group_formed(&g1_0, &n0, &[&n1], "g1_0")),
+		timeout_s(10, ensure_group_formed(&g1_1, &n1, &[&n0], "g1_1")),
+		timeout_s(10, ensure_group_formed(&g2_0, &n0, &[&n2, &n3], "g2_0")),
+		timeout_s(10, ensure_group_formed(&g2_2, &n2, &[&n0, &n3], "g2_2")),
+		timeout_s(10, ensure_group_formed(&g2_3, &n3, &[&n0, &n2], "g2_3")),
+		timeout_s(10, ensure_group_formed(&g3_1, &n1, &[&n2], "g3_1")),
+		timeout_s(10, ensure_group_formed(&g3_2, &n2, &[&n1], "g3_2")),
+	])
+	.await
+	.into_iter()
+	.collect::<Result<Vec<_>, _>>()
+	.expect("not all groups formed successfully");
 
-			() = observe_group_bonds(&g2_0, &n0, "g2_0") => {}
-			() = observe_group_bonds(&g2_2, &n2, "g2_2") => {}
-			() = observe_group_bonds(&g2_3, &n3, "g2_3") => {}
-
-			() = observe_group_bonds(&g3_1, &n1, "g3_1") => {}
-			() = observe_group_bonds(&g3_2, &n2, "g3_2") => {},
-		};
-	}
+	Ok(())
 }
 
-async fn observe_group_bonds(group: &Group, net: &Network, name: &str) {
-	group.bonds().changed().await;
-	tracing::info!("{name} bonds changed (local = {})", Short(net.local().id()));
-	for bond in group.bonds().iter() {
-		tracing::info!("- {name} bond: {bond}");
+async fn ensure_group_formed(
+	group: &Group,
+	local: &Network,
+	peers: &[&Network],
+	name: &str,
+) {
+	loop {
+		let bonds = group.bonds();
+
+		if bonds.is_empty() {
+			group.bonds().changed().await;
+		}
+
+		tracing::info!(
+			"{name} bonds changed (local = {})",
+			Short(local.local().id())
+		);
+
+		for bond in group.bonds().iter() {
+			tracing::info!("- {name} bond with: {}", Short(bond.peer().id()));
+		}
+		if peers.iter().all(|p| {
+			group
+				.bonds()
+				.iter()
+				.any(|b| *b.peer().id() == p.local().id())
+		}) {
+			tracing::info!("{name} group fully formed");
+			break;
+		}
+
+		group.bonds().changed().await;
 	}
 }
