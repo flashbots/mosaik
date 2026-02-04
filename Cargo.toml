@@ -128,6 +128,7 @@ backoff = { version = "0.4", features = ["futures", "tokio"] }
 humansize = "2.0.0"
 humantime = "2.3"
 fjall = "3.0"
+itertools = "0.14"
 
 # CLI only dependencies
 clap = { workspace = true, optional = true }

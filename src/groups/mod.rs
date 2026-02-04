@@ -69,9 +69,12 @@ use {
 mod accept;
 mod bond;
 mod config;
+mod consensus;
 mod error;
 mod group;
 mod key;
+mod log;
+mod wire;
 
 pub use {
 	bond::Bond,

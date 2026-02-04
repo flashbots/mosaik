@@ -6253,6 +6253,7 @@ dependencies = [
  "im",
  "iroh",
  "iroh-gossip",
+ "itertools 0.14.0",
  "n0-error",
  "parking_lot 0.12.5",
  "rand 0.9.2",

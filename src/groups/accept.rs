@@ -1,7 +1,5 @@
 use {
 	crate::{
-		NetworkId,
-		UniqueId,
 		discovery::{Discovery, SignedPeerEntry},
 		groups::{
 			Config,
@@ -9,6 +7,7 @@ use {
 			GroupId,
 			Groups,
 			error::{GroupNotFound, InvalidHandshake, Timeout},
+			wire::HandshakeStart,
 		},
 		network::{
 			CloseReason,
@@ -25,7 +24,6 @@ use {
 		endpoint::{ApplicationClose, Connection},
 		protocol::{AcceptError, ProtocolHandler},
 	},
-	serde::{Deserialize, Serialize},
 	std::sync::Arc,
 	tokio::time::timeout,
 };
@@ -220,30 +218,4 @@ impl Listener {
 
 		AcceptError::from_err(reason)
 	}
-}
-
-/// This is the initial message sent by the peer initiating a connection on the
-/// groups protocol to another member of the group.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct HandshakeStart {
-	/// The unique identifier of the network that the group belongs to.
-	pub network_id: NetworkId,
-
-	/// The unique identifier of the group that is derived from the group key.
-	pub group_id: GroupId,
-
-	/// A proof of knowledge of the secret group key by hashing the secret with
-	/// the TLS-derived shared secret and the peer id.
-	pub proof: UniqueId,
-}
-
-/// This is the second message exchanged during the handshake process. The
-/// accepting node responds to the initiator's challenge with its own nonce and
-/// a response to the initiator's challenge, by hashing the secret with the
-/// initiator's nonce.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HandshakeEnd {
-	/// A proof of knowledge of the secret group key by hashing the secret with
-	/// the TLS-derived shared secret and the peer id.
-	pub proof: UniqueId,
 }

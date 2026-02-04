@@ -8,8 +8,8 @@ use {
 };
 
 /// Configuration options for the streams subsystem.
-#[derive(Builder)]
-#[builder(pattern = "owned", setter(prefix = "with"))]
+#[derive(Builder, Clone)]
+#[builder(pattern = "owned", setter(prefix = "with"), derive(Clone))]
 #[builder_struct_attr(doc(hidden))]
 pub struct Config {
 	/// The backoff policy for retrying stream subscription connections on

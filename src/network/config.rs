@@ -19,7 +19,7 @@ use {
 };
 
 /// Configuration options for the discovery subsystem.
-#[derive(Debug, Builder)]
+#[derive(Debug, Clone, Builder)]
 #[builder(
 	pattern = "owned",
 	name = NetworkBuilder,
@@ -29,54 +29,54 @@ use {
 pub struct NetworkConfig {
 	/// Creates a new network builder with the given network ID.
 	#[builder(setter(into))]
-	network_id: NetworkId,
+	pub network_id: NetworkId,
 
 	/// Configures the use of relay servers for the network instance.
 	/// This affects the ability to traverse NATs and firewalls.
 	#[builder(default = "iroh::RelayMode::Default")]
-	relay_mode: iroh::RelayMode,
+	pub relay_mode: iroh::RelayMode,
 
 	/// Enables mDNS discovery for local network peer discovery.
 	#[builder(default = "false")]
-	mdns_discovery: bool,
+	pub mdns_discovery: bool,
 
 	/// Sets the local address for the network instance.
 	/// This can be called multiple times to bind to multiple addresses.
 	///
 	/// By default, the network will bind to all interfaces.
 	#[builder(setter(into), default = "BTreeSet::new()")]
-	addresses: BTreeSet<SocketAddr>,
+	pub addresses: BTreeSet<SocketAddr>,
 
 	/// Sets the secret key for the network instance.
 	///
 	/// This key is used to derive the node's identity, manually specifying it
 	/// allows for deterministic identities across restarts.
 	#[builder(setter(into), default = "SecretKey::generate(&mut rand::rng())")]
-	secret_key: SecretKey,
+	pub secret_key: SecretKey,
 
 	/// Configuration options for the discovery subsystem.
 	///
 	/// See [`discovery::Config`] for details.
 	#[builder(default = "discovery::Config::builder()")]
-	discovery: discovery::ConfigBuilder,
+	pub discovery: discovery::ConfigBuilder,
 
 	/// Configuration options for the streams subsystem.
 	///
 	/// See [`streams::Config`] for details.
 	#[builder(default = "streams::Config::builder()")]
-	streams: streams::ConfigBuilder,
+	pub streams: streams::ConfigBuilder,
 
 	/// Configuration options for the kv-stores subsystem.
 	///
 	/// See [`store::Config`] for details.
 	#[builder(default = "store::Config::builder()")]
-	stores: store::ConfigBuilder,
+	pub stores: store::ConfigBuilder,
 
 	/// Configuration options for the groups subsystem.
 	///
 	/// See [`groups::Config`] for details.
 	#[builder(default = "groups::Config::builder()")]
-	groups: groups::ConfigBuilder,
+	pub groups: groups::ConfigBuilder,
 }
 
 /// Public API

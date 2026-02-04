@@ -71,6 +71,16 @@ impl PeerEntryVersion {
 	pub fn updated_at(&self) -> DateTime<Utc> {
 		DateTime::<Utc>::from_timestamp_millis(self.1).unwrap_or_default()
 	}
+
+	/// Returns the self-declared startup time of the peer.
+	///
+	/// This value is not very reliable as peers may lie about their
+	/// startup time, but in some contexts such as trusted groups that have
+	/// trust assumptions about each other it may be used to order peers by
+	/// their uptime.
+	pub fn started_at(&self) -> DateTime<Utc> {
+		DateTime::<Utc>::from_timestamp_millis(self.0).unwrap_or_default()
+	}
 }
 
 /// Stores information about a peer in the network.

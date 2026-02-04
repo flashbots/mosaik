@@ -8,9 +8,10 @@ use {
 		groups::{
 			Config,
 			GroupId,
-			accept::HandshakeStart,
-			bond::{Bond, BondEvent, BondWorker, WireMessage},
+			bond::{Bond, BondEvent, BondWorker},
+			consensus::Consensus,
 			error::AlreadyBonded,
+			wire::{BondMessage, HandshakeStart},
 		},
 		network::{LocalNode, link::Link},
 		primitives::{AsyncWorkQueue, Short},
@@ -46,6 +47,10 @@ use {
 ///
 /// - Any changes to the local node's `PeerEntry` is immediately broadcasted to
 ///   all active bonds in the group outside of the discovery subsystem.
+///
+/// - When new peers form bonds with the local node, all existing bonded peers
+///   in the group are notified of the new bond via a `BondFormed` message, that
+///   will trigger them to create bonds to the new peer as well.
 #[derive(Clone)]
 pub struct Group(Arc<GroupState>);
 
@@ -54,6 +59,11 @@ impl Group {
 	/// group key.
 	pub fn id(&self) -> &GroupId {
 		self.key().id()
+	}
+
+	/// Returns the group configuration.
+	pub fn config(&self) -> &Config {
+		&self.0.config
 	}
 
 	/// Returns the group key associated with this group.
@@ -69,10 +79,17 @@ impl Group {
 		self.0.local.network_id()
 	}
 
-	/// Returns a watch receiver that can be used to observe changes to the
-	/// currently active bonds in the group.
-	pub fn bonds(&self) -> Bonds {
-		self.0.active.clone()
+	/// Returns the list of all active bonds in this group.
+	///
+	/// This includes bonds that are in the process of being established or
+	/// are not members of the group consensus yet.
+	pub fn bonds(&self) -> &Bonds {
+		&self.0.bonds
+	}
+
+	/// The current leader of the group if known.
+	pub fn leader(&self) -> Option<PeerId> {
+		todo!("expose current leader of the group if known")
 	}
 }
 
@@ -126,17 +143,21 @@ pub(super) struct GroupState {
 	/// group when they are discovered and bonds need to be created.
 	pub local: LocalNode,
 
-	/// Channel for sending commands to the worker loop.
-	pub commands_tx: UnboundedSender<Command>,
-
-	/// List of all active bonds in this group. Each bond represents a direct
-	/// connection to another peer in the group. Bonds that are in the process of
-	/// being established or are disabled are also tracked here.
-	pub active: Bonds,
-
 	/// A reference to the discovery service for peer discovery and peers
 	/// catalog.
 	pub discovery: Discovery,
+
+	/// List of all active bonds in this group. Each bond represents a direct
+	/// connection to another peer in the group. Bonds that are in the process of
+	/// being established are also tracked here.
+	///
+	/// We always want to have this list in sync with `members`, so that we
+	/// maintain bonds to all current members of the group. Any divergence
+	/// between these two structures should be temporary and resolved quickly.
+	pub bonds: Bonds,
+
+	/// Channel for sending commands to the worker loop.
+	pub commands_tx: UnboundedSender<Command>,
 
 	/// Cancellation token that terminates the worker loop for this group and all
 	/// active bonds associated with it.
@@ -176,6 +197,15 @@ impl GroupState {
 		result_rx.await.map_err(AcceptError::from_err)?
 	}
 
+	/// Initiates the process of forming a bond connection with the specified
+	/// peer.
+	pub(super) fn bond_with(&self, peer: SignedPeerEntry) {
+		let command = Command::Connect(peer);
+
+		// handoff the connect process to the background worker loop
+		let _ = self.commands_tx.send(command);
+	}
+
 	/// Sends an external command to the worker loop managing this group.
 	pub(super) fn send_command(&self, command: Command) {
 		let _ = self.commands_tx.send(command);
@@ -195,6 +225,9 @@ pub(in crate::groups) enum Command {
 		oneshot::Sender<Result<(), AcceptError>>,
 	),
 
+	/// Attempts to create a new bond connection to the specified peer.
+	Connect(SignedPeerEntry),
+
 	/// When a bond is created, its event receiver is sent to the worker loop
 	SubscribeToBond(UnboundedReceiver<BondEvent>, PeerId),
 
@@ -209,6 +242,10 @@ pub(in crate::groups) enum Command {
 struct WorkerLoop {
 	/// The internal shared state of the group instance.
 	state: Arc<GroupState>,
+
+	/// The Raft consensus state machine managing leadership and elections in
+	/// this group.
+	pub consensus: Consensus,
 
 	/// Aggregated stream of all events emitted by active bonds in the group.
 	events: BondEventsStream,
@@ -228,17 +265,15 @@ struct WorkerLoop {
 
 impl WorkerLoop {
 	pub fn spawn(groups: &Groups, key: GroupKey) -> Arc<GroupState> {
-		let active = Bonds::default();
-		let cancel = groups.local.termination().child_token();
 		let work_queue = AsyncWorkQueue::new();
-
+		let cancel = groups.local.termination().child_token();
 		let (commands_tx, commands_rx) = unbounded_channel();
 
 		let state = Arc::new(GroupState {
 			key,
 			cancel,
-			active,
 			commands_tx,
+			bonds: Bonds::default(),
 			local: groups.local.clone(),
 			config: Arc::clone(&groups.config),
 			discovery: groups.discovery.clone(),
@@ -249,6 +284,7 @@ impl WorkerLoop {
 			work_queue,
 			state: Arc::clone(&state),
 			events: SelectAll::new(),
+			consensus: Consensus::new(Arc::clone(&state)),
 			latest_local: groups.discovery.me().update_version(),
 		};
 
@@ -269,6 +305,10 @@ impl WorkerLoop {
 				() = self.state.cancel.cancelled() => {
 					self.on_terminated();
 					break;
+				}
+
+				() = self.consensus.tick() => {
+					// drive the consensus state machine
 				}
 
 				// polls pending async work tasks and drives their execution
@@ -320,7 +360,7 @@ impl WorkerLoop {
 			// our local peer entry has been updated, broadcast the changes
 			// to all active bonds in the group.
 			self.latest_local = me.update_version();
-			self.broadcast(&WireMessage::PeerEntryUpdate(Box::new(me)));
+			self.broadcast(&BondMessage::PeerEntryUpdate(Box::new(me)));
 		}
 	}
 
@@ -330,6 +370,10 @@ impl WorkerLoop {
 			// Begins the process of accepting an incoming connection for this
 			Command::Accept(link, peer, handshake, result_tx) => {
 				self.accept_bond(link, peer, handshake, result_tx);
+			}
+			// Attempts to create a new bond connection to the specified peer.
+			Command::Connect(peer_entry) => {
+				self.create_bond(peer_entry);
 			}
 			// Subscribes to bond events from a newly created bond
 			Command::SubscribeToBond(events_rx, peer_id) => {
@@ -347,18 +391,18 @@ impl WorkerLoop {
 	}
 
 	/// Broadcasts a wire message to all active bonds in the group.
-	fn broadcast(&self, message: &WireMessage) {
-		for bond in self.state.active.iter() {
+	fn broadcast(&self, message: &BondMessage) {
+		for bond in self.state.bonds.iter() {
 			bond.send(message.clone());
 		}
 	}
 
 	/// Handles bond events from active bonds in the group.
-	fn on_bond_event(&self, event: BondEvent, peer_id: PeerId) {
+	fn on_bond_event(&mut self, event: BondEvent, peer_id: PeerId) {
 		match event {
 			BondEvent::Terminated(reason) => {
 				// remove the bond from the active list
-				self.state.active.update_with(|active| {
+				self.state.bonds.update_with(|active| {
 					if active.remove(&peer_id).is_some() && reason != AlreadyBonded {
 						tracing::debug!(
 							group = %Short(self.state.key.id()),
@@ -370,8 +414,39 @@ impl WorkerLoop {
 					}
 				});
 			}
-			BondEvent::Connected => {}
+
+			BondEvent::Connected => {
+				self.on_bond_formed(peer_id);
+			}
+
+			// a connected peer has sent us a raft message
+			BondEvent::ConsensusMessage(message) => {
+				self.consensus.accept_message(message, peer_id);
+			}
 		}
+	}
+
+	fn on_bond_formed(&self, peer_id: PeerId) {
+		tracing::debug!(
+			peer = %Short(peer_id),
+			group = %Short(self.state.key.id()),
+			network = %self.state.local.network_id(),
+			"bond formed",
+		);
+
+		let catalog = self.state.discovery.catalog();
+		let Some(peer_entry) = catalog.get_signed(&peer_id).cloned() else {
+			tracing::warn!(
+				network = %self.state.local.network_id(),
+				peer = %Short(peer_id),
+				group = %Short(self.state.key.id()),
+				"peer entry not found in catalog after bond formed",
+			);
+			return;
+		};
+
+		// Notify all bonded peers that a new bond has been formed with this peer.
+		self.broadcast(&BondMessage::BondFormed(Box::new(peer_entry)));
 	}
 
 	/// Initiates the process of creating a new bond connection to a remote
@@ -381,7 +456,7 @@ impl WorkerLoop {
 	/// the discovery catalog. This method is called only for peers that are
 	/// already known in the discovery catalog.
 	fn create_bond(&self, peer: SignedPeerEntry) {
-		if self.state.active.contains_peer(peer.id()) {
+		if self.state.bonds.contains_peer(peer.id()) {
 			// there's already an active bond to this peer
 			return;
 		}
@@ -392,7 +467,7 @@ impl WorkerLoop {
 		let fut = async move {
 			match BondWorker::create(Arc::clone(&state), peer).await {
 				Ok((handle, events)) => {
-					state.active.update_with(|active| {
+					state.bonds.update_with(|active| {
 						match active.entry(peer_id) {
 							Entry::Vacant(place) => {
 								// keep track of the bond handle to control it
@@ -447,7 +522,7 @@ impl WorkerLoop {
 		let peer_id = link.remote_id();
 		assert_eq!(peer.id(), &peer_id);
 
-		if self.state.active.contains_peer(&peer_id) {
+		if self.state.bonds.contains_peer(&peer_id) {
 			// there's already an active bond to this peer
 			tokio::spawn(link.close(AlreadyBonded));
 			let _ = result_tx.send(Err(AcceptError::from_err(AlreadyBonded)));
@@ -459,7 +534,7 @@ impl WorkerLoop {
 			match BondWorker::accept(Arc::clone(&state), link, peer, handshake).await
 			{
 				Ok((handle, events)) => {
-					state.active.update_with(|active| {
+					state.bonds.update_with(|active| {
 						match active.entry(peer_id) {
 							Entry::Vacant(place) => {
 								// keep track of the bond handle to control it
@@ -516,7 +591,7 @@ type BondEventsStream = SelectAll<
 ///
 /// This type allows observing changes to the set of active bonds.
 #[derive(Clone)]
-pub struct Bonds(watch::Sender<im::OrdMap<PeerId, Bond>>);
+pub struct Bonds(pub(super) watch::Sender<im::OrdMap<PeerId, Bond>>);
 
 /// Public API
 impl Bonds {
@@ -546,6 +621,11 @@ impl Bonds {
 	/// bonds in the group.
 	pub async fn changed(&self) {
 		let _ = self.0.subscribe().changed().await;
+	}
+
+	/// Returns the bond to the specified peer if it exists.
+	pub fn get(&self, peer_id: &PeerId) -> Option<Bond> {
+		self.0.borrow().get(peer_id).cloned()
 	}
 }
 
