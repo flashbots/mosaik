@@ -44,6 +44,14 @@ impl Role {
 		}
 	}
 
+	pub fn leader(&self, local_id: PeerId) -> Option<PeerId> {
+		match self {
+			Role::Follower { leader, .. } => *leader,
+			Role::Leader { .. } => Some(local_id),
+			Role::Candidate { .. } => None,
+		}
+	}
+
 	pub fn is_leader(&self) -> bool {
 		matches!(self, Role::Leader { .. })
 	}
@@ -115,6 +123,7 @@ impl Elections {
 }
 
 pub struct Consensus {
+	/// The group state that this consensus instance is managing.
 	group: Arc<GroupState>,
 
 	/// The current role of this node in the Raft consensus algorithm.
@@ -134,6 +143,9 @@ pub struct Consensus {
 	/// The last time we have sent an `AppendEntries` (or noop heartbeat) message
 	/// to all followers.
 	last_append_at: Instant,
+
+	/// `PeerId` of the local node.
+	local_id: PeerId,
 }
 
 impl Consensus {
@@ -144,10 +156,12 @@ impl Consensus {
 
 		let log = Log::new();
 		let term = log.term();
+		let local_id = group.local.id();
 
 		Self {
 			group,
 			log,
+			local_id,
 			voted_for: None,
 			last_append_at: Instant::now(),
 			next_election_at: Instant::now() + first_election_after,
@@ -164,7 +178,7 @@ impl Consensus {
 	pub fn leader(&self) -> Option<PeerId> {
 		match &self.role {
 			Role::Follower { leader, .. } => *leader,
-			Role::Leader { .. } => Some(self.group.local.id()),
+			Role::Leader { .. } => Some(self.local_id),
 			Role::Candidate { .. } => None,
 		}
 	}
@@ -206,16 +220,13 @@ impl Consensus {
 		// If we already have a quorum of votes (e.g. single-node cluster),
 		// we can immediately become the leader without sending `RequestVote`.
 		if elections.has_quorum() {
-			tracing::info!(
+			tracing::debug!(
 				group = %Short(self.group.key.id()),
 				network = %self.group.local.network_id(),
 				term = elections.term,
-				"elected self as leader by quorum without sending RequestVote",
+				"self-elected as leader locally",
 			);
-
-			self.role = Role::Leader {
-				term: elections.term,
-			};
+			self.assume_leadership(elections.term);
 			return;
 		}
 
@@ -224,16 +235,17 @@ impl Consensus {
 		};
 
 		let request = elections.request();
+		self.group.when.update_leader(None);
 
 		// by becoming a candidate we implicitly vote for ourself
 		self.voted_for = Some((elections.term, elections.candidate));
 
-		tracing::info!(
+		tracing::debug!(
 			group = %Short(self.group.key.id()),
 			network = %self.group.local.network_id(),
 			term = request.term,
 			candidate = %Short(request.candidate),
-			"starting new group leader elections",
+			"starting new leader elections",
 		);
 
 		let message = ConsensusMessage::RequestVote(request);
@@ -254,7 +266,14 @@ impl Consensus {
 			ConsensusMessage::AppendEntriesResponse(r) => r.term,
 		};
 
-		self.maybe_step_down(incoming_term);
+		let incoming_leader = match &message {
+			ConsensusMessage::AppendEntries(r) => Some(r.leader),
+			ConsensusMessage::RequestVote(_)
+			| ConsensusMessage::RequestVoteResponse(_)
+			| ConsensusMessage::AppendEntriesResponse(_) => None,
+		};
+
+		self.maybe_step_down(incoming_term, incoming_leader);
 
 		match message {
 			ConsensusMessage::RequestVote(request) => {
@@ -274,27 +293,41 @@ impl Consensus {
 
 	/// If we discover a higher term, immediately step down to follower.
 	/// This is the key mechanism that resolves split-brain scenarios.
-	fn maybe_step_down(&mut self, incoming_term: Term) -> bool {
+	fn maybe_step_down(
+		&mut self,
+		incoming_term: Term,
+		incoming_leader: Option<PeerId>,
+	) {
 		let current_term = self.role.term();
 
 		if incoming_term > current_term {
-			tracing::info!(
+			if let Some(leader) = incoming_leader {
+				tracing::debug!(
+					leader = %Short(leader),
 					group = %Short(self.group.key.id()),
 					network = %self.group.local.network_id(),
-					current_term = current_term,
-					incoming_term = incoming_term,
-					"discovered higher term, stepping down to follower",
-			);
+					old_term = %current_term,
+					new_term = %incoming_term,
+					"following",
+				);
+			} else {
+				tracing::debug!(
+					group = %Short(self.group.key.id()),
+					network = %self.group.local.network_id(),
+					old_term = %current_term,
+					new_term = %incoming_term,
+					"stepping down to follower",
+				);
+			}
 
 			self.role = Role::Follower {
 				term: incoming_term,
-				leader: None,
+				leader: incoming_leader,
 			};
 
+			self.group.when.update_leader(incoming_leader);
 			self.voted_for = None; // Reset vote for the new term
-			return true; // We stepped down
 		}
-		false
 	}
 
 	/// Handles an incoming `RequestVote` message from another peer.
@@ -304,7 +337,7 @@ impl Consensus {
 	/// - The candidate's log is at least as up-to-date as the local log.
 	/// - The peer hasn't already voted for another candidate in the current term.
 	fn on_request_vote(&mut self, request: RequestVote, from: PeerId) {
-		tracing::info!(
+		tracing::trace!(
 			network = %self.group.local.network_id(),
 			group = %Short(self.group.key.id()),
 			request = %request,
@@ -318,11 +351,20 @@ impl Consensus {
 			};
 			let message = ConsensusMessage::RequestVoteResponse(response);
 			let message = BondMessage::Consensus(message);
+
+			tracing::debug!(
+				candidate = %Short(request.candidate),
+				term = request.term,
+				group = %Short(self.group.key.id()),
+				network = %self.group.local.network_id(),
+				"denied vote for new leader",
+			);
+
 			bond.send(message);
 		};
 
 		let Some(bond) = self.group.bonds.get(&from) else {
-			tracing::debug!(
+			tracing::trace!(
 				network = %self.group.local.network_id(),
 				group = %Short(self.group.key.id()),
 				from = %Short(from),
@@ -358,6 +400,14 @@ impl Consensus {
 		let message = ConsensusMessage::RequestVoteResponse(response);
 		let message = BondMessage::Consensus(message);
 		bond.send(message);
+
+		tracing::debug!(
+			candidate = %Short(request.candidate),
+			term = request.term,
+			group = %Short(self.group.key.id()),
+			network = %self.group.local.network_id(),
+			"voted for new leader",
+		);
 	}
 
 	/// Handles an incoming `RequestVoteResponse` message from another peer
@@ -378,7 +428,7 @@ impl Consensus {
 		);
 
 		let Role::Candidate { ref mut elections } = self.role else {
-			tracing::debug!(
+			tracing::trace!(
 				network = %self.group.local.network_id(),
 				group = %Short(self.group.key.id()),
 				"received RequestVoteResponse while not a candidate - ignoring",
@@ -387,7 +437,7 @@ impl Consensus {
 		};
 
 		if elections.term != response.term {
-			tracing::debug!(
+			tracing::trace!(
 				network = %self.group.local.network_id(),
 				group = %Short(self.group.key.id()),
 				"received RequestVoteResponse for different term - ignoring",
@@ -398,11 +448,11 @@ impl Consensus {
 		elections.votes_granted.insert(from);
 
 		if elections.has_quorum() {
-			tracing::info!(
+			tracing::debug!(
 				group = %Short(self.group.key.id()),
 				network = %self.group.local.network_id(),
 				term = elections.term,
-				"elected self as leader by receiving quorum of votes [{}/{}]",
+				"elected as leader by receiving quorum of votes [{}/{}]",
 				elections.votes_granted.len(),
 				elections.requested_from.len(),
 			);
@@ -422,22 +472,28 @@ impl Consensus {
 			group = %Short(self.group.key.id()),
 			request = ?request,
 			from = %Short(from),
-			"received AppendEntries raft request",
+			"received AppendEntries raft message",
 		);
 
-		if self.role.term() < request.term {
+		if self.role.term() <= request.term {
+			let prev_leader = self.role.leader(self.local_id);
+
 			self.role = Role::Follower {
 				term: request.term,
 				leader: Some(request.leader),
 			};
 
-			tracing::info!(
-				network = %self.group.local.network_id(),
-				group = %Short(self.group.key.id()),
-				term = request.term,
-				leader = %Short(request.leader),
-				"stepping down to follower for new leader",
-			);
+			// leader has changed
+			if prev_leader != self.role.leader(self.local_id) {
+				self.group.when.update_leader(Some(request.leader));
+				tracing::info!(
+					leader = %Short(request.leader),
+					term = request.term,
+					group = %Short(self.group.key.id()),
+					network = %self.group.local.network_id(),
+					"following new",
+				);
+			}
 		}
 
 		self.next_election_at =
@@ -454,7 +510,7 @@ impl Consensus {
 			group = %Short(self.group.key.id()),
 			response = ?response,
 			from = %Short(from),
-			"received AppendEntriesResponse raft response",
+			"received AppendEntriesResponse raft message",
 		);
 	}
 
@@ -465,6 +521,7 @@ impl Consensus {
 		}
 
 		self.role = Role::Leader { term };
+		self.group.when.update_leader(Some(self.local_id));
 		self.send_heartbeat();
 	}
 
@@ -475,7 +532,7 @@ impl Consensus {
 			return;
 		};
 
-		let leader = self.group.local.id();
+		let leader = self.local_id;
 
 		let request = AppendEntries {
 			term,

@@ -8,6 +8,7 @@ use {
 		groups::{
 			Config,
 			GroupId,
+			When,
 			bond::{Bond, BondEvent, BondWorker},
 			consensus::Consensus,
 			error::AlreadyBonded,
@@ -89,7 +90,22 @@ impl Group {
 
 	/// The current leader of the group if known.
 	pub fn leader(&self) -> Option<PeerId> {
-		todo!("expose current leader of the group if known")
+		self.0.when.current_leader()
+	}
+
+	/// Returns true if the local node is currently the leader of the group.
+	pub fn is_leader(&self) -> bool {
+		self.leader() == Some(self.0.local.id())
+	}
+
+	/// Returns true if the local node is currently a follower in the group.
+	pub fn is_follower(&self) -> bool {
+		!self.is_leader()
+	}
+
+	/// Awaits changes to the group's state.
+	pub fn when(&self) -> &When {
+		&self.0.when
 	}
 }
 
@@ -162,6 +178,9 @@ pub(super) struct GroupState {
 	/// Cancellation token that terminates the worker loop for this group and all
 	/// active bonds associated with it.
 	pub cancel: CancellationToken,
+
+	/// Used to signal changes to the group's state, such as leadership changes.
+	pub when: When,
 }
 
 /// Internal API
@@ -245,7 +264,7 @@ struct WorkerLoop {
 
 	/// The Raft consensus state machine managing leadership and elections in
 	/// this group.
-	pub consensus: Consensus,
+	consensus: Consensus,
 
 	/// Aggregated stream of all events emitted by active bonds in the group.
 	events: BondEventsStream,
@@ -275,6 +294,7 @@ impl WorkerLoop {
 			commands_tx,
 			bonds: Bonds::default(),
 			local: groups.local.clone(),
+			when: When::new(groups.local.id()),
 			config: Arc::clone(&groups.config),
 			discovery: groups.discovery.clone(),
 		});
@@ -335,7 +355,12 @@ impl WorkerLoop {
 	/// When the group instance is terminated, this happens when the network is
 	/// shutting down or when the group is being left.
 	fn on_terminated(&self) {
-		tracing::warn!(">--> Group {} worker loop terminated", self.state.key.id());
+		tracing::debug!(
+			group = %Short(self.state.key.id()),
+			network = %self.state.local.network_id(),
+			bonds = self.state.bonds.len(),
+			"leaving group",
+		);
 	}
 
 	/// Triggered when the discovery subsystem signals that the catalog has new
@@ -403,12 +428,15 @@ impl WorkerLoop {
 			BondEvent::Terminated(reason) => {
 				// remove the bond from the active list
 				self.state.bonds.update_with(|active| {
-					if active.remove(&peer_id).is_some() && reason != AlreadyBonded {
+					if let Some(bond) = active.remove(&peer_id)
+						&& reason != AlreadyBonded
+					{
 						tracing::debug!(
+							id = %Short(bond.id()),
 							group = %Short(self.state.key.id()),
 							peer = %Short(peer_id),
 							network = %self.state.local.network_id(),
-							reason = ?reason,
+							reason = %reason,
 							"bond terminated",
 						);
 					}
@@ -427,11 +455,18 @@ impl WorkerLoop {
 	}
 
 	fn on_bond_formed(&self, peer_id: PeerId) {
+		let bond = self
+			.state
+			.bonds
+			.get(&peer_id)
+			.expect("bond should exist for connected peer");
+
 		tracing::debug!(
+			id = %Short(bond.id()),
 			peer = %Short(peer_id),
 			group = %Short(self.state.key.id()),
 			network = %self.state.local.network_id(),
-			"bond formed",
+			"bond established",
 		);
 
 		let catalog = self.state.discovery.catalog();
@@ -456,6 +491,11 @@ impl WorkerLoop {
 	/// the discovery catalog. This method is called only for peers that are
 	/// already known in the discovery catalog.
 	fn create_bond(&self, peer: SignedPeerEntry) {
+		if *peer.id() == self.state.local.id() {
+			// don't bond with ourselves
+			return;
+		}
+
 		if self.state.bonds.contains_peer(peer.id()) {
 			// there's already an active bond to this peer
 			return;
@@ -478,14 +518,6 @@ impl WorkerLoop {
 									.commands_tx
 									.send(Command::SubscribeToBond(events, peer_id))
 									.ok();
-
-								tracing::debug!(
-									group = %state.key.id(),
-									peer = %Short(peer_id),
-									network = %state.local.network_id(),
-									initiator = true,
-									"new bond created",
-								);
 							}
 							Entry::Occupied(_) => {
 								// a bond with this peer was created in the meantime
@@ -545,14 +577,6 @@ impl WorkerLoop {
 									.commands_tx
 									.send(Command::SubscribeToBond(events, peer_id))
 									.ok();
-
-								tracing::debug!(
-									group = %Short(state.key.id()),
-									peer = %Short(peer_id),
-									network = %state.local.network_id(),
-									initiator = false,
-									"new bond created",
-								);
 
 								let _ = result_tx.send(Ok(()));
 							}

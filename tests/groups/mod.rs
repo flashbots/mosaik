@@ -4,7 +4,7 @@ use {
 	mosaik::{primitives::Short, *},
 };
 
-// mod leader;
+mod watch;
 
 #[tokio::test]
 async fn members_can_see_each_other() -> anyhow::Result<()> {
@@ -42,25 +42,23 @@ async fn members_can_see_each_other() -> anyhow::Result<()> {
 	let g3_2 = n2.groups().join(key3.clone())?;
 
 	join_all([
-		timeout_s(T, ensure_group_formed(&g1_0, &n0, &[&n1], "g1_0")),
-		timeout_s(T, ensure_group_formed(&g1_1, &n1, &[&n0], "g1_1")),
-		timeout_s(T, ensure_group_formed(&g2_0, &n0, &[&n2, &n3], "g2_0")),
-		timeout_s(T, ensure_group_formed(&g2_2, &n2, &[&n0, &n3], "g2_2")),
-		timeout_s(T, ensure_group_formed(&g2_3, &n3, &[&n0, &n2], "g2_3")),
-		timeout_s(T, ensure_group_formed(&g3_1, &n1, &[&n2], "g3_1")),
-		timeout_s(T, ensure_group_formed(&g3_2, &n2, &[&n1], "g3_2")),
+		timeout_s(T, ensure_bonds_formed(&g1_0, &n0, &[&n1], "g1_0")),
+		timeout_s(T, ensure_bonds_formed(&g1_1, &n1, &[&n0], "g1_1")),
+		timeout_s(T, ensure_bonds_formed(&g2_0, &n0, &[&n2, &n3], "g2_0")),
+		timeout_s(T, ensure_bonds_formed(&g2_2, &n2, &[&n0, &n3], "g2_2")),
+		timeout_s(T, ensure_bonds_formed(&g2_3, &n3, &[&n0, &n2], "g2_3")),
+		timeout_s(T, ensure_bonds_formed(&g3_1, &n1, &[&n2], "g3_1")),
+		timeout_s(T, ensure_bonds_formed(&g3_2, &n2, &[&n1], "g3_2")),
 	])
 	.await
 	.into_iter()
 	.collect::<Result<Vec<_>, _>>()
 	.expect("not all groups formed successfully");
 
-	core::future::pending::<()>().await;
-
 	Ok(())
 }
 
-async fn ensure_group_formed(
+async fn ensure_bonds_formed(
 	group: &Group,
 	local: &Network,
 	peers: &[&Network],

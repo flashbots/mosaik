@@ -51,6 +51,11 @@ pub struct Config {
 	/// split votes during leader elections.
 	#[builder(default = "Duration::from_millis(500)")]
 	pub election_timeout_jitter: Duration,
+
+	/// The backlog size for the consensus events broadcast channel before
+	/// dropping unconsumed events.
+	#[builder(default = "64")]
+	pub consensus_events_backlog: usize,
 }
 
 impl Config {

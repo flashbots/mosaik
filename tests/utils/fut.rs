@@ -19,6 +19,10 @@ where
 	Pin::new(f).poll(&mut context)
 }
 
+/// A future that never completes and returns nothing.
+///
+/// This is sometimes useful during tests development to
+/// keep the test running and observe logs.
 pub async fn forever() -> ! {
 	futures::future::pending::<()>().await;
 	unreachable!()

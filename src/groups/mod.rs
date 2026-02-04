@@ -74,6 +74,7 @@ mod error;
 mod group;
 mod key;
 mod log;
+mod when;
 mod wire;
 
 pub use {
@@ -82,6 +83,7 @@ pub use {
 	error::Error,
 	group::{Bonds, Group},
 	key::GroupKey,
+	when::When,
 };
 
 /// A unique identifier for a group that is derived from the group key.

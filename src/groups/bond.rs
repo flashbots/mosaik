@@ -1,6 +1,7 @@
 use {
 	crate::{
 		Groups,
+		UniqueId,
 		discovery::SignedPeerEntry,
 		groups::{
 			Config,
@@ -35,6 +36,15 @@ use {
 	tokio_util::sync::CancellationToken,
 };
 
+/// A unique identifier for a bond connection between the local node and a
+/// remote peer in the group. This value is derived from the shared random
+/// between the two peers during bond establishment and is used to correlate the
+/// bond connection with the corresponding peer entry in the discovery catalog
+/// and to identify the bond in logs and metrics.
+///
+/// The bond id should be identical on both sides of the bond connection.
+pub type BondId = UniqueId;
+
 #[derive(Debug, Clone)]
 pub enum BondEvent {
 	Connected,
@@ -47,6 +57,11 @@ pub type BondEvents = UnboundedReceiver<BondEvent>;
 /// Handle to a bond with another peer in a group.
 #[derive(Clone)]
 pub struct Bond {
+	/// A unique identifier for this bond connection.
+	///
+	/// This value is identical on both sides of the bond connection.
+	id: BondId,
+
 	/// Cancellation token for terminating the bond's main loop
 	/// and to check for cancellation status.
 	cancel: CancellationToken,
@@ -60,7 +75,12 @@ pub struct Bond {
 
 impl fmt::Display for Bond {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "Bond(peer={})", Short(self.peer.borrow().id()))
+		write!(
+			f,
+			"Bond(peer={}, id={})",
+			Short(self.peer.borrow().id()),
+			Short(self.id)
+		)
 	}
 }
 
@@ -76,6 +96,15 @@ impl Bond {
 	/// Returns the most recent peer entry for the remote peer in the bond.
 	pub fn peer(&self) -> SignedPeerEntry {
 		self.peer.borrow().clone()
+	}
+
+	/// Returns the unique identifier for this bond connection.
+	/// This value is derived from the shared random between the two peers during
+	/// bond establishment and is used to correlate the bond connection with the
+	/// corresponding peer entry in the discovery catalog and to identify the bond
+	/// in logs and metrics.
+	pub const fn id(&self) -> BondId {
+		self.id
 	}
 }
 
@@ -157,6 +186,8 @@ impl BondWorker {
 		let (events_tx, events_rx) = unbounded_channel();
 		link.replace_cancel_token(cancel.clone());
 
+		let bond_id = link.shared_random("bond_id");
+
 		let bond = BondWorker {
 			group,
 			peer,
@@ -175,6 +206,7 @@ impl BondWorker {
 			Bond {
 				cancel,
 				commands_tx,
+				id: bond_id,
 				peer: peer_rx,
 			},
 			events_rx,
@@ -261,8 +293,8 @@ impl BondWorker {
 					BondMessage::PeerEntryUpdate(entry) => {
 						self.on_peer_entry_update(*entry);
 					}
-					BondMessage::BondFormed(peer_entry) => {
-						self.on_bond_formed(*peer_entry);
+					BondMessage::BondFormed(peer) => {
+						self.on_bond_formed(*peer);
 					}
 					BondMessage::Consensus(message) => {
 						self

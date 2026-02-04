@@ -55,6 +55,19 @@ where
 }
 
 #[track_caller]
+pub fn timeout_after<F>(
+	duration: Duration,
+	future: F,
+) -> impl Future<Output = Result<F::Output, TimeoutElapsed>>
+where
+	F: IntoFuture,
+{
+	let caller = Location::caller();
+	tokio::time::timeout(duration, future)
+		.map_err(move |_| TimeoutElapsed(duration, caller))
+}
+
+#[track_caller]
 pub fn timeout_ms<F>(
 	count: u64,
 	future: F,
