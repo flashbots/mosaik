@@ -187,7 +187,7 @@ pub(super) struct ConsumerHandshake {
 
 impl ConsumerHandshake {
 	/// Creates a new [`ConsumerHandshake`] instance.
-	pub fn new(
+	pub const fn new(
 		network_id: NetworkId,
 		stream_id: StreamId,
 		criteria: Criteria,

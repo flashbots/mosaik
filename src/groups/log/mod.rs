@@ -4,6 +4,8 @@ use {
 	tokio::sync::watch,
 };
 
+mod sm;
+
 /// Raft term, increases monotonically with every new leader election.
 pub type Term = u64;
 
@@ -89,7 +91,7 @@ where
 
 	/// Returns the current commit index.
 	pub fn committed(&self) -> Index {
-		self.commit_index.borrow().clone()
+		*self.commit_index.borrow()
 	}
 
 	/// Returns a watch receiver for commit index updates.
@@ -99,7 +101,7 @@ where
 
 	/// Returns the index of the last applied entry.
 	pub fn applied(&self) -> Index {
-		self.last_applied.borrow().clone()
+		*self.last_applied.borrow()
 	}
 
 	/// Returns a watch receiver for last applied index updates.
@@ -117,14 +119,14 @@ where
 
 	/// Returns the term at the given index, or 0 if index is 0 or out of bounds.
 	pub fn term_at(&self, index: Index) -> Term {
-		self.get(index).map(|e| e.term).unwrap_or(0)
+		self.get(index).map_or(0, |e| e.term)
 	}
 
 	/// Appends a new entry to the log (leader only).
 	/// Returns the index of the new entry.
 	pub fn append(&mut self, term: Term, command: C) -> Index {
 		let index = self.index() + 1;
-		assert_eq!(index as usize, self.entries.len());
+		assert_eq!(index, self.entries.len() as u64);
 
 		self.entries.push(LogEntry {
 			term,

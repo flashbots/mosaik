@@ -4,7 +4,7 @@ use {
 		PeerId,
 		discovery::{Catalog, Discovery},
 		network::LocalNode,
-		primitives::{Short, UniqueId},
+		primitives::{Digest, Short},
 		streams::{
 			Consumer,
 			Streams,
@@ -71,7 +71,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		let online = watch::Sender::new(true);
 		let (data_tx, data_rx) = mpsc::unbounded_channel();
 
-		let worker = ConsumerWorker {
+		let worker = Self {
 			local,
 			data_tx,
 			config: Arc::clone(&config),
@@ -144,7 +144,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		for producer in producers {
 			// for each discovered producer, create a receive worker if it is not
 			// already in the active list of connected producers.
-			let sub_id = UniqueId::from_bytes(*producer.id().as_bytes());
+			let sub_id = Digest::from_bytes(*producer.id().as_bytes());
 			if !self.active.borrow().contains_key(&sub_id) {
 				tracing::trace!(
 					stream_id = %Short(self.config.stream_id),
@@ -190,14 +190,15 @@ impl<D: Datum> ConsumerWorker<D> {
 	}
 
 	/// Handles state updates from remote receiver workers.
-	fn on_receiver_state_update(&mut self, peer_id: PeerId, state: State) {
+	fn on_receiver_state_update(&self, peer_id: PeerId, state: State) {
 		if state == State::Terminated {
 			// The receiver has unrecoverably terminated, remove it from the active
 			// list
-			let sub_id = UniqueId::from_bytes(*peer_id.as_bytes());
-			self.active.send_modify(|active| {
-				active.remove(&sub_id);
-			});
+			let sub_id = Digest::from_bytes(*peer_id.as_bytes());
+
+			self
+				.active
+				.send_if_modified(|active| active.remove(&sub_id).is_some());
 
 			tracing::info!(
 				producer_id = %Short(&peer_id),
@@ -209,7 +210,7 @@ impl<D: Datum> ConsumerWorker<D> {
 	}
 
 	/// Gracefully closes all connections with remote producers.
-	fn on_terminated(&mut self) {
+	fn on_terminated(&self) {
 		// terminate all active receiver workers
 		let producers_count = self.active.borrow().len();
 		self.active.send_replace(ActiveChannelsMap::default());

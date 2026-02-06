@@ -11,7 +11,7 @@ use {
 		PeerId,
 		discovery::PeerEntry,
 		network::{GracefulShutdown, link::Link},
-		primitives::{Bytes, Short, UniqueId},
+		primitives::{Bytes, Digest, Short},
 		streams::{
 			TooSlow,
 			status::{ActiveChannelsMap, ChannelConditions},
@@ -151,15 +151,15 @@ impl<D: Datum> WorkerLoop<D> {
 
 		online.send_replace(online_when.is_condition_met());
 
-		let worker = WorkerLoop::<D> {
+		let worker = Self {
 			cancel,
 			data_rx,
 			local_id: sinks.local.id(),
 			config: Arc::clone(&config),
 			active: DenseSlotMap::with_key(),
 			accepted: accepted_rx,
-			online: online.clone(),
-			active_info: active_info.clone(),
+			online,
+			active_info,
 			online_when,
 			dropped: JoinSet::new(),
 		};
@@ -346,7 +346,7 @@ impl<D: Datum> WorkerLoop<D> {
 
 		// Update the active subscriptions info map and notify observers
 		self.active_info.send_modify(|active| {
-			let sub_id = UniqueId::from_u64(sub_id.0.as_ffi());
+			let sub_id = Digest::from_u64(sub_id.0.as_ffi());
 			active.insert(sub_id, info);
 		});
 	}
@@ -366,7 +366,7 @@ impl<D: Datum> WorkerLoop<D> {
 			// Remove subscription from the active info map and signal
 			// to status observers that the subscription is gone.
 			self.active_info.send_modify(|active| {
-				let sub_id = UniqueId::from_u64(sub_id.0.as_ffi());
+				let sub_id = Digest::from_u64(sub_id.0.as_ffi());
 				active.remove(&sub_id);
 			});
 
@@ -380,7 +380,7 @@ impl<D: Datum> WorkerLoop<D> {
 		// Remove subscription from the active info map and signal
 		// to status observers that the subscription is gone.
 		self.active_info.send_modify(|active| {
-			let sub_id = UniqueId::from_u64(sub_id.0.as_ffi());
+			let sub_id = Digest::from_u64(sub_id.0.as_ffi());
 			active.remove(&sub_id);
 		});
 
@@ -405,14 +405,21 @@ impl<D: Datum> WorkerLoop<D> {
 
 	/// Triggered when the publishing conditions for this producer are met
 	/// and it is considered online.
-	fn on_online(&mut self) {
+	fn on_online(&self) {
 		tracing::trace!(
 			stream_id = %Short(self.config.stream_id),
 			consumers = %self.active.len(),
 			"producer is online",
 		);
 
-		self.online.send_replace(true);
+		self.online.send_if_modified(|status| {
+			if *status {
+				false
+			} else {
+				*status = true;
+				true
+			}
+		});
 	}
 }
 

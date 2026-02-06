@@ -1,13 +1,15 @@
 use {
 	crate::{
+		NetworkId,
+		Digest,
 		discovery::{Discovery, SignedPeerEntry},
 		groups::{
 			Config,
 			Group,
 			GroupId,
 			Groups,
+			consensus::ConsensusMessage,
 			error::{GroupNotFound, InvalidHandshake, Timeout},
-			wire::HandshakeStart,
 		},
 		network::{
 			CloseReason,
@@ -24,9 +26,70 @@ use {
 		endpoint::{ApplicationClose, Connection},
 		protocol::{AcceptError, ProtocolHandler},
 	},
+	serde::{Deserialize, Serialize},
 	std::sync::Arc,
 	tokio::time::timeout,
 };
+
+/// This is the initial message sent by the peer initiating a connection on the
+/// groups protocol to another member of the group.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandshakeStart {
+	/// The unique identifier of the network that the group belongs to.
+	pub network_id: NetworkId,
+
+	/// The unique identifier of the group that is derived from the group key.
+	pub group_id: GroupId,
+
+	/// A proof of knowledge of the secret group key by hashing the secret with
+	/// the TLS-derived shared secret and the peer id.
+	pub proof: Digest,
+
+	/// A list of peers that the initiating node has formed bonds with but are
+	/// not yet part of the group consensus. Those usually are nodes that are
+	/// still in the process of joining the group and catching up with the
+	/// latest state.
+	pub bonds: Vec<SignedPeerEntry>,
+}
+
+/// This is the second message exchanged during the handshake process. The
+/// accepting node responds to the initiator's challenge with its own nonce and
+/// a response to the initiator's challenge, by hashing the secret with the
+/// initiator's nonce.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HandshakeEnd {
+	/// A proof of knowledge of the secret group key by hashing the secret with
+	/// the TLS-derived shared secret and the peer id.
+	pub proof: Digest,
+
+	/// A list of peers that the initiating node has formed bonds with but are
+	/// not yet part of the group consensus. Those usually are nodes that are
+	/// still in the process of joining the group and catching up with the
+	/// latest state.
+	pub bonds: Vec<SignedPeerEntry>,
+}
+
+/// Messages exchanged over an established bond connection between two group
+/// members.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BondMessage {
+	/// Bond-level liveness check.
+	Ping,
+
+	/// Response to a `Ping` message.
+	Pong,
+
+	/// Broadcasted to all bonded peers when the local peer's discovery entry
+	/// changes to propagate the update quickly to all group members.
+	PeerEntryUpdate(Box<SignedPeerEntry>),
+
+	/// Broadcasted to all bonded peers when a new peer forms a bond with the
+	/// local node.
+	BondFormed(Box<SignedPeerEntry>),
+
+	/// Messages that drive the Raft consensus protocol within the group.
+	Consensus(ConsensusMessage),
+}
 
 /// Protocol Acceptor
 ///
@@ -36,16 +99,19 @@ use {
 ///
 /// The local node must be already joined to the group for the connection to be
 /// accepted using [`Groups::join`]
-pub(super) struct Listener {
+pub(in crate::groups) struct Acceptor {
 	local: LocalNode,
 	config: Arc<Config>,
 	discovery: Discovery,
 	active: Arc<DashMap<GroupId, Group>>,
 }
 
-impl Listener {
-	/// Create a new Listener
-	pub(super) fn new(groups: &Groups) -> Self {
+impl Acceptor {
+	/// Create a new Acceptor instance that is the first point of contact for
+	/// incoming connections on the groups ALPN protocol. The acceptor is
+	/// responsible for performing the initial handshake and routing the
+	/// connection to the appropriate group instance.
+	pub fn new(groups: &Groups) -> Self {
 		Self {
 			local: groups.local.clone(),
 			discovery: groups.discovery.clone(),
@@ -55,14 +121,14 @@ impl Listener {
 	}
 }
 
-impl fmt::Debug for Listener {
+impl fmt::Debug for Acceptor {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		// Safety: ALPN is valid UTF-8 hardcoded at compile time
 		unsafe { write!(f, "{}", str::from_utf8_unchecked(Groups::ALPN)) }
 	}
 }
 
-impl ProtocolHandler for Listener {
+impl ProtocolHandler for Acceptor {
 	/// Invoked when a new incoming connection is established on the groups
 	/// protocol. This method performs the handshake process and routes the
 	/// connection to the appropriate group instance.
@@ -107,7 +173,7 @@ impl ProtocolHandler for Listener {
 }
 
 // Supporting functions used during `accept` handshake process
-impl Listener {
+impl Acceptor {
 	/// The accepting node will await the initial handshake message from the
 	/// initiating peer. If the message is not received within the configured
 	/// timeout duration, an error is returned and the connection will be aborted.

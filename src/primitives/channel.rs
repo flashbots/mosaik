@@ -3,7 +3,7 @@ use tokio::sync::mpsc;
 /// A simple unbounded channel wrapper around Tokio's mpsc unbounded channel.
 /// This is used internally for various message passing needs to hold the sender
 /// and receiver together.
-pub(crate) struct UnboundedChannel<T> {
+pub struct UnboundedChannel<T> {
 	sender: mpsc::UnboundedSender<T>,
 	receiver: mpsc::UnboundedReceiver<T>,
 }

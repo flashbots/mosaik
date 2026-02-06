@@ -252,7 +252,7 @@ impl WorkerLoop {
 				Some(addr) = addr_change.next() => {
 					tracing::trace!(addr = ?addr, "Local node address updated");
 					self.handle.update_local_entry(move |entry| {
-						entry.update_address(addr.clone())
+						entry.update_address(addr)
 							.expect("peer id changed for local node.")
 					});
 				}
@@ -401,11 +401,7 @@ impl WorkerLoop {
 	/// protocol. Marks the peer as departed in the local catalog if the last
 	/// known version is equal or newer than the current entry and the timestamp
 	/// of the departure message is recent enough.
-	fn on_peer_departed(
-		&mut self,
-		peer_id: PeerId,
-		entry_version: PeerEntryVersion,
-	) {
+	fn on_peer_departed(&self, peer_id: PeerId, entry_version: PeerEntryVersion) {
 		let Some(last_known_version) = self
 			.handle
 			.catalog
@@ -527,7 +523,7 @@ impl WorkerLoop {
 	fn next_purge_deadline(&self) -> Duration {
 		let now = Utc::now();
 		let mut deadline = self.config.purge_after;
-		let catalog = self.handle.catalog.borrow();
+		let catalog = self.handle.catalog.borrow().clone();
 
 		for peer in catalog.signed_peers() {
 			let expires_at = peer.updated_at() + self.config.purge_after;

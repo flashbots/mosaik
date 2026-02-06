@@ -242,7 +242,7 @@ impl WorkerLoop {
 			tokio::select! {
 				// Network is terminating, exit the loop
 				() = self.cancel.cancelled() => {
-					self.shutdown(&mut topic_tx, &mut topic_rx).await;
+					self.shutdown(&topic_tx, &topic_rx).await;
 					return Ok(());
 				}
 
@@ -272,7 +272,7 @@ impl WorkerLoop {
 
 				// Manual dial request
 				Some((peers, tx)) = self.dials.recv() => {
-					self.dial_peers(peers, &mut topic_tx, tx).await;
+					self.dial_peers(peers, &topic_tx, tx).await;
 				}
 			}
 		}
@@ -295,7 +295,7 @@ impl WorkerLoop {
 	///
 	/// When a topic is closed, it attempts to rejoin the topic.
 	async fn on_topic_rx(
-		&mut self,
+		&self,
 		gossip_event: Option<Result<GossipEvent, GossipError>>,
 		topic_rx: &mut GossipReceiver,
 		topic_tx: &mut GossipSender,
@@ -331,7 +331,7 @@ impl WorkerLoop {
 	///
 	/// This method handles the happy-path gossip events, such as new neighbors
 	/// joining and messages being received.
-	fn on_gossip_event(&mut self, event: GossipEvent) {
+	fn on_gossip_event(&self, event: GossipEvent) {
 		match event {
 			GossipEvent::NeighborUp(id) => {
 				self.neighbors_count.fetch_add(1, Ordering::SeqCst);
@@ -377,7 +377,7 @@ impl WorkerLoop {
 	}
 
 	/// A message has been received from the gossip topic.
-	fn on_message_received(&mut self, message: AnnouncementMessage) {
+	fn on_message_received(&self, message: AnnouncementMessage) {
 		match message {
 			// a peer is announcing an updated version of its own entry
 			AnnouncementMessage::OwnEntryUpdate(entry) => {
@@ -491,7 +491,7 @@ impl WorkerLoop {
 	///
 	/// If the topic connection is closed, it attempts to re-join the topic.
 	async fn broadcast_message(
-		&mut self,
+		&self,
 		topic_tx: &mut GossipSender,
 		topic_rx: &mut GossipReceiver,
 		message: AnnouncementMessage,
@@ -548,7 +548,7 @@ impl WorkerLoop {
 	async fn dial_peers(
 		&self,
 		peers: Vec<EndpointAddr>,
-		topic_tx: &mut GossipSender,
+		topic_tx: &GossipSender,
 		tx: oneshot::Sender<()>,
 	) {
 		self.local.observe(peers.iter());
@@ -574,7 +574,7 @@ impl WorkerLoop {
 	/// This method is invoked when the gossip topic connection is closed.
 	/// It attempts to re-join the topic to restore connectivity.
 	async fn rejoin_topic(
-		&mut self,
+		&self,
 		topic_tx: &mut GossipSender,
 		topic_rx: &mut GossipReceiver,
 	) -> Result<(), Error> {
@@ -591,11 +591,7 @@ impl WorkerLoop {
 	///
 	/// It then waits for a configured duration to allow the message
 	/// to propagate before completing the shutdown process.
-	async fn shutdown(
-		self,
-		topic_tx: &mut GossipSender,
-		topic_rx: &mut GossipReceiver,
-	) {
+	async fn shutdown(self, topic_tx: &GossipSender, topic_rx: &GossipReceiver) {
 		tracing::trace!(
 			network = %self.local.network_id(),
 			peer_id = %Short(&self.local.id()),

@@ -11,7 +11,7 @@ pub use bytes::{Bytes, BytesMut};
 #[doc(hidden)]
 pub use fmt::*;
 /// Public API re-exported primitives.
-pub use id::{Tag, UniqueId};
+pub use id::{Digest, Tag, UniqueId};
 /// Internal primitives.
 pub(crate) use {
 	channel::UnboundedChannel,

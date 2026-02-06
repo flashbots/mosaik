@@ -16,8 +16,8 @@ trait FmtWrapper<T> {
 #[derive(Deref, AsRef)]
 pub struct Pretty<'a, T>(pub &'a T);
 
-impl<'a, T> Pretty<'a, T> {
-	pub fn iter<I: IntoIterator<Item = T>>(iter: I) -> FmtIter<Pretty<'a, T>, I> {
+impl<T> Pretty<'_, T> {
+	pub const fn iter<I: IntoIterator<Item = T>>(iter: I) -> FmtIter<Self, I> {
 		FmtIter::new(iter)
 	}
 }
@@ -37,12 +37,12 @@ impl<T: AsRef<[u8]>> fmt::Display for Short<T> {
 
 impl<T> FmtWrapper<T> for Short<T> {
 	fn wrap(value: T) -> Self {
-		Short(value)
+		Self(value)
 	}
 }
 
 impl<T> Short<T> {
-	pub fn iter<I: IntoIterator<Item = T>>(iter: I) -> FmtIter<Short<T>, I> {
+	pub const fn iter<I: IntoIterator<Item = T>>(iter: I) -> FmtIter<Self, I> {
 		FmtIter::new(iter)
 	}
 }
@@ -67,7 +67,7 @@ impl<T: AsRef<[u8]>> fmt::Display for Abbreviated<T> {
 
 impl<T> FmtWrapper<T> for Abbreviated<T> {
 	fn wrap(value: T) -> Self {
-		Abbreviated(value)
+		Self(value)
 	}
 }
 
@@ -87,7 +87,7 @@ impl<T> fmt::Debug for Redacted<T> {
 
 impl<T> FmtWrapper<T> for Redacted<T> {
 	fn wrap(value: T) -> Self {
-		Redacted(value)
+		Self(value)
 	}
 }
 
@@ -102,8 +102,8 @@ impl<T> FmtWrapper<T> for Redacted<T> {
 pub struct FmtIter<W, I>(pub I, core::marker::PhantomData<W>);
 
 impl<I, W> FmtIter<W, I> {
-	pub fn new(iter: I) -> Self {
-		FmtIter(iter, core::marker::PhantomData)
+	pub const fn new(iter: I) -> Self {
+		Self(iter, core::marker::PhantomData)
 	}
 }
 

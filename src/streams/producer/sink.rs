@@ -66,7 +66,7 @@ impl Sinks {
 					.discovery
 					.update_local_entry(move |me| me.add_streams(stream_id));
 
-				Ok(handle.clone())
+				Ok(handle)
 			}
 			Entry::Occupied(entry) => Err(entry.get().clone()),
 		}

@@ -16,7 +16,7 @@ use {
 		Group,
 		discovery::Discovery,
 		network::LocalNode,
-		primitives::UniqueId,
+		primitives::Digest,
 		store::worker::WorkerLoop,
 	},
 	std::sync::Arc,
@@ -55,7 +55,7 @@ impl crate::network::ProtocolProvider for Stores {
 }
 
 /// A unique identifier for a store within the Mosaik network.
-pub type StoreId = UniqueId;
+pub type StoreId = Digest;
 
 pub struct PrimaryStore {}
 

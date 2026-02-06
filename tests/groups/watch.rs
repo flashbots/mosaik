@@ -50,7 +50,7 @@ async fn leader_is_elected() -> anyhow::Result<()> {
 	assert!(!g1.is_leader());
 	assert!(g1.is_follower());
 	assert_eq!(g1.leader(), Some(n0.local().id()));
-	tracing::debug!("n1 recognizes n0 as leader",);
+	tracing::debug!("n1 recognizes n0 ({}) as leader", Short(n0.local().id()));
 
 	// start a third node and have it join the group. It should also recognize the
 	// existing leader immediately without waiting for a new election.
@@ -66,7 +66,7 @@ async fn leader_is_elected() -> anyhow::Result<()> {
 	assert!(!g2.is_leader());
 	assert!(g2.is_follower());
 	assert_eq!(g2.leader(), Some(n0.local().id()));
-	tracing::debug!("n2 recognizes n0 as leader",);
+	tracing::debug!("n2 recognizes n0 ({}) as leader", Short(n0.local().id()));
 
 	// Set up futures to detect leader changes on g1 and g2
 	let g1_leader_changed = g1.when().leader_changed();
@@ -74,6 +74,7 @@ async fn leader_is_elected() -> anyhow::Result<()> {
 
 	// now kill the current leader and ensure a new leader is elected among the
 	// remaining nodes
+	tracing::debug!("Shutting down leader n0 ({})", Short(n0.local().id()));
 	drop(n0);
 
 	// Both g1 and g2 should detect that n0 is down and elect a new leader.
@@ -83,8 +84,21 @@ async fn leader_is_elected() -> anyhow::Result<()> {
 	assert_eq!(g1_leader, g2_leader);
 	assert!(g1.is_leader() ^ g2.is_leader());
 	assert!(g1.is_follower() ^ g2.is_follower());
-
 	tracing::debug!("New leader elected after n0 shutdown: {}", Short(g1_leader));
+
+	// start a third node and have it join the group. It should recognize the
+	// newly elected leader immediately without waiting for a new election.
+	let n3 = Network::new(network_id).await?;
+	n3.discovery().dial(n1.local().addr()).await;
+
+	let g3 = n3.groups().join(key1.clone())?;
+
+	let g3_leader = timeout_after(timeout, g3.when().leader_elected()).await?;
+	assert_eq!(g3_leader, g1_leader);
+	assert!(!g3.is_leader());
+	assert!(g3.is_follower());
+	assert_eq!(g3.leader(), Some(g1_leader));
+	tracing::debug!("n3 recognizes new leader {}", Short(g1_leader));
 
 	Ok(())
 }

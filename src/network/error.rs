@@ -38,6 +38,7 @@ macro_rules! make_close_reason {
 		$(#[$meta])*
 		#[derive(Debug, Clone, Copy, thiserror::Error)]
 		#[error("{}", stringify!($name))]
+		#[allow(clippy::derive_partial_eq_without_eq)]
 		$vis struct $name;
 
 		const _: () = {

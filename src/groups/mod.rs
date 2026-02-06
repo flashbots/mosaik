@@ -12,7 +12,8 @@
 //! - Members of a one group have trust assumptions. Groups are not byzantine
 //!   failures tolerant.
 //!
-//! - Nodes can form trusted availability groups for load balancing purposes.
+//! - Nodes can form trusted availability groups for load balancing and/or
+//!   failover purposes.
 //!
 //! - Each availability group maintains a consistent list of all group members.
 //!   The consistent view is managed by raft. In an availability group a small
@@ -55,18 +56,15 @@
 
 use {
 	crate::{
-		UniqueId,
+		Digest,
 		discovery::Discovery,
 		network::{LocalNode, ProtocolProvider, link::Protocol},
-		primitives::Short,
 	},
-	accept::Listener,
 	dashmap::{DashMap, Entry},
 	iroh::protocol::RouterBuilder,
 	std::sync::Arc,
 };
 
-mod accept;
 mod bond;
 mod config;
 mod consensus;
@@ -75,20 +73,23 @@ mod group;
 mod key;
 mod log;
 mod when;
-mod wire;
 
 pub use {
-	bond::Bond,
+	bond::{Bond, Bonds},
 	config::{Config, ConfigBuilder, ConfigBuilderError},
 	error::Error,
-	group::{Bonds, Group},
+	group::Group,
 	key::GroupKey,
 	when::When,
 };
 
 /// A unique identifier for a group that is derived from the group key.
-pub type GroupId = UniqueId;
+pub type GroupId = Digest;
 
+/// Public API gateway for the Groups subsystem.
+///
+/// This type is instantiated once per `Network` instance and is used to join
+/// groups and manage them.
 pub struct Groups {
 	local: LocalNode,
 	config: Arc<Config>,
@@ -99,23 +100,12 @@ pub struct Groups {
 /// Public API
 impl Groups {
 	pub fn join(&self, group_key: GroupKey) -> Result<Group, Error> {
-		tracing::info!(
-			group = %Short(group_key.id()),
-			network = %self.local.network_id(),
-			"joining",
-		);
-
 		let id = *group_key.id();
 		match self.active.entry(id) {
 			Entry::Occupied(entry) => Ok(entry.get().clone()),
 			Entry::Vacant(entry) => {
 				let group = Group::new(self, group_key);
-				let group = entry.insert(group).clone();
-
-				self
-					.discovery
-					.update_local_entry(move |entry| entry.add_groups(id));
-
+				entry.insert(group.clone());
 				Ok(group)
 			}
 		}
@@ -123,7 +113,11 @@ impl Groups {
 }
 
 impl Groups {
-	pub fn new(local: LocalNode, discovery: &Discovery, config: Config) -> Self {
+	pub(crate) fn new(
+		local: LocalNode,
+		discovery: &Discovery,
+		config: Config,
+	) -> Self {
 		let config = Arc::new(config);
 
 		Self {
@@ -142,6 +136,6 @@ impl Protocol for Groups {
 
 impl ProtocolProvider for Groups {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
-		protocols.accept(Self::ALPN, Listener::new(self))
+		protocols.accept(Self::ALPN, bond::Acceptor::new(self))
 	}
 }

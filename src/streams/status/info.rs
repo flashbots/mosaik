@@ -4,7 +4,7 @@ use {
 		PeerId,
 		StreamId,
 		discovery::PeerEntry,
-		primitives::UniqueId,
+		primitives::Digest,
 	},
 	chrono::{DateTime, Utc},
 	core::{
@@ -112,7 +112,7 @@ impl core::fmt::Display for Stats {
 			"uptime: {}, datums: {}, bytes: {}",
 			self
 				.uptime()
-				.map_or("N/A".to_string(), |d| format_duration(d).to_string()),
+				.map_or_else(|| "N/A".to_string(), |d| format_duration(d).to_string()),
 			self.datums(),
 			format_size(self.bytes(), DECIMAL),
 		)
@@ -229,4 +229,4 @@ impl ChannelInfo {
 /// This is used on both consumer and producer sides to track active streams.
 /// The key of this map is not exposed publicly, but is used internally by
 /// consumers and producers to track and map active subscriptions.
-pub(crate) type ActiveChannelsMap = im::HashMap<UniqueId, ChannelInfo>;
+pub type ActiveChannelsMap = im::HashMap<Digest, ChannelInfo>;

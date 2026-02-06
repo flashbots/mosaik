@@ -11,7 +11,7 @@ use {
 		},
 	},
 	crate::{
-		UniqueId,
+		Digest,
 		primitives::{Bytes, Short},
 	},
 	bincode::{
@@ -94,7 +94,7 @@ impl<P: Protocol> Link<P> {
 
 	/// Splits the link into a sender and receiver half.
 	pub fn split(self) -> (LinkSender<P>, LinkReceiver<P>) {
-		let Link {
+		let Self {
 			connection,
 			sender,
 			receiver,
@@ -248,7 +248,7 @@ impl<P: Protocol> Link<P> {
 
 	/// Returns the ALPN identifier for this link.
 	#[expect(clippy::unused_self)]
-	pub fn alpn(&self) -> &[u8] {
+	pub const fn alpn(&self) -> &[u8] {
 		P::ALPN
 	}
 
@@ -327,7 +327,7 @@ impl<P: Protocol> Link<P> {
 	/// Returns the number of bytes sent on success.
 	pub async fn send<D: Serialize>(
 		&mut self,
-		datum: &D,
+		datum: D,
 	) -> Result<usize, SendError> {
 		let mut writer = BytesMut::new().writer();
 		if let Err(e) = encode_into_std_write(datum, &mut writer, standard()) {
@@ -451,7 +451,7 @@ impl<P: Protocol> Link<P> {
 	/// strong and pseudorandom, and are suitable for use as keying material.
 	///
 	/// See [RFC5705](https://tools.ietf.org/html/rfc5705) for more information.
-	pub fn shared_random(&self, label: impl AsRef<[u8]>) -> UniqueId {
+	pub fn shared_random(&self, label: impl AsRef<[u8]>) -> Digest {
 		let mut shared_secret = [0u8; 32];
 
 		self
@@ -459,7 +459,7 @@ impl<P: Protocol> Link<P> {
 			.export_keying_material(&mut shared_secret, label.as_ref(), self.alpn())
 			.expect("exporting keying material should not fail for this buffer len");
 
-		UniqueId::from_bytes(shared_secret)
+		Digest::from_bytes(shared_secret)
 	}
 
 	/// Returns the last measured round-trip time (RTT) of the underlying
@@ -574,7 +574,7 @@ pub enum SendError {
 }
 
 /// Errors that can occur when closing a link.
-#[derive(Debug, PartialEq, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CloseError {
 	#[error("Connection already closed: {0}")]
 	AlreadyClosed(ConnectionError),
@@ -590,9 +590,9 @@ impl AcceptError {
 	/// If the connection was closed with an application-level close frame,
 	/// returns the associated `ApplicationClose` reason. Otherwise returns
 	/// `None`.
-	pub fn close_reason(&self) -> Option<&ApplicationClose> {
+	pub const fn close_reason(&self) -> Option<&ApplicationClose> {
 		match self {
-			AcceptError::Io(
+			Self::Io(
 				IrohAcceptError::Connecting {
 					source:
 						ConnectingError::ConnectionError {
@@ -612,34 +612,32 @@ impl AcceptError {
 
 	/// Returns `true` if the error indicates that the operation was locally
 	/// cancelled.
-	pub fn is_cancelled(&self) -> bool {
-		matches!(self, AcceptError::Cancelled)
+	pub const fn is_cancelled(&self) -> bool {
+		matches!(self, Self::Cancelled)
 	}
 }
 
 impl From<CloseError> for AcceptError {
 	fn from(err: CloseError) -> Self {
 		match err {
-			CloseError::Cancelled => AcceptError::Cancelled,
+			CloseError::Cancelled => Self::Cancelled,
 			error @ CloseError::UnexpectedReason(_) => {
-				AcceptError::Io(IrohAcceptError::from_err(error))
+				Self::Io(IrohAcceptError::from_err(error))
 			}
-			CloseError::AlreadyClosed(_) => {
-				AcceptError::Io(IrohAcceptError::from_err(err))
-			}
+			CloseError::AlreadyClosed(_) => Self::Io(IrohAcceptError::from_err(err)),
 		}
 	}
 }
 
 impl From<ApplicationClose> for AcceptError {
 	fn from(val: ApplicationClose) -> Self {
-		AcceptError::Io(ConnectionError::ApplicationClosed(val).into())
+		Self::Io(ConnectionError::ApplicationClosed(val).into())
 	}
 }
 
 impl From<ApplicationClose> for RecvError {
 	fn from(val: ApplicationClose) -> Self {
-		RecvError::Io(ReadError::ConnectionLost(
+		Self::Io(ReadError::ConnectionLost(
 			ConnectionError::ApplicationClosed(val),
 		))
 	}
@@ -647,21 +645,21 @@ impl From<ApplicationClose> for RecvError {
 
 impl From<ApplicationClose> for OpenError {
 	fn from(val: ApplicationClose) -> Self {
-		OpenError::Io(ConnectionError::ApplicationClosed(val).into())
+		Self::Io(ConnectionError::ApplicationClosed(val).into())
 	}
 }
 
 impl RecvError {
 	pub fn closed(reason: impl Into<ApplicationClose>) -> Self {
-		RecvError::from(reason.into())
+		Self::from(reason.into())
 	}
 
 	/// If the connection was closed with an application-level close frame,
 	/// returns the associated `ApplicationClose` reason. Otherwise returns
 	/// `None`.
-	pub fn close_reason(&self) -> Option<&ApplicationClose> {
+	pub const fn close_reason(&self) -> Option<&ApplicationClose> {
 		match self {
-			RecvError::Io(ReadError::ConnectionLost(
+			Self::Io(ReadError::ConnectionLost(
 				ConnectionError::ApplicationClosed(reason),
 			)) => Some(reason),
 			_ => None,
@@ -670,14 +668,14 @@ impl RecvError {
 
 	/// Returns `true` if the error indicates that the operation was locally
 	/// cancelled.
-	pub fn is_cancelled(&self) -> bool {
-		matches!(self, RecvError::Cancelled)
+	pub const fn is_cancelled(&self) -> bool {
+		matches!(self, Self::Cancelled)
 	}
 }
 
 impl From<ConnectionError> for RecvError {
 	fn from(err: ConnectionError) -> Self {
-		RecvError::Io(ReadError::ConnectionLost(err))
+		Self::Io(ReadError::ConnectionLost(err))
 	}
 }
 
@@ -685,9 +683,9 @@ impl SendError {
 	/// If the connection was closed with an application-level close frame,
 	/// returns the associated `ApplicationClose` reason. Otherwise returns
 	/// `None`.
-	pub fn close_reason(&self) -> Option<&ApplicationClose> {
+	pub const fn close_reason(&self) -> Option<&ApplicationClose> {
 		match self {
-			SendError::Io(WriteError::ConnectionLost(
+			Self::Io(WriteError::ConnectionLost(
 				ConnectionError::ApplicationClosed(reason),
 			)) => Some(reason),
 			_ => None,
@@ -696,8 +694,8 @@ impl SendError {
 
 	/// Returns `true` if the error indicates that the operation was locally
 	/// cancelled.
-	pub fn is_cancelled(&self) -> bool {
-		matches!(self, SendError::Cancelled)
+	pub const fn is_cancelled(&self) -> bool {
+		matches!(self, Self::Cancelled)
 	}
 }
 
@@ -705,56 +703,56 @@ impl From<AcceptError> for IrohAcceptError {
 	fn from(err: AcceptError) -> Self {
 		match err {
 			AcceptError::Io(e) => e,
-			error => IrohAcceptError::from_err(error),
+			error => Self::from_err(error),
 		}
 	}
 }
 
 impl CloseError {
-	pub fn close_reason(&self) -> Option<&ApplicationClose> {
+	pub const fn close_reason(&self) -> Option<&ApplicationClose> {
 		match self {
-			CloseError::UnexpectedReason(ConnectionError::ApplicationClosed(
-				reason,
-			)) => Some(reason),
+			Self::UnexpectedReason(ConnectionError::ApplicationClosed(reason)) => {
+				Some(reason)
+			}
 			_ => None,
 		}
 	}
 
 	/// Returns `true` if the error indicates that the operation was locally
 	/// cancelled.
-	pub fn is_cancelled(&self) -> bool {
-		matches!(self, CloseError::Cancelled)
+	pub const fn is_cancelled(&self) -> bool {
+		matches!(self, Self::Cancelled)
 	}
 
 	/// Returns `true` if the link was already closed when attempting to close
 	/// it.
-	pub fn was_already_closed(&self) -> bool {
-		matches!(self, CloseError::AlreadyClosed(_))
+	pub const fn was_already_closed(&self) -> bool {
+		matches!(self, Self::AlreadyClosed(_))
 	}
 }
 
 impl LinkError {
 	/// Returns `true` if the error indicates that the operation was locally
 	/// cancelled.
-	pub fn is_cancelled(&self) -> bool {
+	pub const fn is_cancelled(&self) -> bool {
 		match self {
-			LinkError::Open(err) => err.is_cancelled(),
-			LinkError::Accept(err) => err.is_cancelled(),
-			LinkError::Recv(err) => err.is_cancelled(),
-			LinkError::Write(err) => err.is_cancelled(),
-			LinkError::Close(err) => err.is_cancelled(),
-			LinkError::Cancelled => true,
+			Self::Open(err) => err.is_cancelled(),
+			Self::Accept(err) => err.is_cancelled(),
+			Self::Recv(err) => err.is_cancelled(),
+			Self::Write(err) => err.is_cancelled(),
+			Self::Close(err) => err.is_cancelled(),
+			Self::Cancelled => true,
 		}
 	}
 
-	pub fn close_reason(&self) -> Option<&ApplicationClose> {
+	pub const fn close_reason(&self) -> Option<&ApplicationClose> {
 		match self {
-			LinkError::Accept(err) => err.close_reason(),
-			LinkError::Open(err) => err.close_reason(),
-			LinkError::Recv(err) => err.close_reason(),
-			LinkError::Write(err) => err.close_reason(),
-			LinkError::Close(err) => err.close_reason(),
-			LinkError::Cancelled => None,
+			Self::Accept(err) => err.close_reason(),
+			Self::Open(err) => err.close_reason(),
+			Self::Recv(err) => err.close_reason(),
+			Self::Write(err) => err.close_reason(),
+			Self::Close(err) => err.close_reason(),
+			Self::Cancelled => None,
 		}
 	}
 }
@@ -762,8 +760,8 @@ impl LinkError {
 impl From<OpenError> for LinkError {
 	fn from(err: OpenError) -> Self {
 		match err {
-			OpenError::Cancelled => LinkError::Cancelled,
-			error @ OpenError::Io(_) => LinkError::Open(error),
+			OpenError::Cancelled => Self::Cancelled,
+			error @ OpenError::Io(_) => Self::Open(error),
 		}
 	}
 }
@@ -771,8 +769,8 @@ impl From<OpenError> for LinkError {
 impl From<AcceptError> for LinkError {
 	fn from(err: AcceptError) -> Self {
 		match err {
-			AcceptError::Cancelled => LinkError::Cancelled,
-			error => LinkError::Accept(error),
+			AcceptError::Cancelled => Self::Cancelled,
+			error => Self::Accept(error),
 		}
 	}
 }
@@ -780,8 +778,8 @@ impl From<AcceptError> for LinkError {
 impl From<RecvError> for LinkError {
 	fn from(err: RecvError) -> Self {
 		match err {
-			RecvError::Cancelled => LinkError::Cancelled,
-			error => LinkError::Recv(error),
+			RecvError::Cancelled => Self::Cancelled,
+			error => Self::Recv(error),
 		}
 	}
 }
@@ -789,8 +787,8 @@ impl From<RecvError> for LinkError {
 impl From<SendError> for LinkError {
 	fn from(err: SendError) -> Self {
 		match err {
-			SendError::Cancelled => LinkError::Cancelled,
-			error => LinkError::Write(error),
+			SendError::Cancelled => Self::Cancelled,
+			error => Self::Write(error),
 		}
 	}
 }
@@ -798,15 +796,15 @@ impl From<SendError> for LinkError {
 impl From<CloseError> for LinkError {
 	fn from(err: CloseError) -> Self {
 		match err {
-			CloseError::Cancelled => LinkError::Cancelled,
-			error => LinkError::Close(error),
+			CloseError::Cancelled => Self::Cancelled,
+			error => Self::Close(error),
 		}
 	}
 }
 
 impl From<ConnectionError> for OpenError {
 	fn from(err: ConnectionError) -> Self {
-		OpenError::Io(ConnectError::Connection {
+		Self::Io(ConnectError::Connection {
 			source: err,
 			meta: Meta::default(),
 		})
@@ -817,9 +815,9 @@ impl OpenError {
 	/// If the connection was closed with an application-level close frame,
 	/// returns the associated `ApplicationClose` reason. Otherwise returns
 	/// `None`.
-	pub fn close_reason(&self) -> Option<&ApplicationClose> {
+	pub const fn close_reason(&self) -> Option<&ApplicationClose> {
 		match self {
-			OpenError::Io(
+			Self::Io(
 				ConnectError::Connecting {
 					source:
 						ConnectingError::ConnectionError {
@@ -839,14 +837,14 @@ impl OpenError {
 
 	/// Returns `true` if the error indicates that the operation was locally
 	/// cancelled.
-	pub fn is_cancelled(&self) -> bool {
-		matches!(self, OpenError::Cancelled)
+	pub const fn is_cancelled(&self) -> bool {
+		matches!(self, Self::Cancelled)
 	}
 }
 
 impl From<ConnectionError> for AcceptError {
 	fn from(err: ConnectionError) -> Self {
-		AcceptError::Io(IrohAcceptError::from(err))
+		Self::Io(IrohAcceptError::from(err))
 	}
 }
 
@@ -887,7 +885,7 @@ impl<P: Protocol> LinkSender<P> {
 	/// Returns the number of bytes sent on success.
 	pub async fn send<D: Serialize>(
 		&mut self,
-		datum: &D,
+		datum: D,
 	) -> Result<usize, SendError> {
 		let mut writer = BytesMut::new().writer();
 		if let Err(e) = encode_into_std_write(datum, &mut writer, standard()) {

@@ -111,7 +111,7 @@ impl CatalogSync {
 			// Establish a direct connection with remote peer on the catalog sync ALPN
 			let cancel = local.termination().clone();
 			let mut link = local
-				.connect_with_cancel::<CatalogSync>(peer.clone(), cancel)
+				.connect_with_cancel::<Self>(peer.clone(), cancel)
 				.await
 				.map_err(LinkError::from)?;
 
@@ -212,18 +212,17 @@ impl ProtocolHandler for CatalogSync {
 			);
 
 			// Accept the incoming link for the catalog sync protocol
-			let mut link =
-				Link::<CatalogSync>::accept_with_cancel(connection, cancel)
-					.await
-					.inspect_err(|e| {
-						if !e.is_cancelled() {
-							tracing::debug!(
-								error = %e,
-								peer = %Short(&remote_id),
-								"failed to accept incoming catalog sync link",
-							);
-						}
-					})?;
+			let mut link = Link::<Self>::accept_with_cancel(connection, cancel)
+				.await
+				.inspect_err(|e| {
+					if !e.is_cancelled() {
+						tracing::debug!(
+							error = %e,
+							peer = %Short(&remote_id),
+							"failed to accept incoming catalog sync link",
+						);
+					}
+				})?;
 
 			// The acceptor awaits the remote peer's catalog snapshot message first.
 			// [`SignedPeerEntry`] will implicitly verify the signatures of each

@@ -24,9 +24,10 @@ pub enum Error<D> {
 impl<D: PartialEq> PartialEq for Error<D> {
 	fn eq(&self, other: &Self) -> bool {
 		match (self, other) {
-			(Error::Closed(a), Error::Closed(b)) => a == b,
-			(Error::Full(a), Error::Full(b))
-			| (Error::Offline(a), Error::Offline(b)) => a == b,
+			(Self::Closed(a), Self::Closed(b)) => a == b,
+			(Self::Full(a), Self::Full(b)) | (Self::Offline(a), Self::Offline(b)) => {
+				a == b
+			}
 			_ => false,
 		}
 	}
@@ -35,9 +36,9 @@ impl<D: PartialEq> PartialEq for Error<D> {
 impl<D: Clone> Clone for Error<D> {
 	fn clone(&self) -> Self {
 		match self {
-			Error::Closed(d) => Error::Closed(d.clone()),
-			Error::Full(d) => Error::Full(d.clone()),
-			Error::Offline(d) => Error::Offline(d.clone()),
+			Self::Closed(d) => Self::Closed(d.clone()),
+			Self::Full(d) => Self::Full(d.clone()),
+			Self::Offline(d) => Self::Offline(d.clone()),
 		}
 	}
 }

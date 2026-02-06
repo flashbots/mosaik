@@ -22,7 +22,7 @@ struct Data1(pub String);
 impl Data1 {
 	#[allow(dead_code)]
 	pub fn new(s: &str) -> Self {
-		Data1(s.to_string())
+		Self(s.to_string())
 	}
 }
 
@@ -32,7 +32,7 @@ struct Data2(pub String);
 #[allow(dead_code)]
 impl Data2 {
 	pub fn new(s: &str) -> Self {
-		Data2(s.to_string())
+		Self(s.to_string())
 	}
 }
 
@@ -41,14 +41,14 @@ pub type Nonce = u64;
 #[allow(dead_code)]
 pub type Balance = U256;
 
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NoncesUpdate {
 	pub block: (BlockNumber, BlockHash),
 	pub nonces: BTreeMap<Address, Nonce>,
 }
 
 #[allow(dead_code)]
-#[derive(Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BalancesUpdate {
 	pub block: (BlockNumber, BlockHash),
 	pub balances: BTreeMap<Address, Balance>,

@@ -7,7 +7,7 @@ use {
 pub struct Criteria {}
 
 impl Criteria {
-	pub fn matches<D: Datum>(&self, _item: &D) -> bool {
+	pub const fn matches<D: Datum>(&self, _item: &D) -> bool {
 		true
 	}
 }

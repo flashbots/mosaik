@@ -1,7 +1,19 @@
 use {
-	crate::{Groups, PeerId, UniqueId, groups::GroupId, network::link::Link},
+	crate::{Digest, Groups, PeerId, groups::GroupId, network::link::Link},
 	core::fmt,
 };
+
+/// Group secret key used during initial handshake to authorize group
+/// membership. It's a 32-byte value that is never transmitted over the network
+/// directly, only proofs of knowledge derived from it are sent during handshake
+/// to authenticate peers.
+pub type Secret = Digest;
+
+/// Group secret proof of knowledge.
+///
+/// This is derived during bonding handshake to prove knowledge of the
+/// group secret without transmitting the secret itself over the network.
+pub type SecretProof = Digest;
 
 /// Group Key is used to join a group and authorize membership.
 ///
@@ -13,11 +25,11 @@ use {
 ///
 /// - During handshake, peers prove knowledge of the secret by hashing the
 ///   challenge nonce with the secret using [`UniqueId::derive`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GroupKey {
 	/// The secret key used to derive the group id and authenticate peers during
 	/// bonding handshake.
-	secret: UniqueId,
+	secret: Secret,
 
 	/// The public identifier for the group derived from the secret.
 	id: GroupId,
@@ -25,7 +37,7 @@ pub struct GroupKey {
 
 impl GroupKey {
 	/// Create a new `GroupKey` from the given secret `UniqueId`.
-	pub fn from_secret(secret: UniqueId) -> Self {
+	pub fn from_secret(secret: Secret) -> Self {
 		let hash = blake3::hash(secret.as_bytes());
 		let id = GroupId::from_bytes(*hash.as_bytes());
 		Self { secret, id }
@@ -42,13 +54,17 @@ impl GroupKey {
 	///
 	/// This should never be transmitted over the network, only proofs
 	/// of knowledge should be sent.
-	pub const fn secret(&self) -> &UniqueId {
+	pub const fn secret(&self) -> &Secret {
 		&self.secret
 	}
 
 	/// Validates the validity of the authentication proof contained in this
 	/// handshake message against the provided group key and link.
-	pub fn validate_proof(&self, link: &Link<Groups>, proof: UniqueId) -> bool {
+	pub fn validate_proof(
+		&self,
+		link: &Link<Groups>,
+		proof: SecretProof,
+	) -> bool {
 		self.generate_proof(link, link.remote_id()) == proof
 	}
 
@@ -58,7 +74,7 @@ impl GroupKey {
 		&self,
 		link: &Link<Groups>,
 		peer_id: PeerId,
-	) -> UniqueId {
+	) -> SecretProof {
 		self
 			.secret()
 			.derive(link.shared_random(self.id()))
@@ -104,7 +120,7 @@ impl<'de> serde::Deserialize<'de> for GroupKey {
 				E: serde::de::Error,
 			{
 				let bytes = hex::decode(v).map_err(serde::de::Error::custom)?;
-				let secret = UniqueId::from_bytes(
+				let secret = Digest::from_bytes(
 					bytes
 						.try_into()
 						.map_err(|_| serde::de::Error::custom("invalid secret length"))?,
@@ -116,7 +132,7 @@ impl<'de> serde::Deserialize<'de> for GroupKey {
 			where
 				E: serde::de::Error,
 			{
-				let secret = UniqueId::from_bytes(
+				let secret = Digest::from_bytes(
 					v.try_into()
 						.map_err(|_| serde::de::Error::custom("invalid secret length"))?,
 				);

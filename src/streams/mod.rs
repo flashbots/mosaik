@@ -20,7 +20,7 @@ use {
 			ProtocolProvider,
 			link::{self, Protocol},
 		},
-		primitives::UniqueId,
+		primitives::Digest,
 	},
 	accept::Acceptor,
 	iroh::protocol::RouterBuilder,
@@ -49,7 +49,7 @@ pub use {
 /// A unique identifier for a stream within the Mosaik network.
 ///
 /// By default this id is derived from the stream datum type.
-pub type StreamId = UniqueId;
+pub type StreamId = Digest;
 
 /// The streams subsystem for a Mosaik network.
 ///

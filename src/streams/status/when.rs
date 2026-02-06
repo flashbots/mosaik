@@ -144,7 +144,7 @@ impl ChannelConditions {
 	/// Specifies that the future should resolve when there is at least the given
 	/// number of peers.
 	#[must_use]
-	pub fn minimum_of(mut self, min: usize) -> Self {
+	pub const fn minimum_of(mut self, min: usize) -> Self {
 		self.min_peers = min;
 		self
 	}
@@ -174,8 +174,9 @@ impl ChannelConditions {
 
 	/// Checks the minimum number of connected peers that meet our predicates.
 	pub fn is_condition_met(&self) -> bool {
-		let active = self.active.borrow();
-		let matching_peers = active
+		let matching_peers = self
+			.active
+			.borrow()
 			.values()
 			.filter(|handle| {
 				handle.is_connected()
@@ -189,8 +190,8 @@ impl ChannelConditions {
 	/// Inverts the condition, so that the future resolves when the condition is
 	/// not met.
 	#[must_use]
-	pub fn unmet(self) -> Self {
-		let mut cloned = self.clone();
+	pub const fn unmet(self) -> Self {
+		let mut cloned = self;
 		cloned.is_inverse = true;
 		cloned
 	}

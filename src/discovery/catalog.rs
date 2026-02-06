@@ -263,18 +263,18 @@ pub enum UpsertResult<'a> {
 
 impl UpsertResult<'_> {
 	/// Returns true if the upsert resulted in a new entry being added.
-	pub fn is_new(&self) -> bool {
+	pub const fn is_new(&self) -> bool {
 		matches!(self, UpsertResult::New(_))
 	}
 
 	/// Returns true if the upsert resulted in an existing entry being updated.
-	pub fn is_updated(&self) -> bool {
+	pub const fn is_updated(&self) -> bool {
 		matches!(self, UpsertResult::Updated(_))
 	}
 
 	/// Returns true if the upsert resulted in a change to the catalog,
 	/// i.e., either a new entry was added or an existing entry was updated.
-	pub fn is_ok(&self) -> bool {
+	pub const fn is_ok(&self) -> bool {
 		self.is_new() || self.is_updated()
 	}
 }
@@ -284,7 +284,7 @@ impl Catalog {
 	/// Creates a new catalog instance with the local node's peer entry as the
 	/// first and only entry.
 	pub(super) fn new(local: &LocalNode, config: &Arc<Config>) -> Self {
-		let local_entry = PeerEntry::new(*local.network_id(), local.addr().clone())
+		let local_entry = PeerEntry::new(*local.network_id(), local.addr())
 			.add_tags(config.tags.clone())
 			.sign(local.secret_key())
 			.expect("signing local peer entry failed.");

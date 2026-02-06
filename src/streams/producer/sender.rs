@@ -290,7 +290,7 @@ impl Sender {
 		let reason = error
 			.close_reason()
 			.cloned()
-			.unwrap_or(UnexpectedClose.into());
+			.unwrap_or_else(|| UnexpectedClose.into());
 		self.drop.set(reason).ok();
 	}
 }

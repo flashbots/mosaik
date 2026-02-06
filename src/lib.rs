@@ -18,7 +18,7 @@ pub use {
 	groups::{Group, GroupKey, Groups},
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},
-	primitives::UniqueId,
+	primitives::Digest,
 	store::{PrimaryStore, ReplicaStore, StoreId},
 	streams::{Criteria, Datum, StreamId},
 };

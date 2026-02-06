@@ -122,7 +122,7 @@ impl<D: Datum> Builder<'_, D> {
 	/// consumer inflight datums grows beyond `buffer_size` it will be
 	/// disconnected.
 	#[must_use]
-	pub fn disconnect_lagging(mut self, disconnect: bool) -> Self {
+	pub const fn disconnect_lagging(mut self, disconnect: bool) -> Self {
 		self.config.disconnect_lagging = disconnect;
 		self
 	}
@@ -131,7 +131,7 @@ impl<D: Datum> Builder<'_, D> {
 	/// before they are sent to connected consumers. If the buffer is full, calls
 	/// to `send` on the producer will await until there is space available.
 	#[must_use]
-	pub fn with_buffer_size(mut self, size: usize) -> Self {
+	pub const fn with_buffer_size(mut self, size: usize) -> Self {
 		self.config.buffer_size = size;
 		self
 	}
@@ -139,7 +139,7 @@ impl<D: Datum> Builder<'_, D> {
 	/// Sets the maximum number of subscribers allowed for this producer.
 	/// Defaults to unlimited if not set.
 	#[must_use]
-	pub fn with_max_consumers(mut self, max: usize) -> Self {
+	pub const fn with_max_consumers(mut self, max: usize) -> Self {
 		self.config.max_consumers = max;
 		self
 	}

@@ -111,10 +111,10 @@ impl<D: Datum> Receiver<D> {
 			consumer_id: local.id(),
 			stats: Arc::clone(&stats),
 			peer: Arc::clone(&peer),
-			state: state.clone(),
+			state,
 		};
 
-		let worker = Receiver {
+		let worker = Self {
 			local,
 			discovery,
 			data_tx,

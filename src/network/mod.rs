@@ -4,7 +4,7 @@ use {
 	crate::{
 		discovery::Discovery,
 		groups::Groups,
-		primitives::UniqueId,
+		primitives::Digest,
 		store::Stores,
 		streams::Streams,
 	},
@@ -81,7 +81,7 @@ pub struct Network {
 ///
 /// On the protocol level this is represented by a gossip `TopicId` that is a
 /// 32-byte blake3 hash of the network string name.
-pub type NetworkId = UniqueId;
+pub type NetworkId = Digest;
 
 /// This type uniquely identifies a peer globally across all Mosaik networks.
 /// It is the public key derived from the node's secret key.

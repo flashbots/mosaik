@@ -39,7 +39,7 @@ pub struct Builder<'s, D: Datum> {
 impl<D: Datum> Builder<'_, D> {
 	/// Sets the criteria for the range of data this consumer is interested in.
 	#[must_use]
-	pub fn with_criteria(mut self, criteria: Criteria) -> Self {
+	pub const fn with_criteria(mut self, criteria: Criteria) -> Self {
 		self.config.criteria = criteria;
 		self
 	}

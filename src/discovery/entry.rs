@@ -185,7 +185,7 @@ impl PeerEntry {
 
 	/// Returns true if this [`PeerEntry`] is newer than the other based on the
 	/// version.
-	pub fn is_newer_than(&self, other: &PeerEntry) -> bool {
+	pub fn is_newer_than(&self, other: &Self) -> bool {
 		self.version > other.version
 	}
 }
@@ -454,7 +454,7 @@ impl fmt::Debug for Pretty<'_, PeerEntry> {
 ///   deserialization always verifies the signature and fails if invalid and the
 ///   api only allows creating signed entries through the `sign` method of
 ///   `PeerEntry`.
-#[derive(Debug, Clone, Serialize, Deref, AsRef, Into, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deref, AsRef, Into, PartialEq, Eq)]
 pub struct SignedPeerEntry(
 	#[deref] PeerEntry,
 	#[debug("signature: {}", Abbreviated(_1.to_bytes()))] Signature,
@@ -500,7 +500,7 @@ impl<'de> Deserialize<'de> for SignedPeerEntry {
 	{
 		let (entry, signature) =
 			<(PeerEntry, Signature)>::deserialize(deserializer)?;
-		let signed = SignedPeerEntry(entry, signature);
+		let signed = Self(entry, signature);
 		signed.verify_signature().map_err(de::Error::custom)?;
 		Ok(signed)
 	}
@@ -559,7 +559,7 @@ mod tests {
 			.expect("Failed to serialize SignedPeerEntry");
 
 		// Tamper with the signature bytes (last 64 bytes are the signature)
-		let mut tampered = serialized.clone();
+		let mut tampered = serialized;
 		let len = tampered.len();
 		tampered[len - 1] ^= 0xFF; // Flip bits in signature
 
