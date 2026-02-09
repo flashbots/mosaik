@@ -2,7 +2,7 @@ use crate::{
 	PeerId,
 	groups::{
 		consensus::{ConsensusMessage, shared::Shared},
-		log::Term,
+		log::{StateMachine, Storage, Term},
 	},
 };
 
@@ -22,15 +22,18 @@ impl Follower {
 	/// As a follower, we wait for messages from leaders or candidates.
 	/// If no messages are received within the election timeout, we transition to
 	/// a candidate state and start a new election.
-	pub async fn tick(&mut self, shared: &mut Shared) {
+	pub async fn tick<S: Storage<M::Command>, M: StateMachine>(
+		&mut self,
+		shared: &mut Shared<S, M>,
+	) {
 		core::future::pending::<()>().await;
 	}
 
-	pub fn receive(
+	pub fn receive<S: Storage<M::Command>, M: StateMachine>(
 		&mut self,
 		message: ConsensusMessage,
 		sender: PeerId,
-		shared: &mut Shared,
+		shared: &mut Shared<S, M>,
 	) {
 		match message {
 			ConsensusMessage::RequestVote(request) => {}

@@ -1,13 +1,12 @@
 use {
-	super::{Consensus, protocol::RequestVote},
+	super::protocol::RequestVote,
 	crate::{
 		PeerId,
 		groups::{
 			consensus::{ConsensusMessage, shared::Shared},
-			log::{Index, Term},
+			log::{Index, StateMachine, Storage, Term},
 		},
 	},
-	core::iter::once,
 	std::collections::HashSet,
 };
 
@@ -22,15 +21,18 @@ impl Candidate {
 	/// As a candidate, we start elections and wait for votes from other nodes or
 	/// `AppendEntries` from a leader. If no quorum is reached within the election
 	/// timeout, we start a new election.
-	pub async fn tick(&mut self, shared: &mut Shared) {
+	pub async fn tick<S: Storage<M::Command>, M: StateMachine>(
+		&mut self,
+		shared: &mut Shared<S, M>,
+	) {
 		core::future::pending::<()>().await;
 	}
 
-	pub fn receive(
+	pub fn receive<S: Storage<M::Command>, M: StateMachine>(
 		&mut self,
 		message: ConsensusMessage,
 		sender: PeerId,
-		shared: &mut Shared,
+		shared: &mut Shared<S, M>,
 	) {
 		match message {
 			ConsensusMessage::RequestVote(request) => {
@@ -84,7 +86,7 @@ struct Elections {
 }
 
 impl Elections {
-	pub fn new(current: &Consensus) -> Self {
+	pub fn new() -> Self {
 		todo!()
 	}
 

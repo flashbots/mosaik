@@ -154,6 +154,20 @@ impl Digest {
 		self.0.as_bytes()
 	}
 
+	/// Creates a unique id from the given blake3 hasher by finalizing it.
+	pub fn from_hasher(hasher: &blake3::Hasher) -> Self {
+		Self(hasher.finalize())
+	}
+
+	/// Creates a unique id by hashing the concatenation of the given parts.
+	pub fn from_parts(parts: &[impl AsRef<[u8]>]) -> Self {
+		let mut hasher = blake3::Hasher::new();
+		for part in parts {
+			hasher.update(part.as_ref());
+		}
+		Self::from_hasher(&hasher)
+	}
+
 	/// Creates a unique id from the given u8 value.
 	pub const fn from_u8(n: u8) -> Self {
 		let mut bytes = [0u8; 32];
@@ -260,6 +274,14 @@ impl Digest {
 		hasher.update(self.as_bytes());
 		hasher.update(info.as_ref());
 		Self(hasher.finalize())
+	}
+
+	/// Returns a new digest that is the hash of this digest.
+	#[must_use]
+	pub fn hashed(&self) -> Self {
+		let mut hasher = blake3::Hasher::new();
+		hasher.update(self.as_bytes());
+		Self::from_hasher(&hasher)
 	}
 }
 

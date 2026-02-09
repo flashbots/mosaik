@@ -2,7 +2,7 @@ use {
 	crate::{
 		PeerId,
 		discovery::SignedPeerEntry,
-		groups::log::{Index, LogEntry, Term},
+		groups::log::{Index, Term},
 		primitives::Short,
 	},
 	derive_more::Display,
@@ -80,6 +80,17 @@ pub struct RequestVoteResponse {
 
 	/// True means candidate received vote.
 	pub vote_granted: bool,
+}
+
+/// Log entry stored in the Raft log.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogEntry<C> {
+	/// Term when entry was received by leader.
+	pub term: Term,
+
+	/// Command for replicated state machine. This is the application-specific
+	/// state transition that is replicated across the group via the Raft log.
+	pub command: C,
 }
 
 /// `AppendEntries` message arguments.

@@ -9,7 +9,7 @@ use {
 			bond::worker::Command,
 			consensus::ConsensusMessage,
 			error::InvalidProof,
-			group::GroupState,
+			state::WorkerState,
 		},
 		network::{
 			CloseReason,
@@ -124,13 +124,13 @@ impl Bond {
 	/// the discovery catalog. This method is called only for peers that are
 	/// already known in the discovery catalog.
 	pub(super) async fn create(
-		group: Arc<GroupState>,
+		group: Arc<WorkerState>,
 		peer: SignedPeerEntry,
 	) -> Result<(Self, BondEvents), Error> {
 		tracing::trace!(
-			network = %group.local.network_id(),
+			network = %group.network_id(),
 			peer = %Short(peer.id()),
-			group = %Short(group.key.id()),
+			group = %Short(group.group_id()),
 			"initiating peer bond",
 		);
 
@@ -148,9 +148,9 @@ impl Bond {
 		// secret and send it to the remote peer over the newly established link
 		link
 			.send(&HandshakeStart {
-				network_id: *group.local.network_id(),
-				group_id: *group.key.id(),
-				proof: group.key.generate_proof(&link, group.local.id()),
+				network_id: *group.network_id(),
+				group_id: *group.group_id(),
+				proof: group.generate_key_proof(&link),
 				bonds: group.bonds.iter().map(|b| b.peer()).collect(),
 			})
 			.await
@@ -160,15 +160,15 @@ impl Bond {
 		// secret, wait for the accepting peer to respond with its own proof of
 		// knowledge of the group secret.
 		let Ok(recv_result) = timeout(
-			group.config.handshake_timeout, //
+			group.global_config.handshake_timeout,
 			link.recv::<HandshakeEnd>(),
 		)
 		.await
 		else {
 			tracing::debug!(
-				network = %group.local.network_id(),
+				network = %group.network_id(),
 				peer = %Short(peer.id()),
-				group = %Short(group.key.id()),
+				group = %Short(group.group_id()),
 				"handshake timeout waiting for bond confirmation",
 			);
 
@@ -198,9 +198,9 @@ impl Bond {
 				// or a malicious actor.
 				Some(reason) if reason == InvalidProof => {
 					tracing::warn!(
-						network = %group.local.network_id(),
+						network = %group.network_id(),
 						peer = %Short(peer.id()),
-						group = %Short(group.key.id()),
+						group = %Short(group.group_id()),
 						"remote peer rejected bond handshake due to invalid proof",
 					);
 
@@ -217,11 +217,11 @@ impl Bond {
 		};
 
 		// validate the accepting peer's proof of knowledge of the group secret
-		if !group.key.validate_proof(&link, confirm.proof) {
+		if !group.validate_key_proof(&link, confirm.proof) {
 			tracing::warn!(
-				network = %group.local.network_id(),
+				network = %group.network_id(),
 				peer = %Short(peer.id()),
-				group = %Short(group.key.id()),
+				group = %Short(group.group_id()),
 				"remote peer provided invalid group secret proof",
 			);
 
@@ -245,7 +245,7 @@ impl Bond {
 	/// Accepts an incoming bond connection for this group.
 	///
 	/// This is called by the group's protocol handler when a new connection
-	/// is established  in [`Listener::accept`].
+	/// is established  in [`bond::Acceptor::accept`].
 	///
 	/// By the time this method is called:
 	/// - The network id has already been verified to match the local node's
@@ -255,7 +255,7 @@ impl Bond {
 	///   verified.
 	/// - The authentication proof has not been verified yet.
 	pub(super) async fn accept(
-		group: Arc<GroupState>,
+		group: Arc<WorkerState>,
 		link: Link<Groups>,
 		peer: SignedPeerEntry,
 		handshake: HandshakeStart,
@@ -263,11 +263,11 @@ impl Bond {
 		let mut link = link;
 
 		// verify the remote peer's proof of knowledge of the group secret
-		if !group.key.validate_proof(&link, handshake.proof) {
+		if !group.validate_key_proof(&link, handshake.proof) {
 			tracing::warn!(
-				network = %group.local.network_id(),
+				network = %group.network_id(),
 				peer = %Short(peer.id()),
-				group = %Short(group.key.id()),
+				group = %Short(group.group_id()),
 				"remote peer provided invalid group secret proof",
 			);
 
@@ -281,7 +281,7 @@ impl Bond {
 
 		// After verifying the remote peer's proof of knowledge of the group secret,
 		// respond with our own proof of knowledge of the group secret.
-		let proof = group.key.generate_proof(&link, group.local.id());
+		let proof = group.generate_key_proof(&link);
 		let existing = group.bonds.iter().map(|b| b.peer()).collect();
 		let resp = HandshakeEnd {
 			proof,
@@ -387,17 +387,19 @@ impl Bonds {
 	/// Notifies all active bonds that the local peer's discovery entry has
 	/// been updated.
 	pub(super) fn notify_local_info_update(&self, entry: &SignedPeerEntry) {
-		self.broadcast(BondMessage::PeerEntryUpdate(Box::new(entry.clone())));
+		self.broadcast(BondMessage::PeerEntryUpdate(Box::new(entry.clone())), &[]);
 	}
 
 	/// Notifies all active bonds that a new bond has been formed with the
 	/// specified peer and sends its latest known discovery entry.
 	pub(super) fn notify_bond_formed(&self, with: &SignedPeerEntry) {
-		self.broadcast(BondMessage::BondFormed(Box::new(with.clone())));
+		self.broadcast(BondMessage::BondFormed(Box::new(with.clone())), &[
+			*with.id()
+		]);
 	}
 
 	/// Broadcast a message to all connected peers in the group.
-	fn broadcast(&self, message: BondMessage) {
+	fn broadcast(&self, message: BondMessage, except: &[PeerId]) {
 		// serialize once and reuse a pointer to the same encoded message bytes
 		// buffer for all bonds
 		let mut writer = BytesMut::new().writer();
@@ -406,8 +408,9 @@ impl Bonds {
 		let encoded = writer.into_inner().freeze();
 
 		for bond in self.iter() {
-			// SAFETY: encoded is a valid BondMessage encoding created above
-			unsafe { bond.send_raw_message(encoded.clone()) };
+			if !except.contains(bond.peer().id()) {
+				unsafe { bond.send_raw_message(encoded.clone()) };
+			}
 		}
 	}
 }

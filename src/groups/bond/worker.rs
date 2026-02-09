@@ -7,7 +7,7 @@ use {
 			Bond,
 			bond::{BondEvent, BondEvents, heartbeat::Heartbeat},
 			error::Timeout,
-			group::GroupState,
+			state::WorkerState,
 		},
 		network::{link::*, *},
 		primitives::{Short, UnboundedChannel},
@@ -62,7 +62,7 @@ pub(super) enum Command {
 ///   members.
 pub struct BondWorker {
 	/// Reference to the shared group state managing this bond.
-	group: Arc<GroupState>,
+	group: Arc<WorkerState>,
 
 	/// The peer entry representing the remote peer in the group.
 	peer: watch::Sender<SignedPeerEntry>,
@@ -97,14 +97,14 @@ pub struct BondWorker {
 
 impl BondWorker {
 	pub fn spawn(
-		group: Arc<GroupState>,
+		group: Arc<WorkerState>,
 		peer: SignedPeerEntry,
 		link: Link<Groups>,
 	) -> (Bond, BondEvents) {
 		let mut link = link;
 		let (peer, peer_rx) = watch::channel(peer);
 		let cancel = group.cancel.child_token();
-		let heartbeat = Heartbeat::new(&group.config);
+		let heartbeat = Heartbeat::new(group.config.intervals());
 		let commands = UnboundedChannel::default();
 		let commands_tx = commands.sender().clone();
 		let (events_tx, events_rx) = unbounded_channel();
@@ -112,7 +112,7 @@ impl BondWorker {
 
 		let bond_id = link.shared_random("bond_id");
 
-		let bond = BondWorker {
+		let bond = Self {
 			group,
 			peer,
 			link,
@@ -242,15 +242,15 @@ impl BondWorker {
 			Err(e) => {
 				tracing::debug!(
 					error = %e,
-					network = %self.group.local.network_id(),
+					network = %self.group.network_id(),
 					peer = %Short(self.link.remote_id()),
-					group = %Short(self.group.key.id()),
+					group = %Short(self.group.group_id()),
 					"recv",
 				);
 
 				if !e.is_cancelled() {
 					self.close_reason = e.close_reason() //.
-						.cloned().unwrap_or(UnexpectedClose.into());
+						.cloned().unwrap_or_else(|| UnexpectedClose.into());
 				}
 
 				self.cancel.cancel();
@@ -264,15 +264,15 @@ impl BondWorker {
 		if let Err(e) = result {
 			tracing::debug!(
 				error = %e,
-				network = %self.group.local.network_id(),
+				network = %self.group.network_id(),
 				peer = %Short(self.link.remote_id()),
-				group = %Short(self.group.key.id()),
+				group = %Short(self.group.group_id()),
 				"send",
 			);
 
 			if !e.is_cancelled() {
 				self.close_reason = e.close_reason() //.
-					.cloned().unwrap_or(UnexpectedClose.into());
+					.cloned().unwrap_or_else(|| UnexpectedClose.into());
 			}
 
 			self.cancel.cancel();
@@ -283,9 +283,9 @@ impl BondWorker {
 	fn on_peer_entry_update(&self, entry: SignedPeerEntry) {
 		if self.group.discovery.feed(entry.clone()) {
 			tracing::trace!(
-				network = %self.group.local.network_id(),
+				network = %self.group.network_id(),
 				peer = %Short(self.link.remote_id()),
-				group = %Short(self.group.key.id()),
+				group = %Short(self.group.group_id()),
 				"peer entry update received",
 			);
 
@@ -315,9 +315,9 @@ impl BondWorker {
 	pub(super) fn on_heartbeat_tick(&self) {
 		if self.pending_sends.is_empty() {
 			tracing::trace!(
-				network = %self.group.local.network_id(),
+				network = %self.group.network_id(),
 				peer = %Short(self.link.remote_id()),
-				group = %Short(self.group.key.id()),
+				group = %Short(self.group.group_id()),
 				rtt = ?self.link.rtt(),
 				"sending heartbeat ping",
 			);
@@ -327,11 +327,11 @@ impl BondWorker {
 	}
 
 	/// Called when the heartbeat has failed due to too many missed heartbeats.
-	pub(super) fn on_heartbeat_failed(&mut self) {
+	pub(super) fn on_heartbeat_failed(&self) {
 		tracing::warn!(
-			network = %self.group.local.network_id(),
+			network = %self.group.network_id(),
 			peer = %Short(self.link.remote_id()),
-			group = %Short(self.group.key.id()),
+			group = %Short(self.group.group_id()),
 			"heartbeat failed: too many missed heartbeats",
 		);
 
@@ -340,9 +340,9 @@ impl BondWorker {
 
 	pub(super) fn on_heartbeat_ping(&self) {
 		tracing::trace!(
-			network = %self.group.local.network_id(),
+			network = %self.group.network_id(),
 			peer = %Short(self.link.remote_id()),
-			group = %Short(self.group.key.id()),
+			group = %Short(self.group.group_id()),
 			rtt = ?self.link.rtt(),
 			"received heartbeat ping, sending pong",
 		);

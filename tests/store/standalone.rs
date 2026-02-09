@@ -8,7 +8,7 @@ async fn smoke() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 
 	let key = GroupKey::from_secret("test-group-key-123".into());
-	let g1 = n0.groups().join(key)?;
+	let g1 = n0.groups().with_key(key).join();
 
 	let store_id = StoreId::from("test-store-1");
 	let _db0 = n0.stores().primary(&g1, store_id);

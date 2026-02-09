@@ -13,7 +13,6 @@
 
 use {
 	crate::{
-		Group,
 		discovery::Discovery,
 		network::LocalNode,
 		primitives::Digest,
@@ -38,7 +37,7 @@ impl Stores {
 		Self(WorkerLoop::spawn(local, discovery.clone(), config))
 	}
 
-	pub fn primary(&self, _group: &Group, _id: StoreId) -> PrimaryStore {
+	pub fn primary(&self, _group: &(), _id: StoreId) -> PrimaryStore {
 		PrimaryStore {}
 	}
 

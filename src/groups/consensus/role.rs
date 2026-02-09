@@ -9,7 +9,7 @@ use {
 				leader::Leader,
 				shared::Shared,
 			},
-			log::Term,
+			log::{StateMachine, Storage, Term},
 		},
 		primitives::Short,
 	},
@@ -52,7 +52,10 @@ impl Default for Role {
 
 impl Role {
 	/// Drives the role-specific periodic actions (e.g., elections, heartbeats).
-	pub async fn tick(&mut self, shared: &mut Shared) {
+	pub async fn tick<S: Storage<M::Command>, M: StateMachine>(
+		&mut self,
+		shared: &mut Shared<S, M>,
+	) {
 		match self {
 			Role::Follower(follower) => follower.tick(shared).await,
 			Role::Candidate(candidate) => candidate.tick(shared).await,
@@ -63,11 +66,11 @@ impl Role {
 	/// Handles incoming consensus protocol messages based on the current role.
 	/// Implements behaviors common to all roles, such as stepping down on
 	/// receiving messages with higher terms.
-	pub fn receive(
+	pub fn receive<S: Storage<M::Command>, M: StateMachine>(
 		&mut self,
 		message: ConsensusMessage,
 		sender: PeerId,
-		shared: &mut Shared,
+		shared: &mut Shared<S, M>,
 	) {
 		// each message may cause us to step down to follower state
 		self.maybe_step_down(&message, shared);
@@ -82,25 +85,25 @@ impl Role {
 	/// Checks all incoming messages for a higher term and steps down to follower
 	/// if necessary. Returns `true` if the node stepped down to follower state,
 	/// otherwise `false`.
-	fn maybe_step_down(
+	fn maybe_step_down<S: Storage<M::Command>, M: StateMachine>(
 		&mut self,
 		message: &ConsensusMessage,
-		shared: &mut Shared,
+		shared: &mut Shared<S, M>,
 	) {
 		if message.term() > self.term() {
 			if let Some(leader) = message.leader() {
 				tracing::debug!(
 					leader = %Short(leader),
-					group = %Short(shared.group_id()),
-					network = %Short(shared.network_id()),
+					group = %Short(shared.group().group_id()),
+					network = %Short(shared.group().network_id()),
 					old_term = %self.term(),
 					new_term = %message.term(),
 					"following",
 				);
 			} else {
 				tracing::debug!(
-					group = %Short(shared.group_id()),
-					network = %Short(shared.network_id()),
+					group = %Short(shared.group().group_id()),
+					network = %Short(shared.group().network_id()),
 					old_term = %self.term(),
 					new_term = %message.term(),
 					"stepping down to follower",

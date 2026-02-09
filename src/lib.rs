@@ -4,7 +4,7 @@
 //! providing primitives for automatic discovery, topology management, and
 //! load-balancing.
 
-pub mod adapters;
+pub mod builtin;
 pub mod discovery;
 pub mod groups;
 pub mod network;
@@ -15,7 +15,7 @@ pub mod streams;
 pub use {
 	bytes::{Bytes, BytesMut},
 	futures,
-	groups::{Group, GroupKey, Groups},
+	groups::{GroupKey, Groups},
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},
 	primitives::Digest,

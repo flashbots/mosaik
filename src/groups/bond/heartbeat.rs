@@ -1,5 +1,5 @@
 use {
-	crate::groups::Config,
+	crate::groups::IntervalsConfig,
 	core::time::Duration,
 	rand::random,
 	std::{sync::Arc, time::Instant},
@@ -24,15 +24,15 @@ use {
 pub struct Heartbeat {
 	tick: Interval,
 	last_recv: Instant,
-	missed: usize,
-	max_missed: usize,
+	missed: u32,
+	max_missed: u32,
 	alert: Arc<Notify>,
 	base: Duration,
 	jitter: Duration,
 }
 
 impl Heartbeat {
-	pub fn new(config: &Config) -> Self {
+	pub fn new(config: &IntervalsConfig) -> Self {
 		let next_tick_at = Self::next_tick_at(
 			&config.heartbeat_interval, //
 			&config.heartbeat_jitter,

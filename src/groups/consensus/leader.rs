@@ -1,8 +1,8 @@
 use crate::{
 	PeerId,
 	groups::{
-		consensus::{Consensus, ConsensusMessage, shared::Shared},
-		log::Term,
+		consensus::{ConsensusMessage, shared::Shared},
+		log::{StateMachine, Storage, Term},
 	},
 };
 
@@ -15,15 +15,18 @@ impl Leader {
 	///
 	/// If we receive an `AppendEntries` from another leader with a higher term,
 	/// we step down to follower state and follow that leader.
-	pub async fn tick(&mut self, shared: &mut Shared) {
+	pub async fn tick<S: Storage<M::Command>, M: StateMachine>(
+		&mut self,
+		shared: &mut Shared<S, M>,
+	) {
 		core::future::pending::<()>().await;
 	}
 
-	pub fn receive(
+	pub fn receive<S: Storage<M::Command>, M: StateMachine>(
 		&mut self,
 		message: ConsensusMessage,
 		sender: PeerId,
-		shared: &mut Shared,
+		shared: &mut Shared<S, M>,
 	) {
 		match message {
 			ConsensusMessage::RequestVote(request) => {}

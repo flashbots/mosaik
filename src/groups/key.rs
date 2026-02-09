@@ -25,29 +25,18 @@ pub type SecretProof = Digest;
 ///
 /// - During handshake, peers prove knowledge of the secret by hashing the
 ///   challenge nonce with the secret using [`UniqueId::derive`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GroupKey {
 	/// The secret key used to derive the group id and authenticate peers during
 	/// bonding handshake.
 	secret: Secret,
-
-	/// The public identifier for the group derived from the secret.
-	id: GroupId,
 }
 
 impl GroupKey {
 	/// Create a new `GroupKey` from the given secret `UniqueId`.
-	pub fn from_secret(secret: Secret) -> Self {
-		let hash = blake3::hash(secret.as_bytes());
-		let id = GroupId::from_bytes(*hash.as_bytes());
-		Self { secret, id }
-	}
-
-	/// Derive the unique identifier for the group from the group key.
-	/// Currently this is done by hashing the secret bytes, since we only support
-	/// secret-based authentication in this iteration of the protocol.
-	pub const fn id(&self) -> &GroupId {
-		&self.id
+	pub fn from_secret(secret: impl Into<Secret>) -> Self {
+		let secret = secret.into();
+		Self { secret }
 	}
 
 	/// Gets the underlying secret `UniqueId`.
@@ -64,8 +53,9 @@ impl GroupKey {
 		&self,
 		link: &Link<Groups>,
 		proof: SecretProof,
+		group_id: GroupId,
 	) -> bool {
-		self.generate_proof(link, link.remote_id()) == proof
+		self.generate_proof(link, link.remote_id(), group_id) == proof
 	}
 
 	/// Generates a proof of knowledge of the secret key for the given peer and
@@ -74,17 +64,18 @@ impl GroupKey {
 		&self,
 		link: &Link<Groups>,
 		peer_id: PeerId,
+		group_id: GroupId,
 	) -> SecretProof {
 		self
 			.secret()
-			.derive(link.shared_random(self.id()))
+			.derive(link.shared_random(group_id))
 			.derive(peer_id.as_bytes())
 	}
 }
 
 impl fmt::Display for GroupKey {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}", hex::encode(self.id.as_bytes()))
+		write!(f, "{}", hex::encode(self.secret().as_bytes()))
 	}
 }
 

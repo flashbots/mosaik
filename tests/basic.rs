@@ -12,7 +12,7 @@ use {
 
 mod discovery;
 mod groups;
-mod store;
+// mod store;
 mod streams;
 mod utils;
 
@@ -59,7 +59,7 @@ impl NoncesUpdate {
 		block: BlockNumber,
 		nonces: impl IntoIterator<Item = (Address, Nonce)>,
 	) -> Self {
-		NoncesUpdate {
+		Self {
 			block: (block, keccak256(block.to_be_bytes())),
 			nonces: nonces.into_iter().collect(),
 		}

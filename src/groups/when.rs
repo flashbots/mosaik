@@ -22,7 +22,8 @@ impl When {
 			leader.mark_changed();
 
 			loop {
-				if let Some(leader) = *leader.borrow_and_update() {
+				let value = *leader.borrow_and_update();
+				if let Some(leader) = value {
 					return leader;
 				}
 
@@ -52,7 +53,8 @@ impl When {
 					core::future::pending::<()>().await;
 				}
 
-				if let Some(new_leader) = *leader.borrow_and_update() {
+				let value = *leader.borrow_and_update();
+				if let Some(new_leader) = value {
 					if Some(new_leader) != current_leader {
 						return new_leader;
 					}

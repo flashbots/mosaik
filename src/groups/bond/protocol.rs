@@ -1,15 +1,15 @@
 use {
 	crate::{
-		NetworkId,
 		Digest,
+		NetworkId,
 		discovery::{Discovery, SignedPeerEntry},
 		groups::{
 			Config,
-			Group,
 			GroupId,
 			Groups,
 			consensus::ConsensusMessage,
 			error::{GroupNotFound, InvalidHandshake, Timeout},
+			state::WorkerState,
 		},
 		network::{
 			CloseReason,
@@ -103,7 +103,7 @@ pub(in crate::groups) struct Acceptor {
 	local: LocalNode,
 	config: Arc<Config>,
 	discovery: Discovery,
-	active: Arc<DashMap<GroupId, Group>>,
+	active: Arc<DashMap<GroupId, Arc<WorkerState>>>,
 }
 
 impl Acceptor {
@@ -163,10 +163,10 @@ impl ProtocolHandler for Acceptor {
 			.await
 			.inspect_err(|e| {
 				tracing::trace!(
-					network = %self.local.network_id(),
-					peer = %Short(peer_id),
 					error = %e,
-					"failed to accept group bond",
+					peer = %Short(peer_id),
+					network = %self.local.network_id(),
+					"rejected bond connection",
 				);
 			})
 	}

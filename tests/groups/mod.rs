@@ -1,94 +1,49 @@
 use {
-	crate::utils::{discover_all, timeout_s},
-	futures::future::join_all,
-	mosaik::{primitives::Short, *},
+	mosaik::{groups::StateMachine, primitives::UniqueId, unique_id},
+	serde::{Deserialize, Serialize},
 };
 
-mod watch;
+mod bonds;
+// mod builder;
+// mod watch;
 
-#[tokio::test]
-async fn members_can_see_each_other() -> anyhow::Result<()> {
-	// bond formation timeout in seconds
-	const T: u64 = 5;
-
-	let network_id = NetworkId::random();
-
-	let n0 = Network::new(network_id).await?;
-	let n1 = Network::new(network_id).await?;
-	let n2 = Network::new(network_id).await?;
-	let n3 = Network::new(network_id).await?;
-
-	discover_all([&n0, &n1, &n2, &n3]).await?;
-
-	let key1 = GroupKey::from_secret("group1".into());
-	let key2 = GroupKey::from_secret("group2".into());
-	let key3 = GroupKey::from_secret("group3".into());
-
-	tracing::debug!("key1: {key1}, id: {:?}", key1.id());
-	tracing::debug!("key2: {key2}, id: {:?}", key2.id());
-	tracing::debug!("key3: {key3}, id: {:?}", key3.id());
-
-	// group1: n0 and n1
-	let g1_0 = n0.groups().join(key1.clone())?;
-	let g1_1 = n1.groups().join(key1.clone())?;
-
-	// group2: n0, n2 and n3
-	let g2_0 = n0.groups().join(key2.clone())?;
-	let g2_2 = n2.groups().join(key2.clone())?;
-	let g2_3 = n3.groups().join(key2.clone())?;
-
-	// group3: n1 and n2
-	let g3_1 = n1.groups().join(key3.clone())?;
-	let g3_2 = n2.groups().join(key3.clone())?;
-
-	join_all([
-		timeout_s(T, ensure_bonds_formed(&g1_0, &n0, &[&n1], "g1_0")),
-		timeout_s(T, ensure_bonds_formed(&g1_1, &n1, &[&n0], "g1_1")),
-		timeout_s(T, ensure_bonds_formed(&g2_0, &n0, &[&n2, &n3], "g2_0")),
-		timeout_s(T, ensure_bonds_formed(&g2_2, &n2, &[&n0, &n3], "g2_2")),
-		timeout_s(T, ensure_bonds_formed(&g2_3, &n3, &[&n0, &n2], "g2_3")),
-		timeout_s(T, ensure_bonds_formed(&g3_1, &n1, &[&n2], "g3_1")),
-		timeout_s(T, ensure_bonds_formed(&g3_2, &n2, &[&n1], "g3_2")),
-	])
-	.await
-	.into_iter()
-	.collect::<Result<Vec<_>, _>>()
-	.expect("not all groups formed successfully");
-
-	Ok(())
+#[derive(Debug, Default)]
+struct Counter {
+	value: i64,
 }
 
-async fn ensure_bonds_formed(
-	group: &Group,
-	local: &Network,
-	peers: &[&Network],
-	name: &str,
-) {
-	loop {
-		let bonds = group.bonds();
+impl StateMachine for Counter {
+	type Command = CounterCommand;
+	type Query = CurrentValueQuery;
+	type QueryResult = i64;
 
-		if bonds.is_empty() {
-			group.bonds().changed().await;
+	const ID: UniqueId = unique_id!(
+		"0000000000000000000000000000000000000000000000000000000000000002"
+	);
+
+	fn apply(&mut self, command: Self::Command) {
+		match command {
+			CounterCommand::Increment(n) => {
+				self.value = self.value.wrapping_add(n as i64);
+			}
+			CounterCommand::Decrement(n) => {
+				self.value = self.value.wrapping_sub(n as i64);
+			}
 		}
+	}
 
-		tracing::info!(
-			"{name} bonds changed (local = {})",
-			Short(local.local().id())
-		);
-
-		for bond in group.bonds().iter() {
-			tracing::info!("- {name} bond with: {}", Short(bond.peer().id()));
+	fn query(&self, query: Self::Query) -> Self::QueryResult {
+		match query {
+			CurrentValueQuery => self.value,
 		}
-		if peers.iter().all(|p| {
-			group
-				.bonds()
-				.iter()
-				.any(|b| *b.peer().id() == p.local().id())
-		}) {
-			tracing::info!("{name} group fully formed");
-			break;
-		}
-
-		group.bonds().changed().await;
 	}
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum CounterCommand {
+	Increment(u32),
+	Decrement(u32),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CurrentValueQuery;
