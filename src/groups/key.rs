@@ -21,10 +21,14 @@ pub type SecretProof = Digest;
 ///
 /// - Currently only secret-based authentication is implemented.
 ///
-/// - Group Id is derived by hashing the secret bytes with blake3.
+/// - Group Id is derived by hashing the secret bytes with the group
+///   configuration and the state machine identifier. See [`GroupId`] for more
+///   details on how the group id is derived.
 ///
-/// - During handshake, peers prove knowledge of the secret by hashing the
-///   challenge nonce with the secret using [`UniqueId::derive`].
+/// - During handshake, peers prove knowledge of the secret without revealing
+///   the secret itself by generating a proof of knowledge derived from the
+///   secret and the shared random (see [`Link::shared_random`]) value for the
+///   link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GroupKey {
 	/// The secret key used to derive the group id and authenticate peers during
@@ -37,6 +41,13 @@ impl GroupKey {
 	pub fn from_secret(secret: impl Into<Secret>) -> Self {
 		let secret = secret.into();
 		Self { secret }
+	}
+
+	/// Creates a new `GroupKey` with a randomly generated secret.
+	pub fn random() -> Self {
+		Self {
+			secret: Secret::random(),
+		}
 	}
 
 	/// Gets the underlying secret `UniqueId`.
@@ -75,7 +86,9 @@ impl GroupKey {
 
 impl fmt::Display for GroupKey {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}", hex::encode(self.secret().as_bytes()))
+		let head = hex::encode(&self.secret().as_bytes()[..1]);
+		let tail = hex::encode(&self.secret().as_bytes()[31..]);
+		write!(f, "{head}****{tail}")
 	}
 }
 

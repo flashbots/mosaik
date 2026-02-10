@@ -447,7 +447,7 @@ impl<P: Protocol> Link<P> {
 	/// Derives keying material from this connection's TLS session secrets.
 	///
 	/// When both peers call this method with the same `label` and ALPN, they will
-	/// get the same [`UniqueId`]. These bytes are cryptographically
+	/// get the same [`Digest`]. These bytes are cryptographically
 	/// strong and pseudorandom, and are suitable for use as keying material.
 	///
 	/// See [RFC5705](https://tools.ietf.org/html/rfc5705) for more information.

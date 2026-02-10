@@ -28,6 +28,7 @@ use {
 };
 
 /// Manages an instance of a joined group worker loop.
+#[derive(Debug)]
 pub struct WorkerState {
 	/// Configuration settings for this group, such as the group key and the
 	/// intervals configuration. Those values must be identical across all
@@ -145,7 +146,7 @@ impl WorkerState {
 		assert_eq!(self.state_machine_type(), TypeId::of::<M>());
 
 		Group {
-			handle: Arc::clone(self),
+			state: Arc::clone(self),
 			_p: std::marker::PhantomData,
 		}
 	}

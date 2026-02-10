@@ -1,6 +1,7 @@
 use {crate::PeerId, tokio::sync::watch};
 
 /// Awaits changes to the group's state.
+#[derive(Debug)]
 pub struct When {
 	/// `PeerId` of the local node.
 	local_id: PeerId,

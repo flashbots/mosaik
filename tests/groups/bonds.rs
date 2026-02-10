@@ -22,9 +22,13 @@ async fn members_can_see_each_other() -> anyhow::Result<()> {
 
 	discover_all([&n0, &n1, &n2, &n3]).await?;
 
-	let key1 = GroupKey::from_secret("group1");
-	let key2 = GroupKey::from_secret("group2");
-	let key3 = GroupKey::from_secret("group3");
+	let key1 = GroupKey::from_secret("group1secret");
+	let key2 = GroupKey::from_secret("group2secret");
+	let key3 = GroupKey::random();
+
+	tracing::debug!("group1 key: {key1}");
+	tracing::debug!("group2 key: {key2}");
+	tracing::debug!("group3 key: {key3}");
 
 	// group1: n0 and n1
 	let g1_0 = n0.groups().with_key(key1).join();
@@ -38,6 +42,10 @@ async fn members_can_see_each_other() -> anyhow::Result<()> {
 	// group3: n1 and n2
 	let g3_1 = n1.groups().with_key(key3).join();
 	let g3_2 = n2.groups().with_key(key3).join();
+
+	tracing::debug!("group1 id: {}", Short(g1_0.id()));
+	tracing::debug!("group2 id: {}", Short(g2_0.id()));
+	tracing::debug!("group3 id: {}", Short(g3_1.id()));
 
 	join_all([
 		timeout_s(T, ensure_bonds_formed(&g1_0, &n0, &[&n1], "g1_0")),
@@ -75,7 +83,7 @@ async fn ensure_bonds_formed<M: StateMachine>(
 		);
 
 		for bond in group.bonds().iter() {
-			tracing::info!("- {name} bond with: {}", Short(bond.peer().id()));
+			tracing::info!("- {name} bonded with: {}", Short(bond.peer().id()));
 		}
 		if peers.iter().all(|p| {
 			group

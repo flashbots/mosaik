@@ -25,19 +25,22 @@ impl Config {
 	}
 }
 
+/// Full set of configuration options a group instances.
+///
+/// This set of values is used to derive the group id and must be identical
+/// across all members of the group, to ensure that they all run the same
+/// consensus parameters.
 #[derive(Debug, Clone)]
 pub struct GroupConfig {
 	id: GroupId,
 	key: GroupKey,
 	intervals: IntervalsConfig,
-	consensus_events_backlog: usize,
 }
 
 impl GroupConfig {
 	pub fn new<M: StateMachine>(
 		key: GroupKey,
 		intervals: IntervalsConfig,
-		consensus_events_backlog: usize,
 	) -> Self {
 		let id = key
 			.secret()
@@ -45,12 +48,7 @@ impl GroupConfig {
 			.derive(intervals.digest())
 			.derive(M::ID);
 
-		Self {
-			id,
-			key,
-			intervals,
-			consensus_events_backlog,
-		}
+		Self { id, key, intervals }
 	}
 
 	pub const fn group_id(&self) -> &GroupId {
@@ -63,9 +61,5 @@ impl GroupConfig {
 
 	pub const fn intervals(&self) -> &IntervalsConfig {
 		&self.intervals
-	}
-
-	pub const fn consensus_events_backlog(&self) -> usize {
-		self.consensus_events_backlog
 	}
 }

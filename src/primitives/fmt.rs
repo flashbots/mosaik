@@ -26,11 +26,12 @@ impl<T> Pretty<'_, T> {
 pub struct Short<T>(pub T);
 impl<T: AsRef<[u8]>> fmt::Display for Short<T> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		const LEN: usize = 5;
 		let s = self.0.as_ref();
-		if s.len() <= 8 {
+		if s.len() <= LEN {
 			write!(f, "{}", hex::encode(s))
 		} else {
-			write!(f, "{}", hex::encode(&s[0..8]),)
+			write!(f, "{}", hex::encode(&s[0..LEN]),)
 		}
 	}
 }
@@ -48,24 +49,25 @@ impl<T> Short<T> {
 }
 
 /// A wrapper type that formats the inner string as an abbreviated hex string
-pub struct Abbreviated<T>(pub T);
-impl<T: AsRef<[u8]>> fmt::Display for Abbreviated<T> {
+pub struct Abbreviated<const LEN: usize, T>(pub T);
+impl<const LEN: usize, T: AsRef<[u8]>> fmt::Display for Abbreviated<LEN, T> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		let s = self.0.as_ref();
-		if s.len() <= 16 {
+		if s.len() <= LEN {
 			write!(f, "{}", &hex::encode(s))
 		} else {
+			let half = LEN / 2;
 			write!(
 				f,
 				"{}..{}",
-				&hex::encode(&s[0..8]),
-				&hex::encode(&s[s.len() - 8..])
+				&hex::encode(&s[0..half]),
+				&hex::encode(&s[s.len() - half..])
 			)
 		}
 	}
 }
 
-impl<T> FmtWrapper<T> for Abbreviated<T> {
+impl<T, const LEN: usize> FmtWrapper<T> for Abbreviated<LEN, T> {
 	fn wrap(value: T) -> Self {
 		Self(value)
 	}

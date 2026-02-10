@@ -21,7 +21,7 @@
         }
       },
       "args": [
-        "groups::members_can_see_each_other"
+        "groups::leader::is_elected"
       ],
       "env": {
         "TEST_TRACE": "on"

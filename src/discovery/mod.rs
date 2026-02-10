@@ -8,8 +8,9 @@ use {
 			worker::WorkerCommand,
 		},
 		network::{LocalNode, PeerId, link::Protocol},
-		primitives::IntoIterOrSingle,
+		primitives::{IntoIterOrSingle, Short},
 	},
+	core::fmt,
 	iroh::{
 		EndpointAddr,
 		endpoint::Connection,
@@ -222,6 +223,16 @@ impl crate::network::ProtocolProvider for Discovery {
 		protocols
 			.accept(announce.name, announce)
 			.accept(catalog_sync.name, catalog_sync)
+	}
+}
+
+impl fmt::Debug for Discovery {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(
+			f,
+			"Discovery(network_id={})",
+			Short(self.0.local.network_id())
+		)
 	}
 }
 

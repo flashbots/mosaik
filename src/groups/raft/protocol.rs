@@ -1,19 +1,23 @@
 use {
 	crate::{
 		PeerId,
-		discovery::SignedPeerEntry,
-		groups::log::{Index, Term},
+		groups::{
+			Command,
+			log::{Index, Term},
+		},
 		primitives::Short,
 	},
-	derive_more::Display,
-	serde::{Deserialize, Serialize},
+	derive_more::{Display, From},
+	serde::{Deserialize, Serialize, de::DeserializeOwned},
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ConsensusMessage {
+/// Raft messages as defined in the Raft consensus algorithm.
+#[derive(Debug, Clone, Serialize, Deserialize, From)]
+#[serde(bound(deserialize = "C: DeserializeOwned"))]
+pub enum Message<C: Command> {
 	/// Sent by leaders to assert authority (heartbeat) and replicate log
 	/// entries. When `entries` is empty, this is a pure heartbeat.
-	AppendEntries(AppendEntries<ReplicatedCommand>),
+	AppendEntries(AppendEntries<C>),
 
 	/// Response to an `AppendEntries` message.
 	AppendEntriesResponse(AppendEntriesResponse),
@@ -25,32 +29,26 @@ pub enum ConsensusMessage {
 	RequestVoteResponse(RequestVoteResponse),
 }
 
-impl ConsensusMessage {
+impl<C: Command> Message<C> {
 	/// Returns the term carried by the message.
 	/// All raft messages include the sender's current term.
-	pub fn term(&self) -> Term {
+	pub const fn term(&self) -> Term {
 		match self {
-			ConsensusMessage::AppendEntries(msg) => msg.term,
-			ConsensusMessage::AppendEntriesResponse(msg) => msg.term,
-			ConsensusMessage::RequestVote(msg) => msg.term,
-			ConsensusMessage::RequestVoteResponse(msg) => msg.term,
+			Self::AppendEntries(msg) => msg.term,
+			Self::AppendEntriesResponse(msg) => msg.term,
+			Self::RequestVote(msg) => msg.term,
+			Self::RequestVoteResponse(msg) => msg.term,
 		}
 	}
 
 	/// If the message was sent by a leader, returns its peer ID.
-	pub fn leader(&self) -> Option<PeerId> {
+	pub const fn leader(&self) -> Option<PeerId> {
 		match self {
-			ConsensusMessage::AppendEntries(msg) => Some(msg.leader),
-			ConsensusMessage::AppendEntriesResponse(_)
-			| ConsensusMessage::RequestVote(_)
-			| ConsensusMessage::RequestVoteResponse(_) => None,
+			Self::AppendEntries(msg) => Some(msg.leader),
+			Self::AppendEntriesResponse(_)
+			| Self::RequestVote(_)
+			| Self::RequestVoteResponse(_) => None,
 		}
-	}
-}
-
-impl From<RequestVote> for ConsensusMessage {
-	fn from(val: RequestVote) -> Self {
-		ConsensusMessage::RequestVote(val)
 	}
 }
 
@@ -84,7 +82,8 @@ pub struct RequestVoteResponse {
 
 /// Log entry stored in the Raft log.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LogEntry<C> {
+#[serde(bound(deserialize = "C: DeserializeOwned"))]
+pub struct LogEntry<C: Command> {
 	/// Term when entry was received by leader.
 	pub term: Term,
 
@@ -98,7 +97,8 @@ pub struct LogEntry<C> {
 /// Sent by leader to replicate log entries and as heartbeat.
 /// When `entries` is empty, this serves as a heartbeat to maintain leadership.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppendEntries<C> {
+#[serde(bound(deserialize = "C: DeserializeOwned"))]
+pub struct AppendEntries<C: Command> {
 	/// Leader's term.
 	pub term: Term,
 
@@ -134,30 +134,4 @@ pub struct AppendEntriesResponse {
 	/// Hint for leader to quickly find the correct `next_index` on failure.
 	/// This is the follower's last log index.
 	pub last_log_index: u64,
-}
-
-/// Commands that can be stored in the Raft log.
-///
-/// For now, this is focused on group membership changes.
-/// Can be extended later for other replicated state.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub enum ReplicatedCommand {
-	/// No-op entry, used for leader election confirmation.
-	/// Leaders append this on election to commit entries from previous terms,
-	/// also used as a sentinel value for log entry at index 0.
-	#[default]
-	Noop,
-
-	/// Manage the replicated membership state of the group.
-	Membership(MembershipCommand),
-}
-
-/// Replicated commands to modify the membership state.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum MembershipCommand {
-	/// A new member has been added to the group or it updated its own info.
-	InsertMember(Box<SignedPeerEntry>),
-
-	/// A peer has been removed from the group.
-	RemoveMember(PeerId),
 }

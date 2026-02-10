@@ -4,8 +4,8 @@ use {
 };
 
 mod bonds;
-// mod builder;
-// mod watch;
+mod builder;
+mod leader;
 
 #[derive(Debug, Default)]
 struct Counter {
@@ -24,10 +24,10 @@ impl StateMachine for Counter {
 	fn apply(&mut self, command: Self::Command) {
 		match command {
 			CounterCommand::Increment(n) => {
-				self.value = self.value.wrapping_add(n as i64);
+				self.value = self.value.wrapping_add(i64::from(n));
 			}
 			CounterCommand::Decrement(n) => {
-				self.value = self.value.wrapping_sub(n as i64);
+				self.value = self.value.wrapping_sub(i64::from(n));
 			}
 		}
 	}

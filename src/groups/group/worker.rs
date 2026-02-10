@@ -6,13 +6,14 @@ use {
 		groups::{
 			Bond,
 			Bonds,
+			Error,
 			StateMachine,
 			Storage,
 			When,
 			bond::{BondEvent, HandshakeStart},
 			config::GroupConfig,
-			consensus::Consensus,
 			error::AlreadyBonded,
+			raft::Raft,
 			state::{WorkerCommand, WorkerState},
 		},
 		network::{Cancelled, link::Link},
@@ -55,7 +56,7 @@ where
 
 	/// The raft consensus protocol instance that manages the replicated state
 	/// machine and its underlying storage.
-	consensus: Consensus<S, M>,
+	raft: Raft<S, M>,
 
 	/// Pending async work to be processed by the worker loop.
 	work_queue: AsyncWorkQueue,
@@ -90,13 +91,13 @@ where
 
 		let worker_state = Arc::new(WorkerState {
 			config,
+			commands_tx,
 			global_config: Arc::clone(&groups.config),
 			local: groups.local.clone(),
 			discovery: groups.discovery.clone(),
 			bonds: Bonds::default(),
 			cancel: groups.local.termination().child_token(),
 			when: When::new(groups.local.id()),
-			commands_tx,
 			types: (TypeId::of::<M>(), TypeId::of::<S>()),
 		});
 
@@ -105,11 +106,7 @@ where
 			state: Arc::clone(&worker_state),
 			bond_events: SelectAll::default(),
 			work_queue: AsyncWorkQueue::default(),
-			consensus: Consensus::new(
-				Arc::clone(&worker_state),
-				storage,
-				state_machine,
-			),
+			raft: Raft::new(Arc::clone(&worker_state), storage, state_machine),
 			last_local: groups.discovery.me().update_version(),
 		};
 
@@ -145,6 +142,9 @@ where
 
 				// polls pending async work tasks and drives their execution
 				_ = self.work_queue.next() => { }
+
+				// polls the consensus protocol and drives its execution
+				_ = self.raft.next() => { }
 
 				// Triggered when there are changes to the discovery catalog
 				_ = catalog.changed() => {
@@ -230,6 +230,7 @@ where
 	/// Handles bond events from active bonds in the group.
 	fn on_bond_event(&mut self, event: BondEvent, peer_id: PeerId) {
 		match event {
+			// a connected peer has disconnected
 			BondEvent::Terminated(reason) => {
 				// remove the bond from the active list
 				self.state.bonds.update_with(|active| {
@@ -248,13 +249,14 @@ where
 				});
 			}
 
+			// a connected peer has formed a new bond with some other peer.
 			BondEvent::Connected => {
 				self.on_bond_formed(peer_id);
 			}
 
 			// a connected peer has sent us a raft-protocol message
-			BondEvent::ConsensusMessage(message) => {
-				self.consensus.receive(message, peer_id);
+			BondEvent::Raft(message) => {
+				self.raft.receive(message, peer_id);
 			}
 		}
 	}
@@ -369,13 +371,15 @@ where
 					});
 				}
 				Err(reason) => {
-					tracing::trace!(
-						network = %state.local.network_id(),
-						peer = %Short(peer_id),
-						group = %Short(state.group_id()),
-						reason = ?reason,
-						"failed to create peer bond",
-					);
+					if !matches!(reason, Error::AlreadyBonded(_)) {
+						tracing::debug!(
+							error = %reason,
+							network = %state.local.network_id(),
+							peer = %Short(peer_id),
+							group = %Short(state.group_id()),
+							"bonding with group peer failed",
+						);
+					}
 				}
 			}
 		};

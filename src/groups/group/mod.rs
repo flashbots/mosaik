@@ -1,5 +1,10 @@
 use {
-	crate::groups::{Bonds, GroupId, StateMachine},
+	crate::{
+		PeerId,
+		groups::{Bonds, GroupId, StateMachine, When, config::GroupConfig},
+		primitives::Short,
+	},
+	core::fmt,
 	state::WorkerState,
 	std::sync::Arc,
 };
@@ -43,27 +48,57 @@ pub enum Consistency {
 /// long-running worker loop that runs in the background and is associated with
 /// the `GroupId` of this group.
 pub struct Group<M: StateMachine> {
-	handle: Arc<WorkerState>,
+	state: Arc<WorkerState>,
 	_p: std::marker::PhantomData<M>,
 }
 
 // Public APIs for querying the status of the group
 impl<M: StateMachine> Group<M> {
 	/// Returns the unique identifier of this group, which is derived from the
-	/// group key and the hash of its configuration.
-	pub fn group_id(&self) -> &GroupId {
-		self.handle.group_id()
+	/// group key and the hash of its configuration. See [`GroupId`] for more
+	/// details on how the group id is derived.
+	pub fn id(&self) -> &GroupId {
+		self.state.group_id()
 	}
 
 	/// Returns `true` if the local node is currently the leader of this group.
 	pub fn is_leader(&self) -> bool {
-		todo!()
+		self.state.when.current_leader() == Some(self.state.local_id())
+	}
+
+	/// Returns `true` if the local node is currently a follower in this group.
+	pub fn is_follower(&self) -> bool {
+		// todo | this is not entirely accurate, as the local node could be a
+		// todo | candidate during an election, revisit this asap.
+		!self.is_leader()
+	}
+
+	/// Returns the `PeerId` of the current leader of this group, or `None` if no
+	/// leader has been elected yet or the last known leader is no longer
+	/// responsive.
+	pub fn leader(&self) -> Option<PeerId> {
+		self.state.when.current_leader()
 	}
 
 	/// Returns the list of all group members that are currently bonded and
 	/// connected to the local node.
 	pub fn bonds(&self) -> Bonds {
-		self.handle.bonds.clone()
+		self.state.bonds.clone()
+	}
+
+	/// Returns the configuration settings of this group.
+	///
+	/// All consensus-relevant parameters will be identical on all members of the
+	/// group, as they are used to derive the group id.
+	pub fn config(&self) -> &GroupConfig {
+		&self.state.config
+	}
+
+	/// Returns a reference to the [`When`] event emitter for this group, which
+	/// can be used to await changes to the group's state, such as leadership
+	/// changes.
+	pub fn when(&self) -> &When {
+		&self.state.when
 	}
 }
 
@@ -97,5 +132,11 @@ impl<M: StateMachine> Group<M> {
 		_consistency: Consistency,
 	) -> Result<M::QueryResult, Error> {
 		async { todo!() }.await
+	}
+}
+
+impl<M: StateMachine> fmt::Display for Group<M> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "Group({})", Short(self.id()))
 	}
 }

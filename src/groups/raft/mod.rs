@@ -2,11 +2,17 @@ use {
 	crate::{
 		PeerId,
 		groups::{
-			consensus::{role::Role, shared::Shared},
 			log,
+			raft::{role::Role, shared::Shared},
 			state::WorkerState,
 		},
+		primitives::Short,
 	},
+	core::{
+		pin::Pin,
+		task::{Context, Poll},
+	},
+	futures::Stream,
 	std::sync::Arc,
 };
 
@@ -17,7 +23,11 @@ mod protocol;
 mod role;
 mod shared;
 
-pub(super) use protocol::ConsensusMessage;
+pub(super) use protocol::Message;
+use {
+	bincode::{config::standard, serde::decode_from_std_read},
+	bytes::{Buf, Bytes},
+};
 
 /// The driver of the Raft consensus algorithm for a single group. This type is
 /// responsible for:
@@ -48,20 +58,20 @@ pub(super) use protocol::ConsensusMessage;
 ///
 /// - Instances of this type are owned and managed by the long-running worker
 ///   task that is associated with the group.
-pub struct Consensus<S, M>
+pub struct Raft<S, M>
 where
 	S: log::Storage<M::Command>,
 	M: log::StateMachine,
 {
-	/// Shared state across all raft roles.
-	shared: shared::Shared<S, M>,
-
 	/// The current role of this node in the Raft consensus algorithm and its
 	/// role-specific state.
-	role: role::Role,
+	role: role::Role<S, M>,
+
+	/// Shared state across all raft roles.
+	shared: shared::Shared<S, M>,
 }
 
-impl<S, M> Consensus<S, M>
+impl<S, M> Raft<S, M>
 where
 	S: log::Storage<M::Command>,
 	M: log::StateMachine,
@@ -70,37 +80,59 @@ where
 	/// implementations. This is called when initializing the Worker task for a
 	/// group.
 	pub fn new(group: Arc<WorkerState>, storage: S, state_machine: M) -> Self {
+		let shared = Shared::new(group, storage, state_machine);
+
 		Self {
-			shared: Shared::new(group, storage, state_machine),
-			role: Role::default(),
+			role: Role::new(&shared),
+			shared,
 		}
 	}
 
 	/// Accepts an incoming consensus message from a remote bonded peer in the
-	/// group.
-	pub fn receive(&mut self, message: ConsensusMessage, from: PeerId) {
+	/// group and decode it into a strongly-typed `Message` that is aware of the
+	/// state machine implementation used by the group.
+	pub fn receive(&mut self, buffer: Bytes, from: PeerId) {
+		let Ok(message) = decode_from_std_read(&mut buffer.reader(), standard())
+		else {
+			tracing::warn!(
+				peer = %Short(from),
+				group = %Short(self.shared.group().group_id()),
+				network = %Short(self.shared.group().network_id()),
+				"failed to decode incoming raft message",
+			);
+			return;
+		};
+
+		tracing::trace!(
+			message = ?message,
+			group = %Short(self.shared.group().group_id()),
+			peer = %Short(from),
+			network = %Short(self.shared.group().network_id()),
+			"received",
+		);
+
 		self.role.receive(message, from, &mut self.shared);
 	}
 }
 
-// 	/// Drives the consensus state machine by ticking.
-// 	/// If this node is the leader, it will send heartbeats at the configured
-// 	/// interval. If it is a follower or candidate, it will wait for the
-// election 	/// timeout to elapse.
-// 	pub async fn tick(&mut self) {
-// 		self.role.tick(&mut self.shared).await;
-// 	}
+/// This stream is polled by the group worker loop and is responsible for
+/// driving the raft consensus protocol. Depending on the currently assumed role
+/// of the local node in the consensus algorithm, it will trigger different
+/// periodic actions, such as starting new elections when the node is a follower
+/// or sending heartbeats when the node is a leader.
+impl<S, M> Stream for Raft<S, M>
+where
+	S: log::Storage<M::Command>,
+	M: log::StateMachine,
+{
+	type Item = ();
 
-// 	pub fn query(&self, query: M::Query) -> M::QueryResult {
-// 		self.shared.log().query(query)
-// 	}
-// }
-
-// /// Returns a random election timeout duration.
-// fn random_election_timeout(config: &IntervalsConfig) -> Duration {
-// 	let base = config.election_timeout;
-// 	let jitter = config.election_timeout_jitter;
-// 	let range_start = base;
-// 	let range_end = base + jitter;
-// 	random_range(range_start..range_end)
-// }
+	fn poll_next(
+		self: Pin<&mut Self>,
+		cx: &mut Context<'_>,
+	) -> Poll<Option<Self::Item>> {
+		let this = self.get_mut();
+		let shared = &mut this.shared;
+		this.role.poll_next_tick(cx, shared)
+	}
+}

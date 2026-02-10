@@ -4,12 +4,12 @@ use {
 };
 
 #[tokio::test]
-async fn leader_is_elected() -> anyhow::Result<()> {
+async fn is_elected() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
-	let key1 = GroupKey::from_secret("secret1".into());
+	let key1 = GroupKey::from_secret("secret1");
 
 	let n0 = Network::new(network_id).await?;
-	let g0 = n0.groups().join(key1.clone())?;
+	let g0 = n0.groups().with_key(key1).join();
 
 	// Immediately after joining a group with no other known members,
 	// there should be no leader elected before the bootstrap delay.
@@ -21,9 +21,9 @@ async fn leader_is_elected() -> anyhow::Result<()> {
 	// Wait for longer than the bootstrap delay and election timeout to allow
 	// leader election.
 	let timeout = 2
-		* (g0.config().bootstrap_delay
-			+ g0.config().election_timeout
-			+ g0.config().election_timeout_jitter);
+		* (g0.config().intervals().bootstrap_delay
+			+ g0.config().intervals().election_timeout
+			+ g0.config().intervals().election_timeout_jitter);
 	let new_leader = timeout_after(timeout, g0.when().leader_elected()).await?;
 	tracing::debug!("New leader elected: {}", Short(new_leader));
 
@@ -31,7 +31,6 @@ async fn leader_is_elected() -> anyhow::Result<()> {
 	// only member, n0. As the only member of the group it will self-elect as
 	// the leader.
 	assert!(g0.is_leader());
-	assert!(!g0.is_follower());
 
 	assert_eq!(new_leader, n0.local().id());
 	assert_eq!(g0.leader(), Some(n0.local().id()));
@@ -41,7 +40,7 @@ async fn leader_is_elected() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	discover_all([&n0, &n1]).await?;
 
-	let g1 = n1.groups().join(key1.clone())?;
+	let g1 = n1.groups().with_key(key1).join();
 
 	// After joining, the new node should recognize the existing leader.
 	let new_leader = timeout_after(timeout, g1.when().leader_elected()).await?;
@@ -57,7 +56,7 @@ async fn leader_is_elected() -> anyhow::Result<()> {
 	let n2 = Network::new(network_id).await?;
 	discover_all([&n0, &n1, &n2]).await?;
 
-	let g2 = n2.groups().join(key1.clone())?;
+	let g2 = n2.groups().with_key(key1).join();
 
 	// After joining, the new node should recognize the existing leader.
 	let new_leader = timeout_after(timeout, g2.when().leader_elected()).await?;
@@ -91,7 +90,7 @@ async fn leader_is_elected() -> anyhow::Result<()> {
 	let n3 = Network::new(network_id).await?;
 	n3.discovery().dial(n1.local().addr()).await;
 
-	let g3 = n3.groups().join(key1.clone())?;
+	let g3 = n3.groups().with_key(key1).join();
 
 	let g3_leader = timeout_after(timeout, g3.when().leader_elected()).await?;
 	assert_eq!(g3_leader, g1_leader);

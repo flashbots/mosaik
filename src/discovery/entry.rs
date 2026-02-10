@@ -457,7 +457,7 @@ impl fmt::Debug for Pretty<'_, PeerEntry> {
 #[derive(Debug, Clone, Serialize, Deref, AsRef, Into, PartialEq, Eq)]
 pub struct SignedPeerEntry(
 	#[deref] PeerEntry,
-	#[debug("signature: {}", Abbreviated(_1.to_bytes()))] Signature,
+	#[debug("signature: {}", Abbreviated::<16, _>(_1.to_bytes()))] Signature,
 );
 
 impl SignedPeerEntry {
@@ -520,8 +520,12 @@ impl From<&SignedPeerEntry> for PeerEntry {
 
 impl fmt::Debug for Pretty<'_, SignedPeerEntry> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		writeln!(f, "Signed{:?}", Pretty(&self.0.0))?;
-		writeln!(f, "  signature: {}", Abbreviated(self.1.to_bytes()))
+		write!(f, "Signed{:?}", Pretty(&self.0.0))?;
+		writeln!(
+			f,
+			"  signature: {}",
+			Abbreviated::<16, _>(self.1.to_bytes())
+		)
 	}
 }
 

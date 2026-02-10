@@ -68,11 +68,11 @@ use {
 
 mod bond;
 mod config;
-mod consensus;
 mod error;
 mod group;
 mod key;
 mod log;
+mod raft;
 mod when;
 
 pub use {

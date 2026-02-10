@@ -6,9 +6,10 @@ use {
 		discovery::SignedPeerEntry,
 		groups::{
 			Error,
-			bond::worker::Command,
-			consensus::ConsensusMessage,
+			StateMachine,
+			bond::worker::WorkerCommand,
 			error::InvalidProof,
+			raft,
 			state::WorkerState,
 		},
 		network::{
@@ -54,8 +55,14 @@ pub type BondId = Digest;
 
 #[derive(Debug, Clone)]
 pub enum BondEvent {
+	/// The bond connection to the remote peer has been successfully established.
 	Connected,
-	ConsensusMessage(ConsensusMessage),
+
+	/// Received a raft-protocol message from the remote peer.
+	Raft(Bytes),
+
+	/// The bond connection to the remote peer has been closed. The provided
+	/// reason hints at why the bond was closed.
 	Terminated(ApplicationClose),
 }
 
@@ -74,19 +81,28 @@ pub struct Bond {
 	cancel: CancellationToken,
 
 	/// Channel for sending commands to the bond worker loop.
-	commands_tx: UnboundedSender<Command>,
+	commands_tx: UnboundedSender<WorkerCommand>,
 
 	/// Watch channel for observing updates to the remote peer's discovery entry.
 	peer: watch::Receiver<SignedPeerEntry>,
+}
+
+impl fmt::Debug for Bond {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("Bond")
+			.field("id", &self.id)
+			.field("peer_id", self.peer.borrow().id())
+			.finish_non_exhaustive()
+	}
 }
 
 impl fmt::Display for Bond {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
-			"Bond(peer={}, id={})",
+			"Bond(id={}, peer={})",
+			Short(self.id),
 			Short(self.peer.borrow().id()),
-			Short(self.id)
 		)
 	}
 }
@@ -96,7 +112,7 @@ impl Bond {
 	/// Closes the bond connection to the remote peer with the provided
 	/// application-level close reason.
 	pub async fn close(self, reason: impl CloseReason) {
-		let _ = self.commands_tx.send(Command::Close(reason.into()));
+		let _ = self.commands_tx.send(WorkerCommand::Close(reason.into()));
 		self.cancel.cancelled().await;
 	}
 
@@ -302,9 +318,8 @@ impl Bond {
 /// Internal Bond API used by the groups module.
 impl Bond {
 	/// Sends a wire message over the bond connection to the remote peer.
-	#[expect(dead_code)]
 	pub(super) fn send_message(&self, message: BondMessage) {
-		let _ = self.commands_tx.send(Command::SendMessage(message));
+		let _ = self.commands_tx.send(WorkerCommand::SendMessage(message));
 	}
 
 	/// Sends a raw pre-encoded message over the bond connection to the remote
@@ -318,14 +333,16 @@ impl Bond {
 	/// via the `send_message` method, which ensures that only valid `BondMessage`
 	/// values are sent.
 	unsafe fn send_raw_message(&self, message: Bytes) {
-		let _ = self.commands_tx.send(Command::SendRawMessage(message));
+		let _ = self
+			.commands_tx
+			.send(WorkerCommand::SendRawMessage(message));
 	}
 }
 
 /// A watchable collection of currently active bonds in a group.
 ///
 /// This type allows observing changes to the set of active bonds.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct Bonds(pub(super) watch::Sender<im::OrdMap<PeerId, Bond>>);
 
 /// Public API
@@ -398,8 +415,47 @@ impl Bonds {
 		]);
 	}
 
-	/// Broadcast a message to all connected peers in the group.
-	fn broadcast(&self, message: BondMessage, except: &[PeerId]) {
+	/// Sends a raft protocol message to all bonded peers in the group except the
+	/// specified peer ids. Returns the list of peer ids to which the message was
+	/// sent.
+	pub(super) fn broadcast_raft_message<M: StateMachine>(
+		&self,
+		message: impl Into<raft::Message<M::Command>>,
+	) -> Vec<PeerId> {
+		let message: raft::Message<M::Command> = message.into();
+		let buffer: Bytes = bincode::serde::encode_to_vec(message, standard())
+			.expect("Raft message serialization failed")
+			.into();
+		let message = BondMessage::Raft(buffer);
+		self.broadcast(message, &[])
+	}
+
+	/// Sends a raft protocol message to the specified bonded peer.
+	pub(super) fn send_raft_message_to<M: StateMachine>(
+		&self,
+		message: impl Into<raft::Message<M::Command>>,
+		to: PeerId,
+	) {
+		let Some(bond) = self.get(&to) else {
+			tracing::warn!(
+				peer = %Short(to),
+				"attempted to send raft message to non-bonded peer",
+			);
+			return;
+		};
+
+		let message: raft::Message<M::Command> = message.into();
+		let buffer: Bytes = bincode::serde::encode_to_vec(message, standard())
+			.expect("Raft message serialization failed")
+			.into();
+
+		bond.send_message(BondMessage::Raft(buffer));
+	}
+
+	/// Broadcast a message to all connected peers in the group. The `except`
+	/// parameter specifies a list of peer ids to exclude from the broadcast.
+	/// Returns the list of peer ids to which the message was sent.
+	fn broadcast(&self, message: BondMessage, except: &[PeerId]) -> Vec<PeerId> {
 		// serialize once and reuse a pointer to the same encoded message bytes
 		// buffer for all bonds
 		let mut writer = BytesMut::new().writer();
@@ -407,10 +463,13 @@ impl Bonds {
 			.expect("BondMessage encoding failed");
 		let encoded = writer.into_inner().freeze();
 
+		let mut sent_to = Vec::new();
 		for bond in self.iter() {
 			if !except.contains(bond.peer().id()) {
 				unsafe { bond.send_raw_message(encoded.clone()) };
+				sent_to.push(*bond.peer().id());
 			}
 		}
+		sent_to
 	}
 }

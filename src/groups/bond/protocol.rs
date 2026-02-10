@@ -7,7 +7,6 @@ use {
 			Config,
 			GroupId,
 			Groups,
-			consensus::ConsensusMessage,
 			error::{GroupNotFound, InvalidHandshake, Timeout},
 			state::WorkerState,
 		},
@@ -20,6 +19,7 @@ use {
 		},
 		primitives::Short,
 	},
+	bytes::Bytes,
 	core::fmt,
 	dashmap::DashMap,
 	iroh::{
@@ -88,7 +88,10 @@ pub enum BondMessage {
 	BondFormed(Box<SignedPeerEntry>),
 
 	/// Messages that drive the Raft consensus protocol within the group.
-	Consensus(ConsensusMessage),
+	/// These are relayed to the raft protocol handler and are not interpreted at
+	/// the bond level because at the bond level we don't care about the state
+	/// machine implementation.
+	Raft(Bytes),
 }
 
 /// Protocol Acceptor
@@ -155,6 +158,7 @@ impl ProtocolHandler for Acceptor {
 		let Some(group) = self.active.get(&handshake.group_id) else {
 			return Err(self.abort(link, GroupNotFound).await);
 		};
+
 		// hand off the established link to the group instance for management,
 		// aborting if we are already connected to this peer in this group
 		group

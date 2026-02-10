@@ -15,7 +15,7 @@ use {
 /// This trait defines the replicated state machine (RSM) that is used by the
 /// Raft log. Each group has a state machine that represents the
 /// application-specific logic of the group.
-pub trait StateMachine: Send + Sync + 'static {
+pub trait StateMachine: Send + Sync + Unpin + 'static {
 	/// A unique identifier for the state machine type. This value is part of the
 	/// group id derivation and must be identical for all members of the same
 	/// group. Any difference in this value will render a different group id and
@@ -52,16 +52,44 @@ pub trait StateMachine: Send + Sync + 'static {
 }
 
 pub trait Command:
-	Clone + Send + Sync + Serialize + DeserializeOwned + Debug + 'static
+	Debug + Clone + Send + Sync + Unpin + Serialize + DeserializeOwned + 'static
 {
 }
+
 impl<T> Command for T where
-	T: Clone + Send + Sync + Serialize + DeserializeOwned + Debug + 'static
+	T: Debug
+		+ Clone
+		+ Send
+		+ Sync
+		+ Unpin
+		+ Serialize
+		+ DeserializeOwned
+		+ 'static
 {
 }
 
-pub trait Query: Debug + 'static {}
-impl<T> Query for T where T: Debug + 'static {}
+pub trait Query: Debug + Unpin + 'static {}
+impl<T> Query for T where
+	T: Debug
+		+ Clone
+		+ Send
+		+ Sync
+		+ Unpin
+		+ Serialize
+		+ DeserializeOwned
+		+ 'static
+{
+}
 
-pub trait QueryResult: Debug + 'static {}
-impl<T> QueryResult for T where T: Debug + 'static {}
+pub trait QueryResult: Debug + Unpin + 'static {}
+impl<T> QueryResult for T where
+	T: Debug
+		+ Clone
+		+ Send
+		+ Sync
+		+ Unpin
+		+ Serialize
+		+ DeserializeOwned
+		+ 'static
+{
+}

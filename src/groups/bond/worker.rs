@@ -5,7 +5,7 @@ use {
 		discovery::SignedPeerEntry,
 		groups::{
 			Bond,
-			bond::{BondEvent, BondEvents, heartbeat::Heartbeat},
+			bond::{BondEvent, BondEvents, BondId, heartbeat::Heartbeat},
 			error::Timeout,
 			state::WorkerState,
 		},
@@ -24,11 +24,9 @@ use {
 	tokio_util::sync::CancellationToken,
 };
 
-/// Commands sent by the `Bond` handle to the `BondWorker` to control its
-/// behavior and send messages over the bond connection.
-pub(super) enum Command {
+/// Commands sent by the `Bond` handle to the `BondWorker`.
+pub(super) enum WorkerCommand {
 	/// Closes the bond connection with the provided application-level reason.
-	/// The oneshot sender is used to signal completion of the close operation.
 	Close(ApplicationClose),
 
 	/// Sends a wire message over the bond connection to the remote peer.
@@ -40,18 +38,19 @@ pub(super) enum Command {
 	SendRawMessage(Bytes),
 }
 
-/// Represents a direct connection between the local node and another peer in
-/// the group. Each node in the group maintains a bond with every other node in
-/// the group, and over these bonds group messages are exchanged. Bonds are
-/// long-lived connections.
+/// Represents a direct long-lived connection between the local node and another
+/// peer in the group. Each node in the group maintains a bond with every other
+/// node in the group, and over these bonds group messages are exchanged.
 ///
 /// Notes:
 ///
 /// - Bonds are bidirectional. Once established, both peers can send messages to
 ///   each other over the same bond.
 ///
-/// - Bonds are persistent. If a bond drops, the local node will attempt to
-///   re-establish it.
+/// - When a bond connection is dropped (e.g., due to network issues or peer
+///   shutdown), the group worker will remove the current bond instance and
+///   attempt to establish a new bond with the same peer to restore
+///   connectivity.
 ///
 /// - Bonds use heartbeats to monitor the health and liveness of the connection
 ///   if no messages are being exchanged within a `heartbeat_interval`.
@@ -61,6 +60,11 @@ pub(super) enum Command {
 ///   discovery mechanisms to ensure timely propagation of changes to all group
 ///   members.
 pub struct BondWorker {
+	/// Unique identifier for this bond connection. This value is identical on
+	/// both sides of the bond and is derived from the shared TLS secrets of the
+	/// connection.
+	id: BondId,
+
 	/// Reference to the shared group state managing this bond.
 	group: Arc<WorkerState>,
 
@@ -68,7 +72,7 @@ pub struct BondWorker {
 	peer: watch::Sender<SignedPeerEntry>,
 
 	/// Channel for receiving commands to control the bond worker by the handle.
-	commands: UnboundedChannel<Command>,
+	commands: UnboundedChannel<WorkerCommand>,
 
 	/// Underlying transport link for sending and receiving messages over the
 	/// bond connection.
@@ -110,9 +114,10 @@ impl BondWorker {
 		let (events_tx, events_rx) = unbounded_channel();
 		link.replace_cancel_token(cancel.clone());
 
-		let bond_id = link.shared_random("bond_id");
+		let id = link.shared_random(BOND_ID_LABEL);
 
 		let bond = Self {
+			id,
 			group,
 			peer,
 			link,
@@ -128,9 +133,9 @@ impl BondWorker {
 
 		(
 			Bond {
+				id,
 				cancel,
 				commands_tx,
-				id: bond_id,
 				peer: peer_rx,
 			},
 			events_rx,
@@ -192,16 +197,16 @@ impl BondWorker {
 			.ok();
 	}
 
-	fn on_command(&mut self, command: Command) {
+	fn on_command(&mut self, command: WorkerCommand) {
 		match command {
-			Command::Close(reason) => {
+			WorkerCommand::Close(reason) => {
 				self.cancel.cancel();
 				self.close_reason = reason;
 			}
-			Command::SendMessage(message) => {
+			WorkerCommand::SendMessage(message) => {
 				self.pending_sends.send(Either::Left(message));
 			}
-			Command::SendRawMessage(message) => {
+			WorkerCommand::SendRawMessage(message) => {
 				self.pending_sends.send(Either::Right(message));
 			}
 		}
@@ -216,8 +221,8 @@ impl BondWorker {
 		self.on_send_complete(res);
 	}
 
-	/// Called when the next message is received from the link.
-	/// Resets the heartbeat timer.
+	/// Called when the next message is received from the bonded remote peer.
+	/// Implicitly resets the idle heartbeat timer.
 	fn on_next_recv(&mut self, result: RecvResult) {
 		match result {
 			Ok(message) => {
@@ -231,11 +236,8 @@ impl BondWorker {
 					BondMessage::BondFormed(peer) => {
 						self.on_bond_formed_notification(*peer);
 					}
-					BondMessage::Consensus(message) => {
-						self
-							.events_tx
-							.send(BondEvent::ConsensusMessage(message))
-							.ok();
+					BondMessage::Raft(message) => {
+						self.on_raft_message(message);
 					}
 				}
 			}
@@ -275,6 +277,26 @@ impl BondWorker {
 					.cloned().unwrap_or_else(|| UnexpectedClose.into());
 			}
 
+			self.cancel.cancel();
+		}
+	}
+
+	/// Called when the remote peer sends us a raft consensus message over the
+	/// bond connection.
+	fn on_raft_message(&mut self, message: Bytes) {
+		if let Err(e) = self.events_tx.send(BondEvent::Raft(message))
+			&& !self.cancel.is_cancelled()
+		{
+			tracing::debug!(
+				error = %e,
+				network = %self.group.network_id(),
+				peer = %Short(self.link.remote_id()),
+				group = %Short(self.group.group_id()),
+				bond = %Short(self.id),
+				"terminating bond because the group is down",
+			);
+
+			self.close_reason = Cancelled.into();
 			self.cancel.cancel();
 		}
 	}
@@ -319,7 +341,7 @@ impl BondWorker {
 				peer = %Short(self.link.remote_id()),
 				group = %Short(self.group.group_id()),
 				rtt = ?self.link.rtt(),
-				"sending heartbeat ping",
+				"sending bond-heartbeat",
 			);
 
 			self.enqueue_message(BondMessage::Ping);
@@ -344,7 +366,7 @@ impl BondWorker {
 			peer = %Short(self.link.remote_id()),
 			group = %Short(self.group.group_id()),
 			rtt = ?self.link.rtt(),
-			"received heartbeat ping, sending pong",
+			"received bond-heartbeat ping",
 		);
 
 		self.enqueue_message(BondMessage::Pong);
@@ -360,3 +382,5 @@ impl BondWorker {
 
 type SendResult = Result<usize, SendError>;
 type RecvResult = Result<BondMessage, RecvError>;
+
+const BOND_ID_LABEL: &str = "group_bond_id";

@@ -35,11 +35,6 @@ pub struct GroupBuilder<'g, S = (), M = ()> {
 	/// difference will render a different group id.
 	pub(super) intervals: IntervalsConfig,
 
-	/// The backlog size for the consensus events broadcast channel before
-	/// dropping unconsumed events. This value does not affect resulting group
-	/// id.
-	pub(super) consensus_events_backlog: usize,
-
 	/// The storage implementation to use for this group. This is used to persist
 	/// the current state of the replicated raft log. This value does not affect
 	/// the generated group id.
@@ -61,7 +56,6 @@ impl<'g> GroupBuilder<'g, (), ()> {
 			groups,
 			key,
 			intervals: IntervalsConfig::default(),
-			consensus_events_backlog: 64,
 			storage: (),
 			state_machine: (),
 		}
@@ -85,7 +79,6 @@ impl<'g> GroupBuilder<'g, (), ()> {
 			groups: self.groups,
 			key: self.key,
 			intervals: self.intervals,
-			consensus_events_backlog: self.consensus_events_backlog,
 			storage: InMemory::<SM::Command>::default(),
 			state_machine,
 		}
@@ -118,7 +111,6 @@ where
 			groups: self.groups,
 			key: self.key,
 			intervals: self.intervals,
-			consensus_events_backlog: self.consensus_events_backlog,
 			state_machine: self.state_machine,
 			storage,
 		}
@@ -151,11 +143,7 @@ where
 	/// The group builder values will generate a unique group id that is derived
 	/// from the group key, the
 	pub fn join(self) -> Group<M> {
-		let config = GroupConfig::new::<M>(
-			self.key, //
-			self.intervals,
-			self.consensus_events_backlog,
-		);
+		let config = GroupConfig::new::<M>(self.key, self.intervals);
 
 		let group_id = *config.group_id();
 		match self.groups.active.entry(group_id) {
@@ -179,7 +167,7 @@ where
 pub struct IntervalsConfig {
 	/// The interval at which heartbeat messages are sent over established
 	/// bonds to peers in the group to ensure liveness of the connection.
-	#[builder(default = "Duration::from_millis(150)")]
+	#[builder(default = "Duration::from_millis(500)")]
 	pub heartbeat_interval: Duration,
 
 	/// The maximum jitter to apply to the heartbeat interval to avoid
@@ -187,7 +175,7 @@ pub struct IntervalsConfig {
 	///
 	/// heartbeats are sent at intervals of
 	/// `heartbeat_interval - rand(0, heartbeat_jitter)`.
-	#[builder(default = "Duration::from_millis(50)")]
+	#[builder(default = "Duration::from_millis(150)")]
 	pub heartbeat_jitter: Duration,
 
 	/// The maximum number of consecutive missed heartbeats before considering
@@ -197,12 +185,15 @@ pub struct IntervalsConfig {
 
 	/// The election timeout duration for Raft leader elections within the
 	/// group. This is the duration that a follower will wait without hearing
-	/// from the leader before starting a new election.
-	#[builder(default = "Duration::from_secs(1)")]
+	/// from the leader before starting a new election. See the Raft paper
+	/// section 5.2 for more details on the role of election timeouts in the Raft
+	/// algorithm.
+	#[builder(default = "Duration::from_secs(2)")]
 	pub election_timeout: Duration,
 
 	/// The maximum jitter to apply to the election timeout to avoid
-	/// split votes during leader elections.
+	/// split votes during leader elections. See the Raft paper section 5.2 for
+	/// more details on the role of election timeouts and randomization.
 	#[builder(default = "Duration::from_millis(500)")]
 	pub election_timeout_jitter: Duration,
 
@@ -213,11 +204,6 @@ pub struct IntervalsConfig {
 	/// self-nomination.
 	#[builder(default = "Duration::from_secs(3)")]
 	pub bootstrap_delay: Duration,
-
-	/// The tick duration for driving the Raft consensus protocol within the
-	/// group.
-	#[builder(default = "Duration::from_millis(150)")]
-	pub consensus_tick: Duration,
 }
 
 impl Default for IntervalsConfig {
@@ -231,6 +217,18 @@ impl IntervalsConfig {
 	pub fn builder() -> IntervalsConfigBuilder {
 		IntervalsConfigBuilder::default()
 	}
+
+	/// Returns a randomized election timeout duration.
+	///
+	/// Randomized timeouts are essential for Raft to minimize the chances of
+	/// split votes during leader elections.
+	pub(crate) fn election_timeout(&self) -> Duration {
+		let base = self.election_timeout;
+		let jitter = self.election_timeout_jitter;
+		let range_start = base;
+		let range_end = base + jitter;
+		rand::random_range(range_start..range_end)
+	}
 }
 
 /// Internal API
@@ -243,7 +241,6 @@ impl IntervalsConfig {
 			self.election_timeout.as_millis().to_le_bytes(),
 			self.election_timeout_jitter.as_millis().to_le_bytes(),
 			self.bootstrap_delay.as_millis().to_le_bytes(),
-			self.consensus_tick.as_millis().to_le_bytes(),
 		])
 	}
 }
