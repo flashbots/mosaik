@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">Mosaik</h1>
+  <h1 align="center">mosaik</h1>
   <p align="center">
     A Rust SDK for building self-organizing, leaderless distributed systems.
   </p>
