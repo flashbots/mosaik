@@ -19,7 +19,11 @@ use {
 		time::Duration,
 	},
 	futures::StreamExt,
-	iroh::{EndpointAddr, discovery::Discovery, protocol::ProtocolHandler},
+	iroh::{
+		EndpointAddr,
+		address_lookup::AddressLookup,
+		protocol::ProtocolHandler,
+	},
 	iroh_gossip::{
 		Gossip,
 		api::{
@@ -177,7 +181,7 @@ impl Announce {
 			self
 				.local
 				.endpoint()
-				.discovery()
+				.address_lookup()
 				.publish(&peer.clone().into());
 		}
 

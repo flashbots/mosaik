@@ -20,7 +20,7 @@ use {
 		serde::{decode_from_std_read, encode_into_std_write},
 	},
 	bytes::{Buf, BufMut, BytesMut},
-	core::{fmt, marker::PhantomData, time::Duration},
+	core::{fmt, marker::PhantomData},
 	futures::{FutureExt, SinkExt, StreamExt},
 	iroh::{EndpointAddr, endpoint::*, protocol::AcceptError as IrohAcceptError},
 	n0_error::Meta,
@@ -460,12 +460,6 @@ impl<P: Protocol> Link<P> {
 			.expect("exporting keying material should not fail for this buffer len");
 
 		Digest::from_bytes(shared_secret)
-	}
-
-	/// Returns the last measured round-trip time (RTT) of the underlying
-	/// connection.
-	pub fn rtt(&self) -> Duration {
-		self.connection.rtt()
 	}
 }
 

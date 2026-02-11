@@ -12,7 +12,7 @@ use {
 	derive_builder::Builder,
 	iroh::{
 		Endpoint,
-		discovery::{mdns::MdnsDiscoveryBuilder, static_provider::StaticProvider},
+		address_lookup::{MemoryLookup, mdns::MdnsAddressLookupBuilder},
 		protocol::Router,
 	},
 	std::collections::BTreeSet,
@@ -139,22 +139,15 @@ impl NetworkConfig {
 		let mut endpoint_builder = Endpoint::builder()
 			.secret_key(self.secret_key.clone())
 			.relay_mode(self.relay_mode.clone())
-			.discovery(StaticProvider::new());
+			.address_lookup(MemoryLookup::new());
 
 		if self.mdns_discovery {
 			endpoint_builder =
-				endpoint_builder.discovery(MdnsDiscoveryBuilder::default());
+				endpoint_builder.address_lookup(MdnsAddressLookupBuilder::default());
 		}
 
 		for addr in &self.addresses {
-			match addr {
-				SocketAddr::V4(addr) => {
-					endpoint_builder = endpoint_builder.bind_addr_v4(*addr);
-				}
-				SocketAddr::V6(addr) => {
-					endpoint_builder = endpoint_builder.bind_addr_v6(*addr);
-				}
-			}
+			endpoint_builder = endpoint_builder.bind_addr(*addr)?;
 		}
 
 		Ok(endpoint_builder.bind().await?)

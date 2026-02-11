@@ -8,6 +8,9 @@ pub enum Error {
 	#[error("Bind error: {0}")]
 	Bind(#[from] iroh::endpoint::BindError),
 
+	#[error("Invalid address: {0}")]
+	InvalidAddress(#[from] InvalidSocketAddr),
+
 	#[error("Discovery config error: {0}")]
 	DiscoveryConfig(#[from] discovery::ConfigBuilderError),
 
@@ -79,6 +82,7 @@ macro_rules! make_close_reason {
 	};
 }
 
+use iroh::endpoint::InvalidSocketAddr;
 pub(crate) use make_close_reason;
 
 // Standardized application-level close reasons for links and protocols in

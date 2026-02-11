@@ -9,7 +9,7 @@ use {
 		},
 		primitives::IntoIterOrSingle,
 	},
-	iroh::{Endpoint, EndpointAddr, discovery::Discovery},
+	iroh::{Endpoint, EndpointAddr, address_lookup::AddressLookup},
 	std::{fmt, sync::Arc},
 	tokio::sync::SetOnce,
 	tokio_util::sync::CancellationToken,
@@ -148,7 +148,10 @@ impl LocalNode {
 		addrs: impl IntoIterOrSingle<&'a EndpointAddr, V>,
 	) {
 		for addr in addrs.iterator() {
-			self.endpoint().discovery().publish(&addr.clone().into());
+			self
+				.endpoint()
+				.address_lookup()
+				.publish(&addr.clone().into());
 		}
 	}
 }
