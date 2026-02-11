@@ -15,7 +15,7 @@ pub mod streams;
 pub use {
 	bytes::{Bytes, BytesMut},
 	futures,
-	groups::{GroupKey, Groups},
+	groups::{Consistency, GroupKey, Groups},
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},
 	primitives::Digest,

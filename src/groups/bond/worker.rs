@@ -333,17 +333,10 @@ impl BondWorker {
 /// Heartbeat-related event handlers.
 impl BondWorker {
 	/// Called when the heartbeat timer ticks.
-	/// If there are no outbound messages pending, a heartbeat `Ping` is sent.
 	pub(super) fn on_heartbeat_tick(&self) {
 		if self.pending_sends.is_empty() {
-			tracing::trace!(
-				network = %self.group.network_id(),
-				peer = %Short(self.link.remote_id()),
-				group = %Short(self.group.group_id()),
-				rtt = ?self.link.rtt(),
-				"sending bond-heartbeat",
-			);
-
+			// only send a heartbeat ping if there are no pending messages to be sent
+			// to avoid unnecessary heartbeats when the bond is active.
 			self.enqueue_message(BondMessage::Ping);
 		}
 	}
@@ -360,16 +353,14 @@ impl BondWorker {
 		self.cancel.cancel();
 	}
 
+	/// Called when we receive a heartbeat ping from the remote peer. We respond
+	/// with a pong to confirm that the bond is healthy.
 	pub(super) fn on_heartbeat_ping(&self) {
-		tracing::trace!(
-			network = %self.group.network_id(),
-			peer = %Short(self.link.remote_id()),
-			group = %Short(self.group.group_id()),
-			rtt = ?self.link.rtt(),
-			"received bond-heartbeat ping",
-		);
-
-		self.enqueue_message(BondMessage::Pong);
+		if self.pending_sends.is_empty() {
+			// only respond with a pong if there are no pending messages to be sent
+			// to avoid unnecessary heartbeats when the bond is active.
+			self.enqueue_message(BondMessage::Pong);
+		}
 	}
 }
 

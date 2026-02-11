@@ -1,58 +1,68 @@
-//! Availability Groups
+//! # Availability Groups
 //!
-//! Availability groups are formed by nodes on the same mosaik network that work
-//! together. The are aware and of each other and are managed by the same
-//! entity. They have trust assumptions about each other and assume that they
-//! are all honest and follow the protocol within the same group. Groups are
-//! authenticated and only peers that know the seed bytes are allowed to join a
-//! group.
+//! Availability groups are clusters of trusted nodes on the same mosaik network
+//! that coordinate with each other for load balancing and failover. Members of
+//! a group share a secret key that authenticates membership, and they maintain
+//! a consistent, replicated view of group state through a modified Raft
+//! consensus protocol.
 //!
-//! Notes:
+//! ## Trust Model
 //!
-//! - Members of a one group have trust assumptions. Groups are not byzantine
-//!   failures tolerant.
+//! Groups are **not** Byzantine fault tolerant. All members within a group are
+//! assumed to be honest and operated by the same entity. The group key acts as
+//! the sole admission control — only nodes that know the key can join.
 //!
-//! - Nodes can form trusted availability groups for load balancing and/or
-//!   failover purposes.
+//! ## Bonds
 //!
-//! - Each availability group maintains a consistent list of all group members.
-//!   The consistent view is managed by raft. In an availability group a small
-//!   subset of nodes is elected to be voters in raft (1-5 nodes) and all other
-//!   nodes are observers of the latest state of the group.
-//!   - For groups of size 1, the raft voting committee size is 1
-//!   - For groups of size 2, the raft voting committee size is 1
-//!   - For  groups of size 3+, the raft voting committee is fixed as 3.
-//!   - If the group redundancy config value is greater than 3, then that value
-//!     becomes the size of the voting committee rounded up to the nearest odd
-//!     number.
+//! Every pair of group members maintains a persistent **bond** — an
+//! authenticated, bidirectional connection established through a mutual secret
+//! proof exchange. Bonds carry Raft consensus messages, heartbeats, and
+//! log-sync traffic. The full mesh of bonds gives every member a direct channel
+//! to every other member.
 //!
-//! - Availability groups maintain a `GroupState` data structure that lists all
-//!   known nodes in the group. This structure is updated and consensus is
-//!   reached by the group leaders whenever a node failure is detected or a new
-//!   node joins the group.
+//! ## Consensus
 //!
-//! - All nodes within one availability group maintain all-to-all persistent
-//!   connections with frequent short health checks. As soon as a node failure
-//!   is detected, then all nodes will send `SuspectFail` message to all known
-//!   leaders.
+//! Groups run a modified Raft protocol to elect a leader and replicate a log of
+//! commands to a pluggable [`StateMachine`]. Key differences from standard
+//! Raft:
 //!
-//! - When leaders receive N `SuspectFail` messages about a peer, then they will
-//!   remove that peer from the most recent `GroupState` and come to consensus
-//!   about the new version of `GroupState`.
+//! - **Non-voting followers.** A follower whose log is behind the leader's
+//!   state is considered a non-voting follower. Non-voting followers send
+//!   `Abstain` responses to both `RequestVote` and `AppendEntries` messages.
+//!   They automatically become voting members once their log catches up.
 //!
-//! - When a new node wants to join a group, it will:
-//!   - send a `DescribeGroup` message to any member of the group.
-//!     - in response it will receive the latest `GroupState` of the group
-//!   - After knowing about the latest list of peers in the group it will
-//!     establish a persistent connection with each peer in the group and send a
-//!     `PrepareJoin` message.
-//!   - Existing group members will accept the persistent connection and
-//!     maintain and send a `LinkEstablished` message to all current raft
-//!     leaders. If raft leaders do not generate a new view of the `GroupState`
-//!     structure that include this new node within a predefined short timeout,
-//!     then the persistent connection is dropped. Otherwise the persistent
-//!     connection is maintained and the new node becomes a member of the
-//!     availability group.
+//! - **Leader simplicity.** The leader does not track per-follower progress
+//!   (`next_index` / `match_index`). It broadcasts `AppendEntries` with the
+//!   latest entries and advances its commit index based on the count of
+//!   affirmative acknowledgements, ignoring abstentions.
+//!
+//! - **Dynamic quorum.** Abstaining (out-of-sync) followers are excluded from
+//!   the quorum denominator for both elections and commit advancement, so
+//!   consensus can proceed while lagging nodes catch up.
+//!
+//! - **Distributed log catch-up.** A lagging follower recovers missing log
+//!   entries by broadcasting a `LogSyncDiscovery` to all bonded peers,
+//!   collecting availability responses, partitioning the needed range across
+//!   responders for balanced load, and pulling entries in parallel. Incoming
+//!   `AppendEntries` are buffered during catch-up and applied once the gap is
+//!   closed.
+//!
+//! ## Group Identity
+//!
+//! A [`GroupId`] is derived from the group key, the consensus-relevant
+//! configuration (election timeouts, heartbeat intervals, etc.), and the
+//! replicated state machine's identifier. Any divergence in these values
+//! produces a different group id, preventing misconfigured nodes from bonding.
+//!
+//! ## Usage
+//!
+//! ```ignore
+//! // join a group with a specific key and default configuration
+//! let group = network.groups().with_key(key).join();
+//!
+//! // Wait for a leader to be elected
+//! group.when().leader_elected().await;
+//! ```
 
 use {
 	crate::{
@@ -67,6 +77,7 @@ use {
 };
 
 mod bond;
+mod builder;
 mod config;
 mod error;
 mod group;
@@ -77,8 +88,14 @@ mod when;
 
 pub use {
 	bond::{Bond, Bonds},
+	builder::{
+		GroupBuilder,
+		IntervalsConfig,
+		IntervalsConfigBuilder,
+		IntervalsConfigBuilderError,
+	},
 	config::{Config, ConfigBuilder, ConfigBuilderError},
-	error::Error,
+	error::{CommandError, Error, QueryError},
 	group::*,
 	key::GroupKey,
 	log::*,

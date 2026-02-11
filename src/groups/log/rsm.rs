@@ -68,7 +68,11 @@ impl<T> Command for T where
 {
 }
 
-pub trait Query: Debug + Unpin + 'static {}
+pub trait Query:
+	Debug + Clone + Send + Sync + Unpin + Serialize + DeserializeOwned + 'static
+{
+}
+
 impl<T> Query for T where
 	T: Debug
 		+ Clone
@@ -81,7 +85,11 @@ impl<T> Query for T where
 {
 }
 
-pub trait QueryResult: Debug + Unpin + 'static {}
+pub trait QueryResult:
+	Debug + Clone + Send + Sync + Unpin + Serialize + DeserializeOwned + 'static
+{
+}
+
 impl<T> QueryResult for T where
 	T: Debug
 		+ Clone

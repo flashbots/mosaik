@@ -8,6 +8,11 @@ pub struct When {
 
 	/// Observer for the current leader of the group.
 	leader: watch::Sender<Option<PeerId>>,
+
+	/// Observer for whether the local node is considered online.
+	/// See `is_online` and `is_offline` for the definition of online and
+	/// offline.
+	online: watch::Sender<bool>,
 }
 
 /// Public API
@@ -103,13 +108,62 @@ impl When {
 			}
 		}
 	}
+
+	/// Returns a future that resolves when the local node is considered online
+	/// and can be used to send commands to the group and query the state
+	/// machine. Resolves immediately if the local node is already online.
+	///
+	/// A node is online when:
+	/// - it is currently not in the middle of an election either as a candidate
+	///   or a voter, and
+	/// - It is currently the leader, or
+	/// - It is currently a follower and is up to date with the current leader
+	///   (i.e. it is not in the middle of catching up with the log or during
+	///   elections).
+	pub fn is_online(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
+		let mut online = self.online.subscribe();
+
+		async move {
+			if online.wait_for(|v| *v).await.is_err() {
+				// if the watch channel is closed, consider the node not online and
+				// never resolve this future
+				core::future::pending::<()>().await;
+			}
+		}
+	}
+
+	/// Returns a future that resolves when the local node is considered offline
+	/// and should not be used to send commands to the group or query the state
+	/// machine. Resolves immediately if the local node is already offline.
+	///
+	/// A node is offline when it is not online, i.e. when:
+	/// - It is currently a follower and is not up to date with the current leader
+	/// - It is in the middle of an election (i.e. it is a candidate) or voting in
+	///   an election (i.e. it is a follower that has voted for a candidate and is
+	///   waiting for the election to complete).
+	pub fn is_offline(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
+		let mut online = self.online.subscribe();
+
+		async move {
+			if online.wait_for(|v| !*v).await.is_err() {
+				// if the watch channel is closed, consider the node not offline and
+				// never resolve this future
+				core::future::pending::<()>().await;
+			}
+		}
+	}
 }
 
 /// Internal API
 impl When {
 	pub(crate) fn new(local_id: PeerId) -> Self {
 		let leader = watch::Sender::new(None);
-		Self { local_id, leader }
+		let online = watch::Sender::new(false);
+		Self {
+			local_id,
+			leader,
+			online,
+		}
 	}
 
 	/// Called by `Consensus` when the group leader is updated.
@@ -119,6 +173,19 @@ impl When {
 				false
 			} else {
 				*current = new_leader;
+				true
+			}
+		});
+	}
+
+	/// Called by `Consensus` when the local node's online status changes.
+	pub(super) fn set_online_status(&self, is_online: bool) {
+		self.online.send_if_modified(|current| {
+			let prev_value = *current;
+			if prev_value == is_online {
+				false
+			} else {
+				*current = is_online;
 				true
 			}
 		});

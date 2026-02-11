@@ -14,7 +14,7 @@ use {
 			config::GroupConfig,
 			error::AlreadyBonded,
 			raft::Raft,
-			state::{WorkerCommand, WorkerState},
+			state::{WorkerBondCommand, WorkerRaftCommand, WorkerState},
 		},
 		network::{Cancelled, link::Link},
 		primitives::{AsyncWorkQueue, Short},
@@ -49,7 +49,12 @@ where
 	state: Arc<WorkerState>,
 
 	/// Receiver for commands sent from the external world to the worker loop.
-	commands_rx: UnboundedReceiver<WorkerCommand>,
+	bonds_cmd_rx: UnboundedReceiver<WorkerBondCommand>,
+
+	/// Channel for receiving commands for the group's raft consensus.
+	/// This is distinct from `commands_rx` to keep the `WorkerState` free of
+	/// generic type parameters.
+	raft_cmd_rx: UnboundedReceiver<WorkerRaftCommand<M>>,
 
 	/// Aggregated stream of all events emitted by active bonds in this group.
 	bond_events: BondEventsStream,
@@ -87,11 +92,13 @@ where
 		storage: S,
 		state_machine: M,
 	) -> Arc<WorkerState> {
-		let (commands_tx, commands_rx) = unbounded_channel();
+		let (bonds_cmd_tx, bonds_cmd_rx) = unbounded_channel();
+		let (raft_cmd_tx, raft_cmd_rx) = unbounded_channel();
 
 		let worker_state = Arc::new(WorkerState {
 			config,
-			commands_tx,
+			bonds_cmd_tx,
+			raft_cmd_tx: Box::new(raft_cmd_tx),
 			global_config: Arc::clone(&groups.config),
 			local: groups.local.clone(),
 			discovery: groups.discovery.clone(),
@@ -102,7 +109,8 @@ where
 		});
 
 		let worker_instance = Self {
-			commands_rx,
+			raft_cmd_rx,
+			bonds_cmd_rx,
 			state: Arc::clone(&worker_state),
 			bond_events: SelectAll::default(),
 			work_queue: AsyncWorkQueue::default(),
@@ -158,8 +166,13 @@ where
 				}
 
 				// handles external commands sent to the worker loop
-				Some(command) = self.commands_rx.recv() => {
+				Some(command) = self.bonds_cmd_rx.recv() => {
 					self.on_worker_command(command);
+				}
+
+				// handles raft consensus commands sent to the worker loop
+				Some(command) = self.raft_cmd_rx.recv() => {
+					self.on_raft_command(command);
 				}
 			}
 		}
@@ -256,7 +269,7 @@ where
 
 			// a connected peer has sent us a raft-protocol message
 			BondEvent::Raft(message) => {
-				self.raft.receive(message, peer_id);
+				self.raft.receive_protocol_message(message, peer_id);
 			}
 		}
 	}
@@ -299,22 +312,42 @@ where
 	}
 
 	/// Handles incoming external commands sent to the worker loop.
-	fn on_worker_command(&mut self, command: WorkerCommand) {
+	fn on_worker_command(&mut self, command: WorkerBondCommand) {
 		match command {
 			// Begins the process of accepting an incoming connection for this
-			WorkerCommand::Accept(link, peer, handshake, result_tx) => {
+			WorkerBondCommand::Accept(link, peer, handshake, result_tx) => {
 				self.accept_bond(link, peer, handshake, result_tx);
 			}
 			// Attempts to create a new bond connection to the specified peer.
-			WorkerCommand::Connect(peer_entry) => {
+			WorkerBondCommand::Connect(peer_entry) => {
 				self.create_bond(peer_entry);
 			}
 			// Subscribes to bond events from a newly created bond
-			WorkerCommand::SubscribeToBond(events_rx, peer_id) => {
+			WorkerBondCommand::SubscribeToBond(events_rx, peer_id) => {
 				self.bond_events.push(Box::pin(
 					UnboundedReceiverStream::new(events_rx)
 						.map(move |event| (event, peer_id)),
 				));
+			}
+		}
+	}
+
+	/// Handles incoming commands for the raft consensus protocol.
+	fn on_raft_command(&mut self, command: WorkerRaftCommand<M>) {
+		match command {
+			WorkerRaftCommand::Command(cmd, result_tx) => {
+				let cmd_fut = self.raft.command(cmd);
+				self.work_queue.enqueue(async move {
+					let result = cmd_fut.await;
+					let _ = result_tx.send(result);
+				});
+			}
+			WorkerRaftCommand::Query(query, consistency, result_tx) => {
+				let query_fut = self.raft.query(query, consistency);
+				self.work_queue.enqueue(async move {
+					let result = query_fut.await;
+					let _ = result_tx.send(result);
+				});
 			}
 		}
 	}
@@ -354,8 +387,8 @@ where
 							Entry::Vacant(place) => {
 								// subscribe to bond events
 								if state
-									.commands_tx
-									.send(WorkerCommand::SubscribeToBond(events, peer_id))
+									.bonds_cmd_tx
+									.send(WorkerBondCommand::SubscribeToBond(events, peer_id))
 									.is_ok()
 								{
 									// keep track of the bond handle to control it
@@ -415,8 +448,8 @@ where
 							Entry::Vacant(place) => {
 								// subscribe to bond events
 								if state
-									.commands_tx
-									.send(WorkerCommand::SubscribeToBond(events, peer_id))
+									.bonds_cmd_tx
+									.send(WorkerBondCommand::SubscribeToBond(events, peer_id))
 									.is_ok()
 								{
 									// keep track of the bond handle to control it

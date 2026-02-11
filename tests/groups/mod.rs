@@ -6,6 +6,7 @@ use {
 mod bonds;
 mod builder;
 mod leader;
+mod rsm;
 
 #[derive(Debug, Default)]
 struct Counter {
@@ -14,7 +15,7 @@ struct Counter {
 
 impl StateMachine for Counter {
 	type Command = CounterCommand;
-	type Query = CurrentValueQuery;
+	type Query = CounterValueQuery;
 	type QueryResult = i64;
 
 	const ID: UniqueId = unique_id!(
@@ -34,7 +35,7 @@ impl StateMachine for Counter {
 
 	fn query(&self, query: Self::Query) -> Self::QueryResult {
 		match query {
-			CurrentValueQuery => self.value,
+			CounterValueQuery => self.value,
 		}
 	}
 }
@@ -46,4 +47,4 @@ enum CounterCommand {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct CurrentValueQuery;
+struct CounterValueQuery;

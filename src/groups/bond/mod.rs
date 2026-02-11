@@ -1,3 +1,50 @@
+//! Bonds — persistent peer-to-peer connections within an availability group.
+//!
+//! A **bond** is a long-lived, bidirectional connection between the local node
+//! and a single remote peer that belongs to the same group. Every node in a
+//! group maintains one bond with every other group member, forming an
+//! all-to-all mesh of connections over which group-internal traffic flows.
+//!
+//! # Relationship to the Groups subsystem
+//!
+//! Groups (see [`super`]) provide fault-tolerant coordination among a set of
+//! trusted peers. Bonds are the transport layer that makes this possible:
+//! they carry Raft consensus messages, heartbeat liveness probes,
+//! discovery-entry  updates, and notifications about newly joined peers.
+//! Without active bonds a group cannot reach consensus or detect failures.
+//!
+//! # Lifecycle
+//!
+//! 1. **Establishment** — When a new peer is discovered in the group's
+//!    discovery catalog, [`Bond::create`] opens a QUIC connection and performs
+//!    a mutual handshake. Both sides prove knowledge of the shared group secret
+//!    by exchanging proofs derived from the TLS session secrets and the group
+//!    key. Incoming connections follow the mirror path through
+//!    [`Bond::accept`].
+//!
+//! 2. **Steady state** — Once established, a [`BondWorker`](worker::BondWorker)
+//!    runs an event loop that multiplexes
+//!    [`BondMessage`](protocol::BondMessage) traffic (Raft messages, peer-entry
+//!    updates, bond-formed notifications) with periodic
+//!    [`Heartbeat`](heartbeat::Heartbeat) pings. The associated [`Bond`] handle
+//!    exposes a command channel so the group worker can send messages or close
+//!    the connection.
+//!
+//! 3. **Failure & reconnection** — If heartbeats are missed beyond a configured
+//!    threshold the bond is considered failed and torn down. The group worker
+//!    might attempt to re-establish the bond if the peer is still present in
+//!    the discovery catalog, which would involve going through the
+//!    establishment phase again.
+//!
+//! # Key types
+//!
+//! | Type | Role |
+//! |------|------|
+//! | [`Bond`] | Clonable handle used by the group to send commands to a bond |
+//! | [`Bonds`] | Watchable, ordered collection of all active bonds in a group |
+//! | [`BondId`] | Deterministic identifier derived from the shared session random, identical on both sides |
+//! | [`BondEvent`] | Events emitted by a bond back to the group worker (connected, raft message, terminated) |
+
 use {
 	crate::{
 		Digest,
@@ -143,13 +190,6 @@ impl Bond {
 		group: Arc<WorkerState>,
 		peer: SignedPeerEntry,
 	) -> Result<(Self, BondEvents), Error> {
-		tracing::trace!(
-			network = %group.network_id(),
-			peer = %Short(peer.id()),
-			group = %Short(group.group_id()),
-			"initiating peer bond",
-		);
-
 		// attempt to establish a new wire link to the remote peer
 		let mut link = group
 			.local
@@ -342,6 +382,10 @@ impl Bond {
 /// A watchable collection of currently active bonds in a group.
 ///
 /// This type allows observing changes to the set of active bonds.
+///
+/// This type is cheap to clone and can be freely passed around, all clones of
+/// this type will always reflect the same up to date set of active bonds in the
+/// group.
 #[derive(Debug, Clone)]
 pub struct Bonds(pub(super) watch::Sender<im::OrdMap<PeerId, Bond>>);
 

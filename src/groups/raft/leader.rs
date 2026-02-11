@@ -2,19 +2,28 @@ use {
 	crate::{
 		PeerId,
 		groups::{
+			Index,
 			log::{StateMachine, Storage, Term},
-			raft::{Message, protocol::AppendEntries, role::Role, shared::Shared},
+			raft::{
+				Message,
+				protocol::{AppendEntries, LogEntry, Vote},
+				role::Role,
+				shared::Shared,
+			},
 		},
-		primitives::Short,
+		primitives::{Short, UnboundedChannel},
 	},
 	core::{
-		marker::PhantomData,
+		cmp::Reverse,
 		ops::ControlFlow,
 		pin::Pin,
 		task::{Context, Poll},
 		time::Duration,
 	},
-	std::time::Instant,
+	std::{
+		collections::{HashMap, HashSet},
+		time::Instant,
+	},
 	tokio::time::{Sleep, sleep},
 };
 
@@ -25,7 +34,7 @@ use {
 /// another leader with a higher term, it steps down to follower state and
 /// follows that leader.
 #[derive(Debug)]
-pub struct Leader<S: Storage<M::Command>, M: StateMachine> {
+pub struct Leader<M: StateMachine> {
 	/// The current term for this node.
 	term: Term,
 
@@ -41,36 +50,47 @@ pub struct Leader<S: Storage<M::Command>, M: StateMachine> {
 	/// Pending client commands that have not yet been replicated to followers.
 	/// These commands will be included in the next `AppendEntries` message sent
 	/// to followers.
-	#[expect(dead_code)]
-	pending_commands: Vec<M::Command>,
+	client_commands: UnboundedChannel<M::Command>,
+
+	/// The current voting committee that is used to determine the quorum for
+	/// elections and log replication.
+	committee: Committee,
 
 	/// Wakers for tasks that are waiting for the leader to either send
 	/// heartbeats or replicate log entries.
 	wakers: Vec<std::task::Waker>,
-
-	#[doc(hidden)]
-	_phantom: PhantomData<(S, M)>,
 }
 
-impl<S: Storage<M::Command>, M: StateMachine> Leader<S, M> {
-	pub fn new(term: Term, shared: &Shared<S, M>) -> Self {
+impl<M: StateMachine> Leader<M> {
+	/// Transitions into a new leader role for a new term.
+	///
+	/// This will also inform the new leader about the peers that have granted
+	/// their vote in the election, which optimizes the formation of the initial
+	/// quorum.
+	pub fn new(
+		term: Term,
+		voted_by: HashSet<PeerId>,
+		shared: &Shared<impl Storage<M::Command>, M>,
+	) -> Self {
+		// initialize the voting committee with the peers that granted their vote to
+		// us in the election.
+		let committee = Committee::new(voted_by, shared);
+
 		let heartbeat_interval = shared.config().intervals().heartbeat_interval;
 		let heartbeat_timeout = Box::pin(sleep(heartbeat_interval));
 
 		// Notify the group that we are the new leader. This will cause followers to
 		// update their leader information and start following us.
-		shared
-			.group()
-			.when
-			.update_leader(Some(shared.group().local_id()));
+		shared.update_leader(Some(shared.local_id()));
+		shared.set_online();
 
 		Self {
 			term,
 			heartbeat_timeout,
 			heartbeat_interval,
+			committee,
 			wakers: Vec::new(),
-			pending_commands: Vec::new(),
-			_phantom: PhantomData,
+			client_commands: UnboundedChannel::default(),
 		}
 	}
 
@@ -80,7 +100,7 @@ impl<S: Storage<M::Command>, M: StateMachine> Leader<S, M> {
 	}
 }
 
-impl<S: Storage<M::Command>, M: StateMachine> Leader<S, M> {
+impl<M: StateMachine> Leader<M> {
 	/// As a leader, we send `AppendEntries` with new log entries or as heartbeats
 	/// to all followers. We also handle client requests for log mutations.
 	///
@@ -90,65 +110,319 @@ impl<S: Storage<M::Command>, M: StateMachine> Leader<S, M> {
 	/// Returns `Poll::Ready(ControlFlow::Break(new_role))` if the role should
 	/// transition to a new state (e.g., follower) or `Poll::Pending` if it
 	/// should continue waiting in the leader state.
-	pub fn poll_next_tick(
+	pub fn poll_next_tick<S: Storage<M::Command>>(
 		&mut self,
 		cx: &mut Context,
-		shared: &Shared<S, M>,
-	) -> Poll<ControlFlow<Role<S, M>>> {
+		shared: &mut Shared<S, M>,
+	) -> Poll<ControlFlow<Role<M>>> {
+		if self.poll_pending_entries(cx, shared).is_ready() {
+			// this tick was spent publishing pending client commands to followers
+			return Poll::Ready(ControlFlow::Continue(()));
+		}
+
 		if self.heartbeat_timeout.as_mut().poll(cx).is_ready() {
-			let (prev_term, prev_index) = shared.log().last();
-			let heartbeat = AppendEntries::<M::Command> {
-				term: self.term,
-				leader: shared.group().local_id(),
-				prev_log_index: prev_index,
-				prev_log_term: prev_term,
-				entries: Vec::new(),
-				leader_commit: shared.log().committed().1,
-			};
-
-			shared
-				.group()
-				.bonds
-				.broadcast_raft_message::<M>(Message::AppendEntries(heartbeat));
-
-			self.reset_heartbeat_timeout();
+			self.publish_heartbeat(shared);
 			return Poll::Ready(ControlFlow::Continue(()));
 		}
 
 		// store a waker to this task so we can wait it up when new client commands
 		// are added before the next heartbeat timeout elapses.
 		self.wakers.push(cx.waker().clone());
-
 		Poll::Pending
 	}
 
-	pub fn receive(
-		&self,
+	/// As a leader we are only interested in receiving `AppendEntriesResponse`
+	/// messages from followers to track their replication progress and update our
+	/// commit index.
+	pub fn receive_protocol_message<S: Storage<M::Command>>(
+		&mut self,
 		message: Message<M::Command>,
 		sender: PeerId,
-		shared: &Shared<S, M>,
+		shared: &mut Shared<S, M>,
 	) {
-		let Message::AppendEntriesResponse(_response) = message else {
+		let Message::AppendEntriesResponse(response) = message else {
 			tracing::warn!(
 				local_term = self.term(),
 				message_term = message.term(),
-				group = %Short(shared.group().group_id()),
-				network = %Short(shared.group().network_id()),
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
 				sender = %Short(sender),
 				"unexpected message type received by leader",
 			);
 			return;
 		};
+
+		match response.vote {
+			// The follower is up to date with our log and can be part of the current
+			// voting committee. Record its vote and its log progress for commit index
+			// tracking.
+			Vote::Granted => {
+				self.record_vote(sender, response.last_log_index, shared);
+			}
+
+			// The follower is not up to date with our log or has some other issue
+			// that prevents it from being part of the current voting committee.
+			// Remove it from the committee so it is not considered for quorum
+			// calculations until it catches up with our log and can grant its vote
+			// again.
+			Vote::Abstained | Vote::Denied => self.committee.remove_voter(sender),
+		}
+	}
+
+	/// Adds a new client command to the list of pending commands that will be
+	/// included in the next `AppendEntries` message sent to followers. This
+	/// method is called when the leader receives a client request.
+	///
+	/// This will wake up any pending wakers that are waiting on the next leader
+	/// tick.
+	pub fn enqueue_command(&mut self, command: M::Command) {
+		self.client_commands.send(command);
+
+		for waker in self.wakers.drain(..) {
+			waker.wake();
+		}
+	}
+
+	/// Records a positive vote from a follower that has acknowledged our
+	/// `AppendEntries` message and is up to date with our log.
+	fn record_vote<S: Storage<M::Command>>(
+		&mut self,
+		follower: PeerId,
+		log_index: Index,
+		shared: &mut Shared<S, M>,
+	) {
+		let committed_index = self.committee.record_vote(follower, log_index);
+
+		// advance the commit index up to the latest index that has reached a
+		// quorum of voters in the committee.
+		tracing::trace!(
+			committed = committed_index,
+			group = %Short(shared.group_id()),
+			network = %Short(shared.network_id()),
+		);
+
+		shared.log.commit_up_to(committed_index);
 	}
 }
 
-impl<S: Storage<M::Command>, M: StateMachine> Leader<S, M> {
+// internal impl
+impl<M: StateMachine> Leader<M> {
+	/// Checks if there are any pending client commands and publishes them to all
+	/// followers as `AppendEntries` message.
+	fn poll_pending_entries<S: Storage<M::Command>>(
+		&mut self,
+		cx: &mut Context,
+		shared: &mut Shared<S, M>,
+	) -> Poll<()> {
+		let count = self.client_commands.len();
+		let mut entries = Vec::with_capacity(count);
+		if self
+			.client_commands
+			.poll_recv_many(cx, &mut entries, count)
+			.is_pending()
+		{
+			return Poll::Pending;
+		}
+
+		if count == 0 {
+			// no pending client commands to publish, but still capture the waker from
+			// the context so the task can be woken up when new client commands are
+			// added.
+			return Poll::Ready(());
+		}
+
+		let (prev_term, prev_index) = shared.log.last();
+		let message = Message::AppendEntries(AppendEntries {
+			term: self.term,
+			leader: shared.local_id(),
+			prev_log_index: prev_index,
+			prev_log_term: prev_term,
+			entries: entries
+				.into_iter()
+				.map(|c| LogEntry {
+					command: c,
+					term: self.term,
+					nonce: 0,
+				})
+				.collect(),
+
+			leader_commit: shared.log.committed().1,
+		});
+
+		// always vote for our own `AppendEntries` messages. If we are the
+		// only voter in the committee, this will immediately commit the new log
+		// entries.
+		self.record_vote(shared.local_id(), prev_index + count as u64, shared);
+
+		// broadcast the new log entries to all followers.
+		let followers = shared.bonds().broadcast_raft_message::<M>(message);
+
+		if !followers.is_empty() {
+			tracing::trace!(
+				followers = ?followers,
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
+				"published {count} new log entries to",
+			);
+		}
+
+		self.reset_heartbeat_timeout();
+		Poll::Ready(())
+	}
+
+	fn publish_heartbeat<S: Storage<M::Command>>(
+		&mut self,
+		shared: &Shared<S, M>,
+	) {
+		let (prev_term, prev_index) = shared.log.last();
+		let heartbeat = AppendEntries::<M::Command> {
+			term: self.term,
+			leader: shared.local_id(),
+			prev_log_index: prev_index,
+			prev_log_term: prev_term,
+			entries: Vec::new(),
+			leader_commit: shared.log.committed().1,
+		};
+
+		shared
+			.bonds()
+			.broadcast_raft_message::<M>(Message::AppendEntries(heartbeat));
+
+		self.reset_heartbeat_timeout();
+	}
+
 	fn reset_heartbeat_timeout(&mut self) {
 		let next_heartbeat = Instant::now() + self.heartbeat_interval;
 		self.heartbeat_timeout.as_mut().reset(next_heartbeat.into());
 
 		for waker in self.wakers.drain(..) {
 			waker.wake();
+		}
+	}
+}
+
+#[derive(Debug)]
+struct Committee {
+	/// Map of current voters in the committee to their last acknowledged log
+	/// index, which is used to track their replication progress and determine
+	/// the commit index based on the highest log index that has been replicated
+	/// to a quorum of voters.
+	voters: HashMap<PeerId, Index>,
+
+	/// Map of non-voting followers that have acknowledged our `AppendEntries`
+	/// and are caught up with our log, and can be promoted to voters if needed.
+	non_voters: HashMap<PeerId, Index>,
+
+	/// The maximum number of voters that can be part of the voting committee at
+	/// any given time. This is used to limit the size of the voting committee
+	/// and ensure that we can achieve quorum with a reasonable number of
+	/// voters.
+	max_committee_size: u32,
+}
+
+impl Committee {
+	/// Initializes a new voting committee at the beginning of a new leader term
+	/// based on the peers that granted their vote to us in the election.
+	///
+	/// the list of voters always includes the leader itself.
+	pub fn new<S: Storage<M::Command>, M: StateMachine>(
+		voters: HashSet<PeerId>,
+		shared: &Shared<S, M>,
+	) -> Self {
+		let (_, last_log_index) = shared.log.last();
+		let voters = voters
+			.into_iter()
+			.map(|voter| (voter, last_log_index))
+			.collect();
+
+		Self {
+			voters,
+			non_voters: HashMap::new(),
+			max_committee_size: 5,
+		}
+	}
+
+	/// Records a vote from a follower that has acknowledged our `AppendEntries`
+	/// message and is up to date with our log.
+	///
+	/// Followers that grant positive votes can be considered as part of the
+	/// current voting committee.
+	///
+	/// Returns the
+	pub fn record_vote(&mut self, follower: PeerId, log_index: Index) -> Index {
+		// if the follower is already a voter, just update its last acknowledged log
+		// index.
+		if let Some(voter) = self.voters.get_mut(&follower) {
+			*voter = log_index;
+		} else {
+			self.non_voters.insert(follower, log_index);
+		}
+
+		self.try_backfill_voters();
+		self.highest_quorum_index()
+	}
+
+	/// Removes a follower from the voting committee that has casted a negative
+	/// vote for our `AppendEntries` message.
+	pub fn remove_voter(&mut self, follower: PeerId) {
+		self.voters.remove(&follower);
+		self.non_voters.remove(&follower);
+		self.try_backfill_voters();
+	}
+
+	/// Finds the highest log index that has been replicated to a quorum of voters
+	/// in the current voting committee
+	pub fn highest_quorum_index(&self) -> Index {
+		let mut log_indices = self.voters.values().collect::<Vec<_>>();
+		log_indices.sort_unstable();
+
+		let quorum = (self.voters.len() / 2) + 1;
+		*log_indices[log_indices.len() - quorum]
+	}
+
+	/// We want to keep the voting committee capped at `self.max_committee_size`
+	/// voters to ensure we can achieve quorum with a reasonable latency, we also
+	/// want to have an odd number of voters to avoid split votes.
+	fn target_committee_size(&self) -> usize {
+		let total_followers = self.voters.len() + self.non_voters.len();
+		std::cmp::min(self.max_committee_size as usize, total_followers) | 1
+	}
+
+	/// Attempts to backfill voters from the non-voters if there is room in the
+	/// committee based on the target committee size.
+	fn try_backfill_voters(&mut self) {
+		// check if we should promote any non-voters to voters based on their log
+		// progress and the current size of the voting committee.
+		let target_committee_size = self.target_committee_size();
+		if self.voters.len() < target_committee_size {
+			// promote the most caught-up non-voters to fill the committee, but
+			// ensure the resulting voter count is always odd to avoid split votes.
+			let mut non_voters = self.non_voters.iter().collect::<Vec<_>>();
+			let deficit = target_committee_size - self.voters.len();
+			let available = non_voters.len().min(deficit);
+
+			// if promoting `available` non-voters would result in an even voter
+			// count, promote one fewer to keep it odd.
+			let promote_count = if (self.voters.len() + available).is_multiple_of(2) {
+				available.saturating_sub(1)
+			} else {
+				available
+			};
+
+			// sort non-voters by their log index in descending order to promote the
+			// most caught-up ones first.
+			non_voters.sort_by_key(|(_, log_index)| Reverse(*log_index));
+
+			let promoted: Vec<_> = non_voters
+				.into_iter()
+				.take(promote_count)
+				.map(|(id, idx)| (*id, *idx))
+				.collect();
+
+			for (non_voter, log_index) in promoted {
+				self.non_voters.remove(&non_voter);
+				self.voters.insert(non_voter, log_index);
+			}
 		}
 	}
 }

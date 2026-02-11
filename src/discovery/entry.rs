@@ -543,6 +543,12 @@ impl fmt::Display for Short<&SignedPeerEntry> {
 	}
 }
 
+impl fmt::Display for Pretty<'_, EndpointAddr> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{:?}", self.addrs)
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use {

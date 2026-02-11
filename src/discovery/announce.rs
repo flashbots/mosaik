@@ -381,12 +381,6 @@ impl WorkerLoop {
 		match message {
 			// a peer is announcing an updated version of its own entry
 			AnnouncementMessage::OwnEntryUpdate(entry) => {
-				tracing::trace!(
-						info = %Short(&entry),
-						network = %self.local.network_id(),
-						"received peer entry update announcement"
-				);
-
 				if entry.network_id() != self.local.network_id() {
 					tracing::trace!(
 						peer_network = %Short(entry.network_id()),
@@ -473,9 +467,9 @@ impl WorkerLoop {
 		let entry = self.catalog.borrow().local().clone();
 
 		tracing::trace!(
+			peer_info = ?Pretty(&entry),
 			network = %self.local.network_id(),
-			entry = ?Pretty(&entry),
-			"broadcast of local peer info"
+			"broadcasting local"
 		);
 
 		self
@@ -533,15 +527,11 @@ impl WorkerLoop {
 				self.rejoin_topic(topic_tx, topic_rx).await?;
 			}
 		} else {
+			// successfully broadcasted the message, update neighbors stats
 			let neighbor_count = topic_rx.neighbors().count();
 			self.neighbors_count.store(neighbor_count, Ordering::SeqCst);
-
-			tracing::trace!(
-				network = %self.local.network_id(),
-				neighbors = neighbor_count,
-				"broadcasted announcement message"
-			);
 		}
+
 		Ok(())
 	}
 

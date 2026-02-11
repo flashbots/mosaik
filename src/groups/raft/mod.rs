@@ -1,7 +1,10 @@
 use {
 	crate::{
+		Consistency,
 		PeerId,
 		groups::{
+			CommandError,
+			QueryError,
 			log,
 			raft::{role::Role, shared::Shared},
 			state::WorkerState,
@@ -22,6 +25,7 @@ mod leader;
 mod protocol;
 mod role;
 mod shared;
+mod sync;
 
 pub(super) use protocol::Message;
 use {
@@ -65,7 +69,7 @@ where
 {
 	/// The current role of this node in the Raft consensus algorithm and its
 	/// role-specific state.
-	role: role::Role<S, M>,
+	role: role::Role<M>,
 
 	/// Shared state across all raft roles.
 	shared: shared::Shared<S, M>,
@@ -81,37 +85,84 @@ where
 	/// group.
 	pub fn new(group: Arc<WorkerState>, storage: S, state_machine: M) -> Self {
 		let shared = Shared::new(group, storage, state_machine);
-
-		Self {
-			role: Role::new(&shared),
-			shared,
-		}
+		let role = Role::new(&shared);
+		Self { role, shared }
 	}
 
 	/// Accepts an incoming consensus message from a remote bonded peer in the
 	/// group and decode it into a strongly-typed `Message` that is aware of the
 	/// state machine implementation used by the group.
-	pub fn receive(&mut self, buffer: Bytes, from: PeerId) {
+	pub fn receive_protocol_message(&mut self, buffer: Bytes, from: PeerId) {
 		let Ok(message) = decode_from_std_read(&mut buffer.reader(), standard())
 		else {
 			tracing::warn!(
 				peer = %Short(from),
-				group = %Short(self.shared.group().group_id()),
-				network = %Short(self.shared.group().network_id()),
+				group = %Short(self.shared.group_id()),
+				network = %Short(self.shared.network_id()),
 				"failed to decode incoming raft message",
 			);
 			return;
 		};
 
-		tracing::trace!(
-			message = ?message,
-			group = %Short(self.shared.group().group_id()),
-			peer = %Short(from),
-			network = %Short(self.shared.group().network_id()),
-			"received",
-		);
+		self
+			.role
+			.receive_protocol_message(message, from, &mut self.shared);
+	}
 
-		self.role.receive(message, from, &mut self.shared);
+	pub fn command(
+		&mut self,
+		command: M::Command,
+	) -> impl Future<Output = Result<(), CommandError<M>>> + Send + Sync + 'static
+	{
+		match &mut self.role {
+			Role::Leader(leader) => {
+				tracing::trace!("client command as leader: {command:?}");
+				leader.enqueue_command(command);
+				core::future::ready(Ok(()))
+			}
+
+			Role::Follower(_follower) => {
+				// todo
+				tracing::trace!("client command as follower: {command:?}");
+				core::future::ready(Err(CommandError::Offline(command)))
+			}
+
+			// nodes in candidate state cannot accept commands
+			Role::Candidate(_) => {
+				tracing::trace!("client command as candidate: {command:?}");
+				core::future::ready(Err(CommandError::Offline(command)))
+			}
+		}
+	}
+
+	pub fn query(
+		&self,
+		query: M::Query,
+		consistency: Consistency,
+	) -> impl Future<Output = Result<M::QueryResult, QueryError<M>>>
+	+ Send
+	+ Sync
+	+ 'static {
+		match &self.role {
+			Role::Leader(_leader) => {
+				tracing::trace!("client query as leader: {query:?} [{consistency:?}]");
+				core::future::ready(Err(QueryError::Offline(query)))
+			}
+
+			Role::Follower(_follower) => {
+				tracing::trace!(
+					"client query as follower: {query:?} [{consistency:?}]"
+				);
+				core::future::ready(Err(QueryError::Offline(query)))
+			}
+
+			Role::Candidate(_) => {
+				tracing::trace!(
+					"client query as candidate: {query:?} [{consistency:?}]"
+				);
+				core::future::ready(Err(QueryError::Offline(query)))
+			}
+		}
 	}
 }
 

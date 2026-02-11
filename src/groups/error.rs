@@ -1,6 +1,7 @@
 use crate::{
 	Groups,
 	discovery::Error as DiscoveryError,
+	groups::StateMachine,
 	network::{
 		self,
 		link::{Link, LinkError},
@@ -23,6 +24,46 @@ pub enum Error {
 
 	#[error("Discovery error: {0}")]
 	Discovery(DiscoveryError),
+}
+
+/// Errors that are communicated by the public API when issuing commands to the
+/// group.
+#[derive(Debug, thiserror::Error)]
+pub enum CommandError<M: StateMachine> {
+	/// This is a temporary error indicating that the local node is currently
+	/// offline and cannot process the command. The error carries the unsent
+	/// command, which can be retried later when the node is back online.
+	///
+	/// See [`When::is_online`] for more details on how the online/offline status
+	/// of the node is determined.
+	#[error("Group is temporarily offline and cannot process commands")]
+	Offline(M::Command),
+
+	/// The group is permanently terminated and cannot process any more commands.
+	/// This error is unrecoverable and indicates the group worker loop is no
+	/// longer running.
+	#[error("Group is terminated")]
+	GroupTerminated,
+}
+
+/// Errors that are communicated by the public API when issuing queries to the
+/// group.
+#[derive(Debug, thiserror::Error)]
+pub enum QueryError<M: StateMachine> {
+	/// This is a temporary error indicating that the local node is currently
+	/// offline and cannot process the query. The error carries the unsent query,
+	/// which can be retried later when the node is back online.
+	///
+	/// See [`When::is_online`] for more details on how the online/offline status
+	/// of the node is determined.
+	#[error("Group is temporarily offline and cannot process queries")]
+	Offline(M::Query),
+
+	/// The group is permanently terminated and cannot process any more commands.
+	/// This error is unrecoverable and indicates the group worker loop is no
+	/// longer running.
+	#[error("Group is terminated")]
+	GroupTerminated,
 }
 
 network::make_close_reason!(

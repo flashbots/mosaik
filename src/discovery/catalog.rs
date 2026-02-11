@@ -254,7 +254,14 @@ pub enum UpsertResult<'a> {
 
 	/// The insertion was rejected because the existing entry had an equal or
 	/// higher version number, or the entry was stale.
-	Rejected(Box<SignedPeerEntry>),
+	Rejected {
+		rejected: Box<SignedPeerEntry>,
+		existing: &'a SignedPeerEntry,
+	},
+
+	/// The insertion was rejected because the entry was considered stale based
+	/// on its `updated_at` timestamp being older than the purge threshold.
+	Outdated(Box<SignedPeerEntry>),
 
 	/// The insertion was rejected because the entry belonged to a different
 	/// network.
@@ -320,7 +327,7 @@ impl Catalog {
 		// Reject stale entries updated before the purge threshold
 		let last_valid = Utc::now() - self.config.purge_after;
 		if entry.updated_at() < last_valid {
-			return UpsertResult::Rejected(Box::new(entry));
+			return UpsertResult::Outdated(Box::new(entry));
 		}
 
 		let peer_id = *entry.id();
@@ -334,7 +341,10 @@ impl Catalog {
 						self.signed.get(&peer_id).expect("entry exists"),
 					)
 				} else {
-					UpsertResult::Rejected(Box::new(entry))
+					UpsertResult::Rejected {
+						rejected: Box::new(entry),
+						existing: self.signed.get(&peer_id).expect("entry exists"),
+					}
 				}
 			}
 			im::ordmap::Entry::Vacant(vacant) => {

@@ -1,7 +1,11 @@
 use {
 	crate::{
+		NetworkId,
 		PeerId,
 		groups::{
+			Bonds,
+			GroupId,
+			IntervalsConfig,
 			config::GroupConfig,
 			log::{self, Term},
 			state::WorkerState,
@@ -18,14 +22,14 @@ where
 {
 	/// The group state that is shared between the long-running group worker and
 	/// the external world.
-	group: Arc<WorkerState>,
+	pub group: Arc<WorkerState>,
 
 	/// The persistent log for this group that tracks all changes to the group's
 	/// replicated state machine through raft.
-	log: log::Driver<S, M>,
+	pub log: log::Driver<S, M>,
 
 	/// The last vote casted by the local node in leader elections.
-	last_vote: Option<(Term, PeerId)>,
+	pub last_vote: Option<(Term, PeerId)>,
 }
 
 impl<S, M> Shared<S, M>
@@ -45,16 +49,53 @@ where
 		}
 	}
 
-	pub fn group(&self) -> &WorkerState {
-		&self.group
-	}
-
+	/// Returns the group configuration for this consensus group.
 	pub fn config(&self) -> &GroupConfig {
 		&self.group.config
 	}
 
-	pub const fn log(&self) -> &log::Driver<S, M> {
-		&self.log
+	/// Returns the timing intervals configuration for this consensus group.
+	pub fn intervals(&self) -> &IntervalsConfig {
+		self.config().intervals()
+	}
+
+	/// Returns the list of active bonds for this consensus group.
+	pub fn bonds(&self) -> &Bonds {
+		&self.group.bonds
+	}
+
+	/// Returns the local ID of this node in the consensus group.
+	pub fn local_id(&self) -> PeerId {
+		self.group.local_id()
+	}
+
+	/// Returns the group ID of this consensus group.
+	pub fn group_id(&self) -> &GroupId {
+		self.group.group_id()
+	}
+
+	/// Returns the network ID of this consensus group.
+	pub fn network_id(&self) -> &NetworkId {
+		self.group.network_id()
+	}
+
+	/// Updates the leader information in the group state.
+	pub fn update_leader(&self, leader: Option<PeerId>) {
+		self.group.when.update_leader(leader);
+	}
+
+	/// Updates the online status of the local node in the group state to
+	/// online. See [`When::is_online`] for more details on what it means for a
+	/// node to be online.
+	pub fn set_online(&self) {
+		self.group.when.set_online_status(true);
+	}
+
+	/// Updates the online status of the local node in the group state to
+	/// offline. See [`When::is_offline`] for more details on what it means for a
+	/// node to be offline.
+	pub fn set_offline(&self) {
+		self.group.when.set_online_status(false);
 	}
 
 	/// Called when we receive a `RequestVote` message from a candidate. This

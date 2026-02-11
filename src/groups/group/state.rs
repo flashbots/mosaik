@@ -1,14 +1,17 @@
 use {
 	crate::{
+		Consistency,
 		Groups,
 		NetworkId,
 		PeerId,
 		discovery::{Discovery, SignedPeerEntry},
 		groups::{
 			Bonds,
+			CommandError,
 			Config,
 			Group,
 			GroupId,
+			QueryError,
 			StateMachine,
 			When,
 			bond::{BondEvent, HandshakeStart},
@@ -17,7 +20,7 @@ use {
 		},
 		network::{LocalNode, link::Link},
 	},
-	core::any::TypeId,
+	core::any::{Any, TypeId},
 	iroh::protocol::AcceptError,
 	std::sync::Arc,
 	tokio::sync::{
@@ -70,7 +73,14 @@ pub struct WorkerState {
 	/// Channel for sending external commands to the worker loop, such as
 	/// forwarding incoming bond connection attempts that are routed to this
 	/// worker by the acceptor.
-	pub commands_tx: UnboundedSender<WorkerCommand>,
+	pub bonds_cmd_tx: UnboundedSender<WorkerBondCommand>,
+
+	/// A type-erased channel for sending raft protocol commands to the worker
+	/// loop. It's type-erased to keep the `WorkerState` struct generic over the
+	/// state machine and storage types so we can store it in homogenous
+	/// registers of groups alongside other groups with different state machine
+	/// and storage implementations.
+	pub raft_cmd_tx: Box<dyn Any + Send + Sync>,
 
 	/// The type ids of the state machine and storage implementations used by
 	/// this group.
@@ -135,7 +145,7 @@ impl WorkerState {
 	/// Initiates the process of forming a bond connection with the specified
 	/// peer.
 	pub fn bond_with(&self, peer: SignedPeerEntry) {
-		let _ = self.commands_tx.send(WorkerCommand::Connect(peer));
+		let _ = self.bonds_cmd_tx.send(WorkerBondCommand::Connect(peer));
 	}
 
 	/// Returns a public-api handle to this group.
@@ -144,11 +154,7 @@ impl WorkerState {
 	/// this group.
 	pub fn public_handle<M: StateMachine>(self: &Arc<Self>) -> Group<M> {
 		assert_eq!(self.state_machine_type(), TypeId::of::<M>());
-
-		Group {
-			state: Arc::clone(self),
-			_p: std::marker::PhantomData,
-		}
+		Group::new(Arc::clone(self))
 	}
 
 	/// Accepts an incoming bond connection for this group.
@@ -170,11 +176,11 @@ impl WorkerState {
 		handshake: HandshakeStart,
 	) -> Result<(), AcceptError> {
 		let (result_tx, result_rx) = oneshot::channel();
-		let command = WorkerCommand::Accept(link, peer, handshake, result_tx);
+		let command = WorkerBondCommand::Accept(link, peer, handshake, result_tx);
 
 		// handoff the accept process to the background worker loop
 		self
-			.commands_tx
+			.bonds_cmd_tx
 			.send(command)
 			.map_err(AcceptError::from_err)?;
 
@@ -183,9 +189,9 @@ impl WorkerState {
 	}
 }
 
-/// Commands sent to the group worker loop
+/// Bond-related commands sent to the group worker loop.
 #[expect(clippy::large_enum_variant)]
-pub enum WorkerCommand {
+pub enum WorkerBondCommand {
 	/// Accepts an incoming connection for this group.
 	/// Connections that are routed here have already passed preliminary
 	/// validation such as network id and group id checks.
@@ -206,4 +212,16 @@ pub enum WorkerCommand {
 	/// It is an explicit command to allow scheduling concurrent bonding processes
 	/// on the worker loop without blocking the main group worker loop.
 	SubscribeToBond(UnboundedReceiver<BondEvent>, PeerId),
+}
+
+/// Commands sent to the group worker that are raft-specific and carry state
+/// machine impl types.
+pub(super) enum WorkerRaftCommand<M: StateMachine> {
+	Command(M::Command, oneshot::Sender<Result<(), CommandError<M>>>),
+
+	Query(
+		M::Query,
+		Consistency,
+		oneshot::Sender<Result<M::QueryResult, QueryError<M>>>,
+	),
 }

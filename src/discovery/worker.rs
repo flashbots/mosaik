@@ -13,7 +13,7 @@ use {
 		PeerId,
 		discovery::{PeerEntryVersion, SignedPeerEntry},
 		network::LocalNode,
-		primitives::{IntoIterOrSingle, Short},
+		primitives::{IntoIterOrSingle, Pretty, Short},
 	},
 	chrono::Utc,
 	core::time::Duration,
@@ -79,24 +79,29 @@ impl Handle {
 		&self,
 		update: impl FnOnce(PeerEntry) -> PeerEntry + Send + 'static,
 	) {
-		self.catalog.send_modify(|catalog| {
+		self.catalog.send_if_modified(|catalog| {
 			let local_entry = catalog.local().clone();
+			let prev_version = local_entry.update_version();
 			let updated_entry = update(local_entry.into());
-			let signed_updated_entry = updated_entry
-				.increment_version()
-				.sign(self.local.secret_key())
-				.expect("signing updated local peer entry failed.");
+			if updated_entry.update_version() > prev_version {
+				let signed_updated_entry = updated_entry
+					.sign(self.local.secret_key())
+					.expect("signing updated local peer entry failed.");
 
-			tracing::trace!(
-				info = %Short(&signed_updated_entry),
-				network = %self.local.network_id(),
-				"Updating local peer entry in catalog",
-			);
+				tracing::trace!(
+					peer_info = %Short(&signed_updated_entry),
+					network = %self.local.network_id(),
+					"updated local",
+				);
 
-			assert!(
-				catalog.upsert_signed(signed_updated_entry).is_ok(),
-				"local peer info versioning error. this is a bug."
-			);
+				assert!(
+					catalog.upsert_signed(signed_updated_entry).is_ok(),
+					"local peer info versioning error. this is a bug."
+				);
+				true
+			} else {
+				false
+			}
 		});
 	}
 }
@@ -250,7 +255,12 @@ impl WorkerLoop {
 
 				// observe local transport-level address changes
 				Some(addr) = addr_change.next() => {
-					tracing::trace!(addr = ?addr, "Local node address updated");
+					tracing::trace!(
+						address = %Pretty(&addr),
+						network = %self.handle.local.network_id(),
+						"updated local"
+					);
+
 					self.handle.update_local_entry(move |entry| {
 						entry.update_address(addr)
 							.expect("peer id changed for local node.")
@@ -332,9 +342,9 @@ impl WorkerLoop {
 			match catalog.upsert_signed(peer_entry) {
 				UpsertResult::New(peer_entry) => {
 					tracing::debug!(
-						info = %Short(peer_entry),
+						peer = %Short(peer_entry),
 						network = %self.handle.local.network_id(),
-						"new peer discovered"
+						"discovered new"
 					);
 
 					// Publish the new peer entry to the static provider
@@ -358,33 +368,40 @@ impl WorkerLoop {
 				}
 				UpsertResult::Updated(peer_entry) => {
 					tracing::trace!(
-						info = %Short(peer_entry),
+						peer_info = %Short(peer_entry),
 						network = %self.handle.local.network_id(),
-						"known peer updated"
+						"updated"
 					);
 
 					// Publish the new peer entry to the static provider
 					self.handle.local.observe(peer_entry.address());
-
-					self
-						.events
-						.send(Event::PeerUpdated(peer_entry.clone().into()))
-						.ok();
+					self.events.send(Event::PeerUpdated(peer_entry.into())).ok();
 					true
 				}
-				UpsertResult::Rejected(peer_entry) => {
+				UpsertResult::Outdated(peer_entry) => {
 					tracing::trace!(
-						incoming = %Short(peer_entry.as_ref()),
+						peer_info = %Short(peer_entry.as_ref()),
 						network = %self.handle.local.network_id(),
-						"stale peer update rejected"
+						"rejected outdated"
 					);
+					false
+				}
+				UpsertResult::Rejected { rejected, existing } => {
+					if rejected.update_version() < existing.update_version() {
+						tracing::trace!(
+							update = %Short(rejected.as_ref()),
+							existing = %Short(existing),
+							network = %self.handle.local.network_id(),
+							"rejected stale peer"
+						);
+					}
 					false
 				}
 				UpsertResult::DifferentNetwork(peer_network) => {
 					tracing::trace!(
 						peer_network = %Short(peer_network),
 						this_network = %Short(self.handle.local.network_id()),
-						"peer entry from different network rejected"
+						"rejected peer info update from different network"
 					);
 					false
 				}

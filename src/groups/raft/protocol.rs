@@ -7,6 +7,7 @@ use {
 		},
 		primitives::Short,
 	},
+	core::ops::RangeInclusive,
 	derive_more::{Display, From},
 	serde::{Deserialize, Serialize, de::DeserializeOwned},
 };
@@ -27,17 +28,31 @@ pub enum Message<C: Command> {
 
 	/// Response to a `RequestVote` message.
 	RequestVoteResponse(RequestVoteResponse),
+
+	/// Sent by a lagging follower to discover which peers have the log entries
+	/// it is missing and to coordinate the catch-up process.
+	LogSyncDiscovery(LogSyncDiscovery),
+
+	/// Sent to individual peers to request the log entries in the specified
+	/// range during the catch-up process.
+	LogSyncRequest(LogSyncRequest),
+
+	/// Response to a `LogSyncRequest` containing the requested historical log
+	/// entries.
+	LogSyncResponse(LogSyncResponse<C>),
 }
 
 impl<C: Command> Message<C> {
 	/// Returns the term carried by the message.
-	/// All raft messages include the sender's current term.
-	pub const fn term(&self) -> Term {
+	pub const fn term(&self) -> Option<Term> {
 		match self {
-			Self::AppendEntries(msg) => msg.term,
-			Self::AppendEntriesResponse(msg) => msg.term,
-			Self::RequestVote(msg) => msg.term,
-			Self::RequestVoteResponse(msg) => msg.term,
+			Self::AppendEntries(msg) => Some(msg.term),
+			Self::AppendEntriesResponse(msg) => Some(msg.term),
+			Self::RequestVote(msg) => Some(msg.term),
+			Self::RequestVoteResponse(msg) => Some(msg.term),
+			Self::LogSyncDiscovery(_)
+			| Self::LogSyncRequest(_)
+			| Self::LogSyncResponse(_) => None,
 		}
 	}
 
@@ -47,7 +62,10 @@ impl<C: Command> Message<C> {
 			Self::AppendEntries(msg) => Some(msg.leader),
 			Self::AppendEntriesResponse(_)
 			| Self::RequestVote(_)
-			| Self::RequestVoteResponse(_) => None,
+			| Self::RequestVoteResponse(_)
+			| Self::LogSyncDiscovery(_)
+			| Self::LogSyncRequest(_)
+			| Self::LogSyncResponse(_) => None,
 		}
 	}
 }
@@ -69,15 +87,32 @@ pub struct RequestVote {
 	pub last_log_term: Term,
 }
 
+#[derive(Debug, Clone, Display, Serialize, Deserialize)]
+pub enum Vote {
+	/// Vote granted to the candidate or the leader by a voting follower that is
+	/// in sync with the log.
+	Granted,
+
+	/// Vote denied to the candidate during elections.
+	Denied,
+
+	/// Abstain from voting because the follower is lagging behind the leader or
+	/// candidate's log progress. This will remove the node from the quorum
+	/// denominator until it catches up with the log, but will still allow it to
+	/// receive log entries and become a voting member again once it is back in
+	/// sync.
+	Abstained,
+}
+
 /// `RequestVote` Message response.
 #[derive(Debug, Clone, Display, Serialize, Deserialize)]
-#[display("{vote_granted}@{term}")]
+#[display("{vote}@{term}")]
 pub struct RequestVoteResponse {
 	/// Current term, for candidate to update itself.
 	pub term: Term,
 
-	/// True means candidate received vote.
-	pub vote_granted: bool,
+	/// The vote granted to the candidate.
+	pub vote: Vote,
 }
 
 /// Log entry stored in the Raft log.
@@ -86,6 +121,11 @@ pub struct RequestVoteResponse {
 pub struct LogEntry<C: Command> {
 	/// Term when entry was received by leader.
 	pub term: Term,
+
+	/// Short-lived random nonce to correlate commands forwarded to the leader
+	/// with the log entries created by those commands. This is used to confirm
+	/// that a command has been processed and replicated by the leader.
+	pub nonce: u64,
 
 	/// Command for replicated state machine. This is the application-specific
 	/// state transition that is replicated across the group via the Raft log.
@@ -124,14 +164,38 @@ pub struct AppendEntriesResponse {
 	/// Current term, for leader to update itself.
 	pub term: Term,
 
-	/// True if follower contained entry matching `prev_log_index` and
-	/// `prev_log_term`.
-	pub success: bool,
+	/// The index of the last log entry the follower has after processing this
+	/// `AppendEntries`. Used by the leader to determine which entries have
+	/// been replicated to a majority and can be committed. Only meaningful
+	/// when `vote` is `Granted`.
+	pub last_log_index: Index,
 
-	/// The responder's peer ID.
-	pub responder_id: PeerId,
+	/// Granted if follower contained entry matching `prev_log_index` and
+	/// `prev_log_term`. Abstain if the follower is lagging behind and cannot
+	/// verify the log consistency, which will exclude it from the quorum until
+	/// it catches up.
+	pub vote: Vote,
+}
 
-	/// Hint for leader to quickly find the correct `next_index` on failure.
-	/// This is the follower's last log index.
-	pub last_log_index: u64,
+/// Message broadcasted by a lagging follower to all bonded peers to discover
+/// which peers have the log entries it is missing and to coordinate the
+/// catch-up process.
+#[derive(Debug, Clone, Display, Serialize, Deserialize)]
+#[display("[{}..{}]", _0.start(), _0.end())]
+pub struct LogSyncDiscovery(RangeInclusive<Index>);
+
+/// Message sent to individual peers to request the log entries in the specified
+/// range during the catch-up process.
+#[derive(Debug, Clone, Display, Serialize, Deserialize)]
+#[display("[{}..{}]", _0.start(), _0.end())]
+pub struct LogSyncRequest(RangeInclusive<Index>);
+
+/// Response to a `LogSyncRequest` containing the requested historical log
+/// entries.
+#[derive(Debug, Clone, Display, Serialize, Deserialize)]
+#[serde(bound(deserialize = "C: DeserializeOwned"))]
+#[display("{}[{}..{}]", range.start(), range.end(), entries.len())]
+pub struct LogSyncResponse<C: Command> {
+	pub range: RangeInclusive<Index>,
+	pub entries: Vec<LogEntry<C>>,
 }

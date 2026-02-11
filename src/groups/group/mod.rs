@@ -1,29 +1,28 @@
 use {
 	crate::{
 		PeerId,
-		groups::{Bonds, GroupId, StateMachine, When, config::GroupConfig},
+		groups::{
+			Bonds,
+			GroupId,
+			StateMachine,
+			When,
+			config::GroupConfig,
+			error::{CommandError, QueryError},
+			state::WorkerRaftCommand,
+		},
 		primitives::Short,
 	},
-	core::fmt,
+	core::{fmt, marker::PhantomData},
 	state::WorkerState,
 	std::sync::Arc,
+	tokio::sync::{
+		mpsc::{UnboundedSender, error::SendError},
+		oneshot,
+	},
 };
-
-mod builder;
-mod error;
 
 pub(in crate::groups) mod state;
 pub(super) mod worker;
-
-pub use {
-	builder::{
-		GroupBuilder,
-		IntervalsConfig,
-		IntervalsConfigBuilder,
-		IntervalsConfigBuilderError,
-	},
-	error::Error,
-};
 
 /// Query consistency levels for group state machine queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +48,9 @@ pub enum Consistency {
 /// the `GroupId` of this group.
 pub struct Group<M: StateMachine> {
 	state: Arc<WorkerState>,
-	_p: std::marker::PhantomData<M>,
+
+	#[doc(hidden)]
+	_p: PhantomData<M>,
 }
 
 // Public APIs for querying the status of the group
@@ -104,14 +105,45 @@ impl<M: StateMachine> Group<M> {
 
 // Public APIs for interacting the the replicated state machine of the group.
 impl<M: StateMachine> Group<M> {
-	/// Issues a command to the group, which will be replicated to all members and
-	/// eventually applied to the group's state machine. This function will return
-	/// an error if the command could not be applied for any reason.
+	/// Issues a command to the group, which will be replicated to all voting
+	/// followers and applied to the group's state machine once a quorum of
+	/// followers have acknowledged the command.
 	///
-	/// If the local node is not the leader of the group, this function will
-	/// forward the command to the current leader for processing.
-	pub async fn command(&self, _command: M::Command) -> Result<(), Error> {
-		async { todo!() }.await
+	/// If the local node is the leader, this method's returned future will
+	/// resolve once the command has been replicated to a quorum of followers and
+	/// applied to the state machine.
+	///
+	/// If the local node is a follower, this method will forward the command
+	/// to the current leader for processing, and the returned future will resolve
+	/// once the leader has replicated the command to a quorum of followers and
+	/// applied it to the state machine.
+	///
+	/// If the local node is offline this method will return an error that carries
+	/// the unsent command.
+	pub async fn command(
+		&self,
+		command: M::Command,
+	) -> Result<(), CommandError<M>> {
+		let Some(sender) = self
+			.state
+			.raft_cmd_tx
+			.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
+		else {
+			unreachable!("invalid raft_tx type. this is a bug.");
+		};
+
+		let (result_tx, result_rx) = oneshot::channel();
+		if let Err(SendError(WorkerRaftCommand::Command(_, _))) =
+			sender.send(WorkerRaftCommand::Command(command, result_tx))
+		{
+			return Err(CommandError::GroupTerminated);
+		}
+
+		match result_rx.await {
+			Ok(Ok(())) => Ok(()),
+			Ok(Err(e)) => Err(e), // command processing error (e.g. not leader)
+			Err(_) => Err(CommandError::GroupTerminated), // oneshot RecvError
+		}
 	}
 
 	/// Queries the current state of the group's state machine at the last applied
@@ -128,10 +160,39 @@ impl<M: StateMachine> Group<M> {
 	/// may introduce additional latency if the local node is not the leader.
 	pub async fn query(
 		&self,
-		_query: M::Query,
-		_consistency: Consistency,
-	) -> Result<M::QueryResult, Error> {
-		async { todo!() }.await
+		query: M::Query,
+		consistency: Consistency,
+	) -> Result<M::QueryResult, QueryError<M>> {
+		let Some(sender) = self
+			.state
+			.raft_cmd_tx
+			.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
+		else {
+			unreachable!("invalid raft_tx type. this is a bug.");
+		};
+
+		let (result_tx, result_rx) = oneshot::channel();
+		if let Err(SendError(WorkerRaftCommand::Query(_, _, _))) =
+			sender.send(WorkerRaftCommand::Query(query, consistency, result_tx))
+		{
+			return Err(QueryError::GroupTerminated);
+		}
+
+		match result_rx.await {
+			Ok(Ok(result)) => Ok(result),
+			Ok(Err(e)) => Err(e), // query processing error (e.g. not leader)
+			Err(_) => Err(QueryError::GroupTerminated), // oneshot RecvError
+		}
+	}
+}
+
+// Internal APIs
+impl<M: StateMachine> Group<M> {
+	pub(super) const fn new(state: Arc<WorkerState>) -> Self {
+		Self {
+			state,
+			_p: PhantomData,
+		}
 	}
 }
 

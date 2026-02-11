@@ -101,17 +101,13 @@ impl CatalogSync {
 		let local = self.local.clone();
 		let catalog = self.catalog.clone();
 		let events_tx = self.events.sender().clone();
+		let peer_id = peer.id;
 
 		async move {
-			tracing::trace!(
-				peer = %Short(&peer.id),
-				"initiating discovery catalog sync",
-			);
-
 			// Establish a direct connection with remote peer on the catalog sync ALPN
 			let cancel = local.termination().clone();
 			let mut link = local
-				.connect_with_cancel::<Self>(peer.clone(), cancel)
+				.connect_with_cancel::<Self>(peer, cancel)
 				.await
 				.map_err(LinkError::from)?;
 
@@ -125,7 +121,7 @@ impl CatalogSync {
 				.inspect_err(|e| {
 					if !e.is_cancelled() {
 						tracing::warn!(
-							peer = %Short(&peer.id),
+							peer = %Short(&peer_id),
 							error = %e,
 							"failed to send local catalog snapshot",
 						);
@@ -143,7 +139,7 @@ impl CatalogSync {
 					if !e.is_cancelled() {
 						tracing::debug!(
 							error = %e,
-							peer = %Short(&peer.id),
+							peer = %Short(peer_id),
 							"failed to receive remote catalog snapshot",
 						);
 					}
@@ -169,12 +165,12 @@ impl CatalogSync {
 				}
 
 				tracing::trace!(
-					peer = %Short(&peer.id),
-					new_peers = %insertions,
-					updated_peers = %updates,
+					peer = %Short(peer_id),
+					new = %insertions,
+					updated = %updates,
 					remote_catalog_size = %remote_catalog_size,
 					local_catalog_size = %local_catalog_size,
-					"full catalog sync complete [initiator]"
+					"discovery catalog synced with"
 				);
 
 				updates > 0 || insertions > 0
@@ -206,10 +202,6 @@ impl ProtocolHandler for CatalogSync {
 
 		async move {
 			let remote_id = connection.remote_id();
-			tracing::trace!(
-				peer = %Short(&remote_id),
-				"accepting incoming discovery catalog sync",
-			);
 
 			// Accept the incoming link for the catalog sync protocol
 			let mut link = Link::<Self>::accept_with_cancel(connection, cancel)
@@ -280,11 +272,11 @@ impl ProtocolHandler for CatalogSync {
 
 				tracing::trace!(
 					peer = %Short(link.remote_id()),
-					new_peers = %insertions,
-					updated_peers = %updates,
+					new = %insertions,
+					updated = %updates,
 					remote_catalog_size = %remote_catalog_size,
 					local_catalog_size = %local_catalog_size,
-					"full catalog sync complete [acceptor]"
+					"discovery catalog synced with"
 				);
 
 				updates > 0 || insertions > 0

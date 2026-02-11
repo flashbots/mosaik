@@ -166,12 +166,14 @@ impl ProtocolHandler for Acceptor {
 			.accept(link, peer, handshake)
 			.await
 			.inspect_err(|e| {
-				tracing::trace!(
-					error = %e,
-					peer = %Short(peer_id),
-					network = %self.local.network_id(),
-					"rejected bond connection",
-				);
+				if !is_already_bonded_error(e) {
+					tracing::trace!(
+						error = ?e,
+						peer = %Short(peer_id),
+						network = %self.local.network_id(),
+						"rejected bond connection",
+					);
+				}
 			})
 	}
 }
@@ -288,4 +290,11 @@ impl Acceptor {
 
 		AcceptError::from_err(reason)
 	}
+}
+
+// used to reduce noise in logs for benign "already bonded" errors during the
+// bonding process.
+#[inline]
+fn is_already_bonded_error(e: &AcceptError) -> bool {
+	e.to_string() == "AlreadyBonded"
 }

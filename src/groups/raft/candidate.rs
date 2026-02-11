@@ -4,7 +4,13 @@ use {
 		PeerId,
 		groups::{
 			log::{StateMachine, Storage, Term},
-			raft::{Message, leader::Leader, role::Role, shared::Shared},
+			raft::{
+				Message,
+				leader::Leader,
+				protocol::Vote,
+				role::Role,
+				shared::Shared,
+			},
 		},
 		primitives::Short,
 	},
@@ -22,7 +28,7 @@ use {
 /// Internal state for the candidate role that is currently running elections
 /// for its leadership candidacy.
 #[derive(Debug)]
-pub struct Candidate<S: Storage<M::Command>, M: StateMachine> {
+pub struct Candidate<M: StateMachine> {
 	/// The current term for this node.
 	term: Term,
 
@@ -42,21 +48,27 @@ pub struct Candidate<S: Storage<M::Command>, M: StateMachine> {
 	wakers: Vec<std::task::Waker>,
 
 	#[doc(hidden)]
-	_phantom: PhantomData<(S, M)>,
+	_phantom: PhantomData<M>,
 }
 
-impl<S: Storage<M::Command>, M: StateMachine> Candidate<S, M> {
+impl<M: StateMachine> Candidate<M> {
 	/// Creates a new candidate role for the specified term and starts the
 	/// election process by sending `RequestVote` messages to all bonded peers in
 	/// the group.
-	pub fn new(term: Term, shared: &mut Shared<S, M>) -> Self {
+	pub fn new<S: Storage<M::Command>>(
+		term: Term,
+		shared: &mut Shared<S, M>,
+	) -> Self {
 		assert_ne!(term, 0, "Candidate role should be at least in term 1");
 
-		let election_timeout = shared.config().intervals().election_timeout();
+		// nodes in candidate state are always considered offline
+		shared.set_offline();
+
+		let election_timeout = shared.intervals().election_timeout();
 		let election_timeout = Box::pin(sleep(election_timeout));
 
-		let candidate = shared.group().local_id();
-		let (last_log_index, last_log_term) = shared.log().last();
+		let candidate = shared.local_id();
+		let (last_log_index, last_log_term) = shared.log.last();
 
 		let request = RequestVote {
 			term,
@@ -67,14 +79,13 @@ impl<S: Storage<M::Command>, M: StateMachine> Candidate<S, M> {
 
 		tracing::debug!(
 			term = term,
-			group = %Short(shared.group().group_id()),
-			network = %Short(shared.group().network_id()),
+			group = %Short(shared.group_id()),
+			network = %Short(shared.network_id()),
 			"starting new leader election",
 		);
 
 		// Broadcast the `RequestVote` message to all bonded peers in the group.
-		let requested_from =
-			shared.group().bonds.broadcast_raft_message::<M>(request);
+		let requested_from = shared.bonds().broadcast_raft_message::<M>(request);
 
 		let requested_from =
 			requested_from.into_iter().chain(once(candidate)).collect();
@@ -94,7 +105,7 @@ impl<S: Storage<M::Command>, M: StateMachine> Candidate<S, M> {
 	}
 }
 
-impl<S: Storage<M::Command>, M: StateMachine> Candidate<S, M> {
+impl<M: StateMachine> Candidate<M> {
 	/// As a candidate, we start elections and wait for votes from other nodes or
 	/// `AppendEntries` from a leader. If no quorum is reached within the election
 	/// timeout, we start a new election.
@@ -102,23 +113,23 @@ impl<S: Storage<M::Command>, M: StateMachine> Candidate<S, M> {
 	/// Returns `Poll::Ready(ControlFlow::Break(new_role))` if the role should
 	/// transition to a new state (e.g., follower or leader) or `Poll::Pending`
 	/// if it should continue waiting in the candidate state.
-	pub fn poll_next_tick(
+	pub fn poll_next_tick<S: Storage<M::Command>>(
 		&mut self,
 		cx: &mut Context,
 		shared: &mut Shared<S, M>,
-	) -> Poll<ControlFlow<Role<S, M>>> {
-		if self.has_quorum() {
+	) -> Poll<ControlFlow<Role<M>>> {
+		if self.quorum_reached() {
 			tracing::debug!(
 				term = self.term(),
-				group = %Short(shared.group().group_id()),
-				network = %Short(shared.group().network_id()),
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
 				"received quorum [{}/{}] of votes, becoming leader",
 				self.votes_granted.len(),
 				self.requested_from.len(),
 			);
 
 			return Poll::Ready(ControlFlow::Break(
-				Leader::new(self.term, shared).into(),
+				Leader::new(self.term, self.votes_granted.clone(), shared).into(),
 			));
 		}
 
@@ -128,8 +139,8 @@ impl<S: Storage<M::Command>, M: StateMachine> Candidate<S, M> {
 			// message to all bonded peers in the group.
 			tracing::debug!(
 				term = self.term(),
-				group = %Short(shared.group().group_id()),
-				network = %Short(shared.group().network_id()),
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
 				"election timeout elapsed without reaching quorum, starting new election",
 			);
 
@@ -152,7 +163,7 @@ impl<S: Storage<M::Command>, M: StateMachine> Candidate<S, M> {
 
 	/// When in a candidate state, we only expect to receive `RequestVoteResponse`
 	/// messages from other nodes.
-	pub fn receive(
+	pub fn receive_protocol_message<S: Storage<M::Command>>(
 		&mut self,
 		message: Message<M::Command>,
 		sender: PeerId,
@@ -161,17 +172,46 @@ impl<S: Storage<M::Command>, M: StateMachine> Candidate<S, M> {
 		let Message::RequestVoteResponse(response) = message else {
 			tracing::warn!(
 				peer = %Short(sender),
-				group = %Short(shared.group().group_id()),
-				network = %Short(shared.group().network_id()),
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
 				message = ?message,
 				"unexpected message type received in candidate state",
 			);
 			return;
 		};
 
-		if response.vote_granted && self.grant(sender) {
-			// Wake up all tasks waiting for the election result
-			// since we have reached a quorum and will become the leader.
+		if !self.requested_from.contains(&sender) {
+			tracing::warn!(
+				peer = %Short(sender),
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
+				term = response.term,
+				"ignoring vote response from peer we did not request vote from",
+			);
+			return;
+		}
+
+		match response.vote {
+			Vote::Granted => {
+				// If the peer granted its vote, we add it to the set of votes granted
+				// to us. We will check if we have reached a quorum after processing the
+				// vote and wake up any waiting
+				self.votes_granted.insert(sender);
+			}
+			Vote::Abstained => {
+				// If the peer abstained from voting, we remove it from the set of peers
+				// we requested votes from, which effectively reduces the quorum
+				// denominator and allows us to still win the election with a smaller
+				// number of votes as long as we have a majority of the remaining voting
+				// peers.
+				self.requested_from.remove(&sender);
+			}
+			Vote::Denied => {}
+		}
+
+		if self.quorum_reached() {
+			// If we have reached a quorum, we wake up all tasks that are waiting for
+			// the election result so that they can transition to the leader state.
 			for waker in self.wakers.drain(..) {
 				waker.wake();
 			}
@@ -180,20 +220,10 @@ impl<S: Storage<M::Command>, M: StateMachine> Candidate<S, M> {
 
 	/// Checks if we have received votes from a quorum of peers to win the
 	/// leader election.
-	fn has_quorum(&self) -> bool {
+	fn quorum_reached(&self) -> bool {
 		let total_nodes = self.requested_from.len();
 		let votes = self.votes_granted.len();
 		let quorum = (total_nodes / 2) + 1;
 		votes >= quorum
-	}
-
-	/// Registers a vote granted by the specified peer and returns `true` if a
-	/// quorum has been reached.
-	fn grant(&mut self, peer_id: PeerId) -> bool {
-		if self.requested_from.contains(&peer_id) {
-			// Only count votes from peers we have requested votes from
-			self.votes_granted.insert(peer_id);
-		}
-		self.has_quorum()
 	}
 }
