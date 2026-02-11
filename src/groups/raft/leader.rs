@@ -238,7 +238,7 @@ impl<M: StateMachine> Leader<M> {
 		// remove the follower from the committee so it is not considered for quorum
 		// calculations until it catches up with our log and can grant its vote
 		// again.
-		self.committee.remove_voter(follower);
+		self.committee.remove(follower);
 
 		// purge voters that are down and try to backfill voters from online
 		// non-voters.
@@ -432,11 +432,15 @@ impl Committee {
 		// index.
 		if let Some(voter) = self.voters.get_mut(&follower) {
 			*voter = log_index;
-		} else {
-			self.non_voters.insert(follower, log_index);
+		} else if self.non_voters.insert(follower, log_index).is_none() {
+			// new non-voting follower that acknowledged our `AppendEntries`, try to
+			// promote it to a voter if we have room in the committee based on the
+			// target committee size.
+			self.try_backfill_voters();
 		}
 
-		self.try_backfill_voters();
+		// after recording this vote, check if we have reached a quorum with the
+		// current committee and can advance the commit index.
 		self.highest_quorum_index()
 	}
 
@@ -465,7 +469,7 @@ impl Committee {
 
 	/// Removes a follower from the voting committee that has casted a negative
 	/// vote for our `AppendEntries` message.
-	pub fn remove_voter(&mut self, follower: PeerId) {
+	pub fn remove(&mut self, follower: PeerId) {
 		self.voters.remove(&follower);
 		self.non_voters.remove(&follower);
 		self.try_backfill_voters();
