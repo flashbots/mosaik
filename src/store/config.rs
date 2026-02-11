@@ -3,7 +3,7 @@ use {
 	serde::{Deserialize, Serialize},
 };
 
-#[derive(Debug, Clone, Builder, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Builder, Serialize, Deserialize)]
 #[builder(pattern = "owned", setter(prefix = "with"), derive(Debug, Clone))]
 #[builder_struct_attr(doc(hidden))]
 pub struct Config {}

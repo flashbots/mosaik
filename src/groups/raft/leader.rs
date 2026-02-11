@@ -11,7 +11,7 @@ use {
 				shared::Shared,
 			},
 		},
-		primitives::{Short, UnboundedChannel},
+		primitives::{FmtIter, Short, UnboundedChannel},
 	},
 	core::{
 		cmp::Reverse,
@@ -120,14 +120,16 @@ impl<M: StateMachine> Leader<M> {
 			return Poll::Ready(ControlFlow::Continue(()));
 		}
 
-		if self.heartbeat_timeout.as_mut().poll(cx).is_ready() {
-			self.publish_heartbeat(shared);
+		if self.poll_next_heartbeat(cx, shared).is_ready() {
+			// this tick was spent sending a heartbeat to followers
+			// since no commands were published, and the heartbeat timeout elapsed.
 			return Poll::Ready(ControlFlow::Continue(()));
 		}
 
 		// store a waker to this task so we can wait it up when new client commands
-		// are added before the next heartbeat timeout elapses.
+		// are added or when the heartbeat timeout elapses to trigger the next tick.
 		self.wakers.push(cx.waker().clone());
+
 		Poll::Pending
 	}
 
@@ -165,7 +167,7 @@ impl<M: StateMachine> Leader<M> {
 			// Remove it from the committee so it is not considered for quorum
 			// calculations until it catches up with our log and can grant its vote
 			// again.
-			Vote::Abstained | Vote::Denied => self.committee.remove_voter(sender),
+			Vote::Abstained | Vote::Denied => self.record_no_vote(sender, shared),
 		}
 	}
 
@@ -175,12 +177,24 @@ impl<M: StateMachine> Leader<M> {
 	///
 	/// This will wake up any pending wakers that are waiting on the next leader
 	/// tick.
-	pub fn enqueue_command(&mut self, command: M::Command) {
+	///
+	/// Returns the index of the log entry that will be assigned to this command
+	/// once it is appended to the log. This allows the caller to track the
+	/// progress of their command and know when it has been committed and applied
+	/// to the state machine.
+	pub fn enqueue_command<S: Storage<M::Command>>(
+		&mut self,
+		command: M::Command,
+		shared: &Shared<S, M>,
+	) -> Index {
+		let (_, last_index) = shared.log.last();
 		self.client_commands.send(command);
 
 		for waker in self.wakers.drain(..) {
 			waker.wake();
 		}
+
+		last_index + self.client_commands.len() as u64
 	}
 
 	/// Records a positive vote from a follower that has acknowledged our
@@ -191,17 +205,65 @@ impl<M: StateMachine> Leader<M> {
 		log_index: Index,
 		shared: &mut Shared<S, M>,
 	) {
-		let committed_index = self.committee.record_vote(follower, log_index);
+		// purge voters that are down and try to backfill voters from online
+		// non-voters.
+		self.committee.remove_dead_voters(shared);
 
-		// advance the commit index up to the latest index that has reached a
-		// quorum of voters in the committee.
-		tracing::trace!(
-			committed = committed_index,
-			group = %Short(shared.group_id()),
-			network = %Short(shared.network_id()),
-		);
+		let prev_committed = shared.log.committed();
+		let quorum_index = self.committee.record_vote(follower, log_index);
 
-		shared.log.commit_up_to(committed_index);
+		if prev_committed != quorum_index {
+			let new_committed = shared.log.commit_up_to(quorum_index);
+			if new_committed != prev_committed {
+				// advance the commit index up to the latest index that has reached a
+				// quorum of voters in the committee.
+				tracing::trace!(
+					committed = new_committed,
+					group = %Short(shared.group_id()),
+					network = %Short(shared.network_id()),
+				);
+
+				shared.update_committed(new_committed);
+			}
+		}
+	}
+
+	/// Records a negative vote from a follower that has not acknowledged our
+	/// `AppendEntries` message or is not up to date with our log.
+	fn record_no_vote<S: Storage<M::Command>>(
+		&mut self,
+		follower: PeerId,
+		shared: &mut Shared<S, M>,
+	) {
+		// remove the follower from the committee so it is not considered for quorum
+		// calculations until it catches up with our log and can grant its vote
+		// again.
+		self.committee.remove_voter(follower);
+
+		// purge voters that are down and try to backfill voters from online
+		// non-voters.
+		self.committee.remove_dead_voters(shared);
+
+		// see if after purging dead voters and removing this non-voting follower,
+		// we have reached a quorum with a smaller committee and can advance the
+		// commit index.
+		let prev_committed = shared.log.committed();
+		let quorum_index = self.committee.highest_quorum_index();
+
+		if prev_committed != quorum_index {
+			let new_committed = shared.log.commit_up_to(quorum_index);
+			if new_committed != prev_committed {
+				// advance the commit index up to the latest index that has reached a
+				// quorum of voters in the committee.
+				tracing::trace!(
+					committed = new_committed,
+					group = %Short(shared.group_id()),
+					network = %Short(shared.network_id()),
+				);
+
+				shared.update_committed(new_committed);
+			}
+		}
 	}
 }
 
@@ -214,6 +276,13 @@ impl<M: StateMachine> Leader<M> {
 		cx: &mut Context,
 		shared: &mut Shared<S, M>,
 	) -> Poll<()> {
+		if self.client_commands.is_empty() {
+			// no pending client commands to publish, just wait for the next heartbeat
+			// timeout or new client commands to arrive to publish `AppendEntries` to
+			// followers.
+			return Poll::Pending;
+		}
+
 		let count = self.client_commands.len();
 		let mut entries = Vec::with_capacity(count);
 		if self
@@ -224,16 +293,22 @@ impl<M: StateMachine> Leader<M> {
 			return Poll::Pending;
 		}
 
-		if count == 0 {
-			// no pending client commands to publish, but still capture the waker from
-			// the context so the task can be woken up when new client commands are
-			// added.
-			return Poll::Ready(());
+		let (prev_term, prev_index) = shared.log.last();
+
+		// append the new client commands to our log before broadcasting them to
+		// followers but without committing them yet.
+		for command in &entries {
+			shared.log.append(command.clone(), self.term);
 		}
 
-		let (prev_term, prev_index) = shared.log.last();
+		// always vote for our own `AppendEntries` messages. If we are the
+		// only voter in the committee, this will immediately commit the new log
+		// entries.
+		self.record_vote(shared.local_id(), prev_index + count as u64, shared);
+
 		let message = Message::AppendEntries(AppendEntries {
 			term: self.term,
+			leader_commit: shared.log.committed(),
 			leader: shared.local_id(),
 			prev_log_index: prev_index,
 			prev_log_term: prev_term,
@@ -242,24 +317,16 @@ impl<M: StateMachine> Leader<M> {
 				.map(|c| LogEntry {
 					command: c,
 					term: self.term,
-					nonce: 0,
 				})
 				.collect(),
-
-			leader_commit: shared.log.committed().1,
 		});
-
-		// always vote for our own `AppendEntries` messages. If we are the
-		// only voter in the committee, this will immediately commit the new log
-		// entries.
-		self.record_vote(shared.local_id(), prev_index + count as u64, shared);
 
 		// broadcast the new log entries to all followers.
 		let followers = shared.bonds().broadcast_raft_message::<M>(message);
 
 		if !followers.is_empty() {
 			tracing::trace!(
-				followers = ?followers,
+				followers = %FmtIter::<Short<_>, _>::new(followers),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				"published {count} new log entries to",
@@ -270,10 +337,17 @@ impl<M: StateMachine> Leader<M> {
 		Poll::Ready(())
 	}
 
-	fn publish_heartbeat<S: Storage<M::Command>>(
+	/// Checks if the heartbeat timeout has elapsed without any new client command
+	/// being published.
+	fn poll_next_heartbeat<S: Storage<M::Command>>(
 		&mut self,
+		cx: &mut Context,
 		shared: &Shared<S, M>,
-	) {
+	) -> Poll<()> {
+		if self.heartbeat_timeout.as_mut().poll(cx).is_pending() {
+			return Poll::Pending;
+		}
+
 		let (prev_term, prev_index) = shared.log.last();
 		let heartbeat = AppendEntries::<M::Command> {
 			term: self.term,
@@ -281,7 +355,7 @@ impl<M: StateMachine> Leader<M> {
 			prev_log_index: prev_index,
 			prev_log_term: prev_term,
 			entries: Vec::new(),
-			leader_commit: shared.log.committed().1,
+			leader_commit: shared.log.committed(),
 		};
 
 		shared
@@ -289,8 +363,10 @@ impl<M: StateMachine> Leader<M> {
 			.broadcast_raft_message::<M>(Message::AppendEntries(heartbeat));
 
 		self.reset_heartbeat_timeout();
+		Poll::Ready(())
 	}
 
+	/// Called every time we send `AppendEntries` to followers.
 	fn reset_heartbeat_timeout(&mut self) {
 		let next_heartbeat = Instant::now() + self.heartbeat_interval;
 		self.heartbeat_timeout.as_mut().reset(next_heartbeat.into());
@@ -348,7 +424,9 @@ impl Committee {
 	/// Followers that grant positive votes can be considered as part of the
 	/// current voting committee.
 	///
-	/// Returns the
+	/// Returns the index of the latest log entry that has been replicated to a
+	/// quorum of voters in the current voting committee after recording this
+	/// vote, which can be used by the leader to advance the commit index.
 	pub fn record_vote(&mut self, follower: PeerId, log_index: Index) -> Index {
 		// if the follower is already a voter, just update its last acknowledged log
 		// index.
@@ -360,6 +438,29 @@ impl Committee {
 
 		self.try_backfill_voters();
 		self.highest_quorum_index()
+	}
+
+	/// Removes voters from the committee that don't have active bonds with the
+	/// leader. This is a best-effort cleanup mechanism to prevent the committee
+	/// from being filled with voters that are not actively replicating log
+	/// entries and are effectively offline, which would reduce the leader's
+	/// ability to commit new log entries and make progress.
+	pub fn remove_dead_voters<S: Storage<M::Command>, M: StateMachine>(
+		&mut self,
+		shared: &Shared<S, M>,
+	) {
+		let active_bonds = shared
+			.bonds()
+			.iter()
+			.map(|bond| *bond.peer().id())
+			.collect::<HashSet<_>>();
+
+		self.voters.retain(|voter, _| active_bonds.contains(voter));
+		self
+			.non_voters
+			.retain(|non_voter, _| active_bonds.contains(non_voter));
+
+		self.try_backfill_voters();
 	}
 
 	/// Removes a follower from the voting committee that has casted a negative

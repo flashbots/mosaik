@@ -4,6 +4,7 @@ use {
 		groups::{
 			Bonds,
 			GroupId,
+			Index,
 			StateMachine,
 			When,
 			config::GroupConfig,
@@ -27,9 +28,10 @@ pub(super) mod worker;
 /// Query consistency levels for group state machine queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Consistency {
-	/// The query will be processed by the local node without any guarantee of
-	/// consistency with the current state of the group. This is the fastest way
-	/// to process a query, but it may return stale or inconsistent data.
+	/// The query will be processed by the local node up to the latest known
+	/// committed state without any guarantee of consistency with the current
+	/// state of the group. This is the fastest way to process a query, but it
+	/// may return stale or inconsistent data.
 	Weak,
 
 	/// The query will be forwarded to the current leader of the group for
@@ -101,29 +103,38 @@ impl<M: StateMachine> Group<M> {
 	pub fn when(&self) -> &When {
 		&self.state.when
 	}
+
+	/// Returns the index of the latest command that has been committed to the
+	/// group's state machine.
+	pub fn committed_index(&self) -> Index {
+		self.state.when.current_committed()
+	}
 }
 
 // Public APIs for interacting the the replicated state machine of the group.
 impl<M: StateMachine> Group<M> {
 	/// Issues a command to the group, which will be replicated to all voting
-	/// followers and applied to the group's state machine once a quorum of
+	/// followers and committed to the group's state machine once a quorum of
 	/// followers have acknowledged the command.
 	///
 	/// If the local node is the leader, this method's returned future will
 	/// resolve once the command has been replicated to a quorum of followers and
-	/// applied to the state machine.
+	/// committed to the state machine.
 	///
 	/// If the local node is a follower, this method will forward the command
 	/// to the current leader for processing, and the returned future will resolve
 	/// once the leader has replicated the command to a quorum of followers and
-	/// applied it to the state machine.
+	/// committed it to the state machine.
 	///
 	/// If the local node is offline this method will return an error that carries
 	/// the unsent command.
-	pub async fn command(
+	///
+	/// Consecutive calls to this method are guaranteed to be processed in the
+	/// order they were issued.
+	pub async fn execute(
 		&self,
 		command: M::Command,
-	) -> Result<(), CommandError<M>> {
+	) -> Result<Index, CommandError<M>> {
 		let Some(sender) = self
 			.state
 			.raft_cmd_tx
@@ -133,8 +144,37 @@ impl<M: StateMachine> Group<M> {
 		};
 
 		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Command(_, _))) =
-			sender.send(WorkerRaftCommand::Command(command, result_tx))
+		if let Err(SendError(WorkerRaftCommand::Execute(_, _))) =
+			sender.send(WorkerRaftCommand::Execute(command, result_tx))
+		{
+			return Err(CommandError::GroupTerminated);
+		}
+
+		match result_rx.await {
+			Ok(Ok(index)) => Ok(index),
+			Ok(Err(e)) => Err(e), // command processing error (e.g. not leader)
+			Err(_) => Err(CommandError::GroupTerminated), // oneshot RecvError
+		}
+	}
+
+	/// Sends a command to the group leader without waiting for it to be committed
+	/// to the state machine. The returned future will resolve once the command
+	/// has been sent to the leader.
+	///
+	/// Consecutive calls to this method are not guaranteed to be processed in the
+	/// order they were issued, as the
+	pub async fn feed(&self, command: M::Command) -> Result<(), CommandError<M>> {
+		let Some(sender) = self
+			.state
+			.raft_cmd_tx
+			.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
+		else {
+			unreachable!("invalid raft_tx type. this is a bug.");
+		};
+
+		let (result_tx, result_rx) = oneshot::channel();
+		if let Err(SendError(WorkerRaftCommand::Feed(_, _))) =
+			sender.send(WorkerRaftCommand::Feed(command, result_tx))
 		{
 			return Err(CommandError::GroupTerminated);
 		}
@@ -180,7 +220,7 @@ impl<M: StateMachine> Group<M> {
 
 		match result_rx.await {
 			Ok(Ok(result)) => Ok(result),
-			Ok(Err(e)) => Err(e), // query processing error (e.g. not leader)
+			Ok(Err(e)) => Err(e), // query processing error
 			Err(_) => Err(QueryError::GroupTerminated), // oneshot RecvError
 		}
 	}

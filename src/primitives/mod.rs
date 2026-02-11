@@ -2,6 +2,7 @@
 
 mod channel;
 mod fmt;
+mod fut;
 mod id;
 mod iter;
 mod queue;
@@ -15,6 +16,8 @@ pub use id::{Digest, Tag, UniqueId};
 /// Internal primitives.
 pub(crate) use {
 	channel::UnboundedChannel,
+	fut::BoxPinFut,
+	fut::InternalFutureExt,
 	iter::IntoIterOrSingle,
 	queue::AsyncWorkQueue,
 };

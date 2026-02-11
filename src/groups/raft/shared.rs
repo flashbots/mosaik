@@ -5,7 +5,9 @@ use {
 		groups::{
 			Bonds,
 			GroupId,
+			Index,
 			IntervalsConfig,
+			When,
 			config::GroupConfig,
 			log::{self, Term},
 			state::WorkerState,
@@ -64,6 +66,13 @@ where
 		&self.group.bonds
 	}
 
+	/// Returns the `When` event emitter for this consensus group, which can be
+	/// used to await changes to the group's state, such as leadership changes or
+	/// log commitment.
+	pub fn when(&self) -> &When {
+		&self.group.when
+	}
+
 	/// Returns the local ID of this node in the consensus group.
 	pub fn local_id(&self) -> PeerId {
 		self.group.local_id()
@@ -96,6 +105,16 @@ where
 	/// node to be offline.
 	pub fn set_offline(&self) {
 		self.group.when.set_online_status(false);
+	}
+
+	/// Updates the committed index in the group public api observers. This should
+	/// be called whenever the committed index of the log advances, which is when
+	/// new entries are applied to the state machine and become visible to the
+	/// external world through queries. This allows external observers to track
+	/// the progress of the log and know when their commands have been committed
+	/// and applied to the state machine.
+	pub fn update_committed(&self, committed: Index) {
+		self.group.when.update_committed(committed);
 	}
 
 	/// Called when we receive a `RequestVote` message from a candidate. This

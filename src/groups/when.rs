@@ -1,4 +1,7 @@
-use {crate::PeerId, tokio::sync::watch};
+use {
+	crate::{PeerId, groups::Index},
+	tokio::sync::watch,
+};
 
 /// Awaits changes to the group's state.
 #[derive(Debug)]
@@ -13,6 +16,9 @@ pub struct When {
 	/// See `is_online` and `is_offline` for the definition of online and
 	/// offline.
 	online: watch::Sender<bool>,
+
+	/// Observer for the committed index of the group's log.
+	committed: watch::Sender<Index>,
 }
 
 /// Public API
@@ -152,6 +158,44 @@ impl When {
 			}
 		}
 	}
+
+	/// Returns a future that resolves when the committed index of the group's log
+	/// advances.
+	pub fn committed(
+		&self,
+	) -> impl Future<Output = Index> + Send + Sync + 'static {
+		let mut committed = self.committed.subscribe();
+
+		async move {
+			if committed.changed().await.is_err() {
+				// if the watch channel is closed, consider no new commits and never
+				// resolve this future
+				core::future::pending::<()>().await;
+			}
+
+			*committed.borrow_and_update()
+		}
+	}
+
+	/// Returns a future that resolves when the committed index of the group's log
+	/// advances to at least the given index.
+	pub fn committed_up_to(
+		&self,
+		index: Index,
+	) -> impl Future<Output = Index> + Send + Sync + 'static {
+		let mut committed = self.committed.subscribe();
+
+		async move {
+			if let Ok(index) = committed.wait_for(|v| *v >= index).await {
+				return *index;
+			}
+
+			// if the watch channel is closed, consider no new commits and never
+			// resolve this future
+			core::future::pending::<()>().await;
+			unreachable!();
+		}
+	}
 }
 
 /// Internal API
@@ -159,10 +203,12 @@ impl When {
 	pub(crate) fn new(local_id: PeerId) -> Self {
 		let leader = watch::Sender::new(None);
 		let online = watch::Sender::new(false);
+		let committed = watch::Sender::new(0);
 		Self {
 			local_id,
 			leader,
 			online,
+			committed,
 		}
 	}
 
@@ -191,8 +237,26 @@ impl When {
 		});
 	}
 
+	/// Called by `Consensus` when the committed index of the group's log
+	/// advances.
+	pub(super) fn update_committed(&self, new_committed: Index) {
+		self.committed.send_if_modified(|current| {
+			if *current < new_committed {
+				*current = new_committed;
+				true
+			} else {
+				false
+			}
+		});
+	}
+
 	/// Returns the current leader of the group.
 	pub(super) fn current_leader(&self) -> Option<PeerId> {
 		*self.leader.borrow()
+	}
+
+	/// Returns the index of the latest committed log entry in the group.
+	pub(super) fn current_committed(&self) -> Index {
+		*self.committed.borrow()
 	}
 }

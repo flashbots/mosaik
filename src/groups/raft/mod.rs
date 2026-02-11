@@ -4,14 +4,16 @@ use {
 		PeerId,
 		groups::{
 			CommandError,
+			Index,
 			QueryError,
 			log,
 			raft::{role::Role, shared::Shared},
 			state::WorkerState,
 		},
-		primitives::Short,
+		primitives::{BoxPinFut, InternalFutureExt, Short},
 	},
 	core::{
+		future::ready,
 		pin::Pin,
 		task::{Context, Poll},
 	},
@@ -31,6 +33,7 @@ pub(super) use protocol::Message;
 use {
 	bincode::{config::standard, serde::decode_from_std_read},
 	bytes::{Buf, Bytes},
+	futures::FutureExt,
 };
 
 /// The driver of the Raft consensus algorithm for a single group. This type is
@@ -109,58 +112,82 @@ where
 			.receive_protocol_message(message, from, &mut self.shared);
 	}
 
-	pub fn command(
+	/// Appends the command to the current leader's log and returns a future that
+	/// resolves when the command is replicated and committed to the state.
+	pub fn execute(
+		&mut self,
+		command: M::Command,
+	) -> BoxPinFut<Result<Index, CommandError<M>>> {
+		match &mut self.role {
+			Role::Leader(leader) => {
+				// add the command to the leader's log
+				let expected_index = leader.enqueue_command(command, &self.shared);
+
+				// return a future that resolves when the command is committed
+				let fut = self.shared.when().committed_up_to(expected_index);
+				fut.map(move |_| Ok(expected_index)).pin()
+			}
+
+			Role::Follower(_follower) => todo!("execute as follower"),
+
+			// nodes in candidate state cannot accept commands
+			Role::Candidate(_) => ready(Err(CommandError::Offline(command))).pin(),
+		}
+	}
+
+	/// Sends the command to the current leader without waiting for it to be
+	/// committed to the state machine. The returned future will resolve once the
+	/// command has been sent to the leader.
+	pub fn feed(
 		&mut self,
 		command: M::Command,
 	) -> impl Future<Output = Result<(), CommandError<M>>> + Send + Sync + 'static
 	{
 		match &mut self.role {
 			Role::Leader(leader) => {
-				tracing::trace!("client command as leader: {command:?}");
-				leader.enqueue_command(command);
-				core::future::ready(Ok(()))
+				leader.enqueue_command(command, &self.shared);
+				ready(Ok(()))
 			}
-
-			Role::Follower(_follower) => {
-				// todo
-				tracing::trace!("client command as follower: {command:?}");
-				core::future::ready(Err(CommandError::Offline(command)))
-			}
-
-			// nodes in candidate state cannot accept commands
-			Role::Candidate(_) => {
-				tracing::trace!("client command as candidate: {command:?}");
-				core::future::ready(Err(CommandError::Offline(command)))
-			}
+			Role::Follower(_follower) => todo!("feed as follower"),
+			Role::Candidate(_) => ready(Err(CommandError::Offline(command))),
 		}
 	}
 
+	/// Queries the current committed state of the group's state machine.
+	///
+	/// Depending on the consistency level, the query may be processed by the
+	/// local node without any guarantee of consistency with the current state of
+	/// the state machine (e.g. if the local node is a follower that is not up to
+	/// date with the leader), or it may require the local node forward the query
+	/// to the current leader and wait for a response that reflects the latest
+	/// committed state of the state machine.
 	pub fn query(
 		&self,
 		query: M::Query,
 		consistency: Consistency,
-	) -> impl Future<Output = Result<M::QueryResult, QueryError<M>>>
-	+ Send
-	+ Sync
-	+ 'static {
+	) -> BoxPinFut<Result<M::QueryResult, QueryError<M>>> {
 		match &self.role {
-			Role::Leader(_leader) => {
-				tracing::trace!("client query as leader: {query:?} [{consistency:?}]");
-				core::future::ready(Err(QueryError::Offline(query)))
+			Role::Leader(_) => {
+				// if the local node is the leader, it can process the query directly
+				// against the state machine, which is always up to date with the latest
+				// committed state of the group.
+				ready(Ok(self.shared.log.query(query))).pin()
 			}
 
-			Role::Follower(_follower) => {
-				tracing::trace!(
-					"client query as follower: {query:?} [{consistency:?}]"
-				);
-				core::future::ready(Err(QueryError::Offline(query)))
-			}
+			Role::Follower(_) => match consistency {
+				Consistency::Weak => {
+					// with weak consistency, the follower can process the query against
+					// its local state machine up to the last known committed state.
+					ready(Ok(self.shared.log.query(query))).pin()
+				}
+				Consistency::Strong => todo!("strong query as follower"),
+			},
 
 			Role::Candidate(_) => {
-				tracing::trace!(
-					"client query as candidate: {query:?} [{consistency:?}]"
-				);
-				core::future::ready(Err(QueryError::Offline(query)))
+				// if the local node is a candidate, it cannot guarantee that its state
+				// is up to date with the latest committed state of the group, so it
+				// should reject the query with an appropriate error.
+				ready(Err(QueryError::Offline(query))).pin()
 			}
 		}
 	}

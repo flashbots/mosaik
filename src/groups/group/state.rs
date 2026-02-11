@@ -11,6 +11,7 @@ use {
 			Config,
 			Group,
 			GroupId,
+			Index,
 			QueryError,
 			StateMachine,
 			When,
@@ -217,7 +218,9 @@ pub enum WorkerBondCommand {
 /// Commands sent to the group worker that are raft-specific and carry state
 /// machine impl types.
 pub(super) enum WorkerRaftCommand<M: StateMachine> {
-	Command(M::Command, oneshot::Sender<Result<(), CommandError<M>>>),
+	Feed(M::Command, oneshot::Sender<Result<(), CommandError<M>>>),
+
+	Execute(M::Command, oneshot::Sender<Result<Index, CommandError<M>>>),
 
 	Query(
 		M::Query,

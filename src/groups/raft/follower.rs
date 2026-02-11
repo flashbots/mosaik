@@ -194,8 +194,8 @@ impl<M: StateMachine> Follower<M> {
 		if consistent {
 			// we're in sync, append to local store, commit up to the leader's commit
 			// index, and respond with success to the leader.
-			self.accept_in_sync_entries(request, sender, shared);
 			shared.set_online();
+			self.accept_in_sync_entries(request, sender, shared);
 		} else {
 			// Log is inconsistent - we are missing entries before `prev_log_index`.
 			// Buffer the incoming entries and enter catch-up mode to fetch the gap
@@ -237,22 +237,9 @@ impl<M: StateMachine> Follower<M> {
 			shared.log.append(entry.command, entry.term);
 		}
 
-		// advance local commit index to the minimum of the leader's commit index
-		// and the index of our last log entry, which ensures we only commit
-		// entries that are both replicated to a majority
+		// confirm to the leader that we have appended the entries and report the
+		// index of our last log entry
 		let (_, last_log_index) = shared.log.last();
-		let committed = request.leader_commit.min(last_log_index);
-		shared.log.commit_up_to(committed);
-
-		tracing::debug!(
-			committed = committed,
-			length = last_log_index,
-			term = self.term(),
-			group = %Short(shared.group_id()),
-			network = %Short(shared.network_id()),
-			"follower log"
-		);
-
 		shared.bonds().send_raft_message_to::<M>(
 			Message::AppendEntriesResponse(AppendEntriesResponse {
 				term: self.term(),
@@ -260,6 +247,30 @@ impl<M: StateMachine> Follower<M> {
 				last_log_index,
 			}),
 			sender,
+		);
+
+		// advance local commit index to the minimum of the leader's commit index
+		// and the index of our last log entry, which ensures we only commit
+		// entries that are both replicated to a majority
+		let prev_committed = shared.log.committed();
+		let leader_committed = request.leader_commit.min(last_log_index);
+		let mut new_committed = prev_committed;
+
+		if prev_committed < leader_committed {
+			new_committed = shared.log.commit_up_to(leader_committed);
+			if prev_committed < new_committed {
+				// Signal to public api observers that the committed index has advanced
+				shared.when().update_committed(new_committed);
+			}
+		}
+
+		tracing::trace!(
+			committed = new_committed,
+			length = last_log_index,
+			term = self.term(),
+			group = %Short(shared.group_id()),
+			network = %Short(shared.network_id()),
+			"follower log"
 		);
 	}
 }

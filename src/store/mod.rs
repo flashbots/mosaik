@@ -37,11 +37,11 @@ impl Stores {
 		Self(WorkerLoop::spawn(local, discovery.clone(), config))
 	}
 
-	pub fn primary(&self, _group: &(), _id: StoreId) -> PrimaryStore {
+	pub const fn primary(&self, _group: &(), _id: StoreId) -> PrimaryStore {
 		PrimaryStore {}
 	}
 
-	pub fn replica(&self, _id: StoreId) -> ReplicaStore {
+	pub const fn replica(&self, _id: StoreId) -> ReplicaStore {
 		ReplicaStore {}
 	}
 }

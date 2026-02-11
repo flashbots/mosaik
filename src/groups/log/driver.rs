@@ -49,10 +49,10 @@ where
 		self.storage.last().unwrap_or((0, 0))
 	}
 
-	/// Returns the term and index of the latest committed log entry that has
+	/// Returns the index of the latest committed log entry that has
 	/// received a majority of votes from followers.
-	pub const fn committed(&self) -> (Term, Index) {
-		(0, 0)
+	pub const fn committed(&self) -> Index {
+		self.committed
 	}
 
 	/// Retrieves the entry at the given index.
@@ -85,13 +85,18 @@ where
 	/// machine. This should only be called with an index that has been replicated
 	/// to a majority of followers, which is guaranteed by the Raft leader before
 	/// calling this method.
-	pub fn commit_up_to(&mut self, index: Index) {
+	///
+	/// Returns the index of the latest committed entry after this operation,
+	/// which may be less than the given index goes beyond the end of the log.
+	pub fn commit_up_to(&mut self, index: Index) -> Index {
 		for i in self.committed + 1..=index {
 			if let Some((command, _)) = self.storage.get(i) {
 				self.machine.apply(command);
+				self.committed = i;
+			} else {
+				break;
 			}
 		}
-
-		self.committed = index;
+		self.committed
 	}
 }

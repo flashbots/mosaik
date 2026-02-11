@@ -122,11 +122,6 @@ pub struct LogEntry<C: Command> {
 	/// Term when entry was received by leader.
 	pub term: Term,
 
-	/// Short-lived random nonce to correlate commands forwarded to the leader
-	/// with the log entries created by those commands. This is used to confirm
-	/// that a command has been processed and replicated by the leader.
-	pub nonce: u64,
-
 	/// Command for replicated state machine. This is the application-specific
 	/// state transition that is replicated across the group via the Raft log.
 	pub command: C,

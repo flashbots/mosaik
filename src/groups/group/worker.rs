@@ -335,8 +335,15 @@ where
 	/// Handles incoming commands for the raft consensus protocol.
 	fn on_raft_command(&mut self, command: WorkerRaftCommand<M>) {
 		match command {
-			WorkerRaftCommand::Command(cmd, result_tx) => {
-				let cmd_fut = self.raft.command(cmd);
+			WorkerRaftCommand::Execute(cmd, result_tx) => {
+				let cmd_fut = self.raft.execute(cmd);
+				self.work_queue.enqueue(async move {
+					let result = cmd_fut.await;
+					let _ = result_tx.send(result);
+				});
+			}
+			WorkerRaftCommand::Feed(cmd, result_tx) => {
+				let cmd_fut = self.raft.feed(cmd);
 				self.work_queue.enqueue(async move {
 					let result = cmd_fut.await;
 					let _ = result_tx.send(result);
