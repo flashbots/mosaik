@@ -120,26 +120,27 @@ Synchronized data store protocol for replaying stream data to late-joining consu
 
 Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based peer-to-peer networking with relay support.
 
-```
+```text
 ┌─────────────────────────────────────────────┐
-│                  Network                     │
-│                                              │
+│                  Network                    │
+│                                             │
 │  ┌───────────┐  ┌─────────┐  ┌───────────┐  │
-│  │ Discovery  │  │ Streams │  │  Groups   │  │
-│  │            │  │         │  │           │  │
-│  │ Announce   │  │Producer │  │  Bonds    │  │
-│  │ Catalog    │  │Consumer │  │  Raft     │  │
-│  │ Sync       │  │Status   │  │  RSM      │  │
+│  │ Discovery │  │ Streams │  │  Groups   │  │
+│  │           │  │         │  │           │  │
+│  │ Announce  │  │Producer │  │  Bonds    │  │
+│  │ Catalog   │  │Consumer │  │  Raft     │  │
+│  │ Sync      │  │Status   │  │  RSM      │  │
 │  └───────────┘  └─────────┘  └───────────┘  │
-│                                              │
-│  ┌─────────┐  ┌──────────────────────────┐   │
-│  │  Store  │  │     Transport (iroh)     │   │
-│  │  (WIP)  │  │  QUIC · Relay · mDNS    │   │
-│  └─────────┘  └──────────────────────────┘   │
+│                                             │
+│  ┌─────────┐  ┌──────────────────────────┐  │
+│  │  Store  │  │     Transport (iroh)     │  │
+│  │  (WIP)  │  │  QUIC · Relay · mDNS     │  │
+│  └─────────┘  └──────────────────────────┘  │
 └─────────────────────────────────────────────┘
 ```
 
 **Key design patterns:**
+
 - **Worker-loop architecture** — each subsystem spawns long-running tasks that own mutable state, controlled via command channels. Public handles are cheap, cloneable wrappers.
 - **Type-safe links** — `Link<P: Protocol>` provides typed, bidirectional, framed transport with compile-time ALPN correctness.
 - **Blake3 identifiers** — `NetworkId`, `PeerId`, `StreamId`, `GroupId`, `StoreId`, and `Tag` are all 32-byte blake3 hashes.
