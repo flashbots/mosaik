@@ -6,7 +6,7 @@ use {
 			log::{StateMachine, Storage, Term},
 			raft::{
 				Message,
-				protocol::{AppendEntries, LogEntry, Vote},
+				protocol::{AppendEntries, ForwardCommandResponse, LogEntry, Vote},
 				role::Role,
 				shared::Shared,
 			},
@@ -15,6 +15,7 @@ use {
 	},
 	core::{
 		cmp::Reverse,
+		iter::once,
 		ops::ControlFlow,
 		pin::Pin,
 		task::{Context, Poll},
@@ -142,32 +143,54 @@ impl<M: StateMachine> Leader<M> {
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
 	) {
-		let Message::AppendEntriesResponse(response) = message else {
-			tracing::warn!(
-				local_term = self.term(),
-				message_term = message.term(),
-				group = %Short(shared.group_id()),
-				network = %Short(shared.network_id()),
-				sender = %Short(sender),
-				"unexpected message type received by leader",
-			);
-			return;
-		};
+		match message {
+			// sent by followers in response to our `AppendEntries` messages.
+			Message::AppendEntriesResponse(response) => {
+				match response.vote {
+					// The follower is up to date with our log and can be part of the
+					// current voting committee. Record its vote and its log progress
+					// for commit index tracking.
+					Vote::Granted => {
+						self.record_vote(sender, response.last_log_index, shared);
+					}
 
-		match response.vote {
-			// The follower is up to date with our log and can be part of the current
-			// voting committee. Record its vote and its log progress for commit index
-			// tracking.
-			Vote::Granted => {
-				self.record_vote(sender, response.last_log_index, shared);
+					// The follower is not up to date with our log or has some other issue
+					// that prevents it from being part of the current voting committee.
+					// Remove it from the committee so it is not considered for quorum
+					// calculations until it catches up with our log and can grant its
+					// vote again.
+					Vote::Abstained | Vote::Denied => self.record_no_vote(sender, shared),
+				}
 			}
 
-			// The follower is not up to date with our log or has some other issue
-			// that prevents it from being part of the current voting committee.
-			// Remove it from the committee so it is not considered for quorum
-			// calculations until it catches up with our log and can grant its vote
-			// again.
-			Vote::Abstained | Vote::Denied => self.record_no_vote(sender, shared),
+			// sent by followers that are forwarding client commands to the leader.
+			Message::ForwardCommand(request) => {
+				let log_index = self.enqueue_command(request.command, shared);
+
+				if let Some(request_id) = request.request_id {
+					// the follower is interested in knowing the log index assigned to
+					// this command asap.
+					shared.bonds().send_raft_message_to::<M>(
+						Message::ForwardCommandResponse(ForwardCommandResponse {
+							request_id,
+							log_index,
+						}),
+						sender,
+					);
+				}
+			}
+
+			// all other message types are unexpected in the leader state. ignore.
+			_ => {
+				tracing::warn!(
+					local_term = self.term(),
+					message_term = message.term(),
+					group = %Short(shared.group_id()),
+					network = %Short(shared.network_id()),
+					sender = %Short(sender),
+					"unexpected message type received by leader",
+				);
+			}
 		}
 	}
 
@@ -218,7 +241,8 @@ impl<M: StateMachine> Leader<M> {
 				// advance the commit index up to the latest index that has reached a
 				// quorum of voters in the committee.
 				tracing::trace!(
-					committed = new_committed,
+					committed_ix = new_committed,
+					last_log_index = shared.log.last().1,
 					group = %Short(shared.group_id()),
 					network = %Short(shared.network_id()),
 				);
@@ -325,8 +349,11 @@ impl<M: StateMachine> Leader<M> {
 		let followers = shared.bonds().broadcast_raft_message::<M>(message);
 
 		if !followers.is_empty() {
+			let range = prev_index + 1..=prev_index + count as u64;
+
 			tracing::trace!(
 				followers = %FmtIter::<Short<_>, _>::new(followers),
+				ix_range = ?range,
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				"published {count} new log entries to",
@@ -393,7 +420,7 @@ struct Committee {
 	/// any given time. This is used to limit the size of the voting committee
 	/// and ensure that we can achieve quorum with a reasonable number of
 	/// voters.
-	max_committee_size: u32,
+	max_committee_size: usize,
 }
 
 impl Committee {
@@ -457,6 +484,7 @@ impl Committee {
 			.bonds()
 			.iter()
 			.map(|bond| *bond.peer().id())
+			.chain(once(shared.local_id()))
 			.collect::<HashSet<_>>();
 
 		self.voters.retain(|voter, _| active_bonds.contains(voter));
@@ -490,7 +518,8 @@ impl Committee {
 	/// want to have an odd number of voters to avoid split votes.
 	fn target_committee_size(&self) -> usize {
 		let total_followers = self.voters.len() + self.non_voters.len();
-		std::cmp::min(self.max_committee_size as usize, total_followers) | 1
+		let capped = self.max_committee_size.min(total_followers);
+		if capped <= 2 { capped } else { capped | 1 }
 	}
 
 	/// Attempts to backfill voters from the non-voters if there is room in the

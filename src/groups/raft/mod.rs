@@ -128,9 +128,28 @@ where
 				fut.map(move |_| Ok(expected_index)).pin()
 			}
 
-			Role::Follower(_follower) => todo!("execute as follower"),
+			// followers forward the command to the current leader and return a future
+			// that resolves when the command is replicated and committed to the state
+			// machine by the leader.
+			Role::Follower(follower) => {
+				let ack_fut = follower.forward_command(command, &self.shared);
+				let when = self.shared.when().clone();
 
-			// nodes in candidate state cannot accept commands
+				async move {
+					// resolves when the leader acks the command an assigns it an index
+					let index = ack_fut.await?;
+
+					// resolves when the leader committed index moves up to the assigned
+					// index
+					when.committed_up_to(index).await;
+
+					// return the index at which the command was committed
+					Ok(index)
+				}
+				.pin()
+			}
+
+			// nodes in candidate state cannot accept or forward commands
 			Role::Candidate(_) => ready(Err(CommandError::Offline(command))).pin(),
 		}
 	}

@@ -4,7 +4,7 @@ use {
 };
 
 /// Awaits changes to the group's state.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct When {
 	/// `PeerId` of the local node.
 	local_id: PeerId,

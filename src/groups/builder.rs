@@ -204,6 +204,11 @@ pub struct IntervalsConfig {
 	/// self-nomination.
 	#[builder(default = "Duration::from_secs(3)")]
 	pub bootstrap_delay: Duration,
+
+	/// The timeout duration for forwarding a command to the current leader and
+	/// receiving an acknowledgment with the assigned log index.
+	#[builder(default = "Duration::from_secs(2)")]
+	pub forward_timeout: Duration,
 }
 
 impl Default for IntervalsConfig {
@@ -241,6 +246,7 @@ impl IntervalsConfig {
 			self.election_timeout.as_millis().to_le_bytes(),
 			self.election_timeout_jitter.as_millis().to_le_bytes(),
 			self.bootstrap_delay.as_millis().to_le_bytes(),
+			self.forward_timeout.as_millis().to_le_bytes(),
 		])
 	}
 }

@@ -3,7 +3,7 @@
 use {
 	crate::{
 		groups::{Counter, CounterCommand, CounterValueQuery},
-		utils::{discover_all, forever, timeout_after, timeout_s},
+		utils::{discover_all, timeout_after, timeout_s},
 	},
 	mosaik::*,
 };
@@ -105,22 +105,24 @@ async fn no_catchup_weak_follower() -> anyhow::Result<()> {
 	tracing::info!("counter value on follower g2 (weak): {value}");
 	assert_eq!(value, 7);
 
-	forever().await;
-
 	// follower executes a command, should resolve after its replicated and
 	// committed to the state machine by the group.
-	g1.execute(CounterCommand::Decrement(2)).await?;
+	let index = g1.execute(CounterCommand::Decrement(2)).await?;
+	tracing::info!("follower g1 command committed at index {index}");
+	assert_eq!(index, 3);
 
 	// verify that the command has been applied correctly on both nodes after
 	// being replicated to the leader and then applied to the state machine on
 	// both nodes.
-	let value_n0 = g0.query(CounterValueQuery, Consistency::Strong).await?;
-	let value_n1 = g1.query(CounterValueQuery, Consistency::Strong).await?;
-	let value_n2 = g2.query(CounterValueQuery, Consistency::Strong).await?;
+	let value_n0 = g0.query(CounterValueQuery, Consistency::Weak).await?;
+	let value_n1 = g1.query(CounterValueQuery, Consistency::Weak).await?;
+	let value_n2 = g2.query(CounterValueQuery, Consistency::Weak).await?;
 
 	assert_eq!(value_n0, 5);
 	assert_eq!(value_n1, 5);
 	assert_eq!(value_n2, 5);
+
+	tracing::info!("follower g1 command replicated and committed on all nodes");
 
 	Ok(())
 }

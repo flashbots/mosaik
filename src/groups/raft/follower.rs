@@ -2,25 +2,37 @@ use {
 	crate::{
 		PeerId,
 		groups::{
+			CommandError,
+			Index,
 			log::{StateMachine, Storage, Term},
 			raft::{
 				Message,
 				candidate::Candidate,
-				protocol::{AppendEntries, AppendEntriesResponse, Vote},
+				protocol::{
+					AppendEntries,
+					AppendEntriesResponse,
+					ForwardCommand,
+					ForwardCommandResponse,
+					Vote,
+				},
 				role::Role,
 				shared::Shared,
 			},
 		},
-		primitives::Short,
+		primitives::{BoxPinFut, InternalFutureExt, Short, UnboundedChannel},
 	},
 	core::{
+		future::ready,
 		marker::PhantomData,
 		ops::ControlFlow,
 		pin::Pin,
 		task::{Context, Poll},
 	},
-	std::time::Instant,
-	tokio::time::{Sleep, sleep},
+	std::{collections::HashMap, time::Instant},
+	tokio::{
+		sync::oneshot,
+		time::{Sleep, sleep, timeout},
+	},
 };
 
 /// In the follower role, the node is passive and responds to messages from
@@ -41,6 +53,15 @@ pub struct Follower<M: StateMachine> {
 	/// messages from a valid leader within this timeout, we will transition to
 	/// candidate state and start a new election.
 	election_timeout: Pin<Box<Sleep>>,
+
+	/// Tracks the pending forwarded commands from this follower to the leader
+	/// that are awaiting acknowledgment with the assigned log index from the
+	/// leader's `ForwardCommandResponse`.
+	forwarded_commands: HashMap<u64, oneshot::Sender<Index>>,
+
+	/// Channel for tracking forwarded commands that have expired without
+	/// receiving a response from the leader within the forward timeout duration.
+	expired_commands: UnboundedChannel<u64>,
 
 	#[doc(hidden)]
 	_marker: PhantomData<M>,
@@ -75,6 +96,8 @@ impl<M: StateMachine> Follower<M> {
 		Self {
 			term,
 			leader,
+			forwarded_commands: HashMap::default(),
+			expired_commands: UnboundedChannel::default(),
 			election_timeout: Box::pin(sleep(election_timeout)),
 			_marker: PhantomData,
 		}
@@ -83,6 +106,11 @@ impl<M: StateMachine> Follower<M> {
 	/// Returns the current term of this follower.
 	pub const fn term(&self) -> Term {
 		self.term
+	}
+
+	/// Returns the current leader that this follower is following (if known).
+	pub const fn leader(&self) -> Option<PeerId> {
+		self.leader
 	}
 }
 
@@ -99,6 +127,8 @@ impl<M: StateMachine> Follower<M> {
 		cx: &mut Context<'_>,
 		shared: &mut Shared<S, M>,
 	) -> Poll<ControlFlow<Role<M>>> {
+		self.clean_expired_forwarded_commands(cx);
+
 		if self.election_timeout.as_mut().poll(cx).is_ready() {
 			// election timeout elapsed without hearing from a leader, so we start
 			// a new election by transitioning to candidate state
@@ -110,39 +140,93 @@ impl<M: StateMachine> Follower<M> {
 		Poll::Pending
 	}
 
-	/// In follower role there is only one message type that we expect to
-	/// receive and handle at the role-specific level: `AppendEntries` from a
-	/// leader. All other message types (e.g., `RequestVote` from candidates) are
-	/// handled at the shared level since they can be received in any role and do
-	/// not require any role-specific state to be processed.
+	/// In follower mode the only two messages that are handled in the
+	/// role-specific logic are `AppendEntries` and `ForwardCommandResponse` from
+	/// the leader.
 	///
-	/// Upon receiving a valid `AppendEntries` message from a leader, we reset the
-	/// election timeout and update the current leader for this follower.
-	///
-	/// If our local log term and index are behind the ones in the `AppendEntries`
-	/// message, this follower will transition into non-voting "catch-up" mode
-	/// where it will attempt to download the missing log entries from other
-	/// members of the group before it can confirm the `AppendEntries` message and
-	/// update its log to match the leader's log. `AppendEntries` messages
-	/// received while in catch-up are confirmed with `Abstained`
-	/// `AppendEntriesResponse`.
+	/// All other messages (e.g. `RequestVote` from candidates) are handled in the
+	/// shared logic that is common to all roles.
 	pub fn receive_protocol_message<S: Storage<M::Command>>(
 		&mut self,
 		message: Message<M::Command>,
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
 	) {
-		let Message::AppendEntries(request) = message else {
-			tracing::warn!(
-				term = self.term(),
-				sender = %Short(sender),
-				group = %Short(shared.group_id()),
-				network = %Short(shared.network_id()),
-				"unexpected message: only AppendEntries is expected in follower state",
-			);
-			return;
+		match message {
+			Message::AppendEntries(request) => {
+				self.on_append_entries(request, sender, shared);
+			}
+			Message::ForwardCommandResponse(response) => {
+				self.on_forward_command_response(response);
+			}
+			_ => {
+				tracing::warn!(
+					term = self.term(),
+					sender = %Short(sender),
+					group = %Short(shared.group_id()),
+					network = %Short(shared.network_id()),
+					"unexpected message in follower role: {message:?}",
+				);
+			}
+		}
+	}
+
+	/// Forwards the command to the current leader and returns a future that
+	/// resolves when the leader acknowledges the command with the assigned log
+	/// index in a `ForwardCommandResponse`.
+	pub fn forward_command<S: Storage<M::Command>>(
+		&mut self,
+		command: M::Command,
+		shared: &Shared<S, M>,
+	) -> BoxPinFut<Result<Index, CommandError<M>>> {
+		let Some(leader) = self.leader() else {
+			// if the follower does not know who's the current leader (e.g. because
+			// elections are in progress or because it is still in the initial offline
+			// state before hearing from a leader), it cannot accept the command, so
+			// we return a future that resolves with with Offline error.
+			return ready(Err(CommandError::Offline(command))).pin();
 		};
 
+		// generate a random request id
+		let request_id: u64 = loop {
+			let id = rand::random();
+			if self.forwarded_commands.contains_key(&id) {
+				continue;
+			}
+			break id;
+		};
+
+		// send the command to the current leader
+		let message = Message::ForwardCommand(ForwardCommand {
+			command: command.clone(),
+			request_id: Some(request_id),
+		});
+
+		let (forward_ack_tx, forward_ack_rx) = oneshot::channel();
+		self.forwarded_commands.insert(request_id, forward_ack_tx);
+		shared.bonds().send_raft_message_to::<M>(message, leader);
+
+		let expired_sender = self.expired_commands.sender().clone();
+		let forward_timeout = shared.intervals().forward_timeout;
+
+		async move {
+			if let Ok(Ok(index)) = timeout(forward_timeout, forward_ack_rx).await {
+				Ok(index)
+			} else {
+				expired_sender.send(request_id).ok();
+				Err(CommandError::Offline(command))
+			}
+		}
+		.pin()
+	}
+
+	/// Handles an incoming `AppendEntries` message from a leader.
+	fn on_append_entries<S: Storage<M::Command>>(
+		&mut self,
+		request: AppendEntries<M::Command>,
+		sender: PeerId,
+		shared: &mut Shared<S, M>,
+	) {
 		// signal to public api status listeners a potential update
 		// to the current leader for this follower.
 		self.leader = Some(request.leader);
@@ -205,6 +289,32 @@ impl<M: StateMachine> Follower<M> {
 		}
 	}
 
+	/// Handles an incoming `ForwardCommandResponse` message from the leader in
+	/// response to a command that this follower forwarded to the leader. Signals
+	/// the assignment of a log index to the forwarded command.
+	fn on_forward_command_response(&mut self, response: ForwardCommandResponse) {
+		if let Some(ack) = self.forwarded_commands.remove(&response.request_id) {
+			let _ = ack.send(response.log_index);
+		}
+	}
+
+	/// Periodically cleans up any pending forwarded commands that have expired
+	/// without receiving a response from the leader within the forward timeout.
+	fn clean_expired_forwarded_commands(&mut self, cx: &mut Context<'_>) {
+		if !self.expired_commands.is_empty() {
+			let mut ids = Vec::with_capacity(self.expired_commands.len());
+			if self
+				.expired_commands
+				.poll_recv_many(cx, &mut ids, 10)
+				.is_ready()
+			{
+				for id in ids {
+					self.forwarded_commands.remove(&id);
+				}
+			}
+		}
+	}
+
 	/// Called when this follower's log state is in sync with the leader's log and
 	/// we want to append and commit the entries from the leader's `AppendEntries`
 	/// message and update our log state to match the leader's log.
@@ -214,44 +324,39 @@ impl<M: StateMachine> Follower<M> {
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
 	) {
-		if request.entries.is_empty() {
-			// this is a heartbeat message from the leader with no new entries,
-			// nothing to append and no need to respond to the leader with
-			// `AppendEntriesResponse` since the leader doesn't need confirmation of
-			// the log state from empty heartbeats.
-			return;
-		}
+		if !request.entries.is_empty() {
+			// the log is consistent up to `prev_log_index`. Append the leader's new
+			// entries, skipping any we already have, which handles idempotent
+			// redelivery).
+			let start_index = request.prev_log_index + 1;
+			for (i, entry) in request.entries.into_iter().enumerate() {
+				let index = start_index + i as u64;
+				if shared.log.term_at(index) == Some(entry.term) {
+					// already have this entry (and we verified no conflicts above), so
+					// skip it.
+					continue;
+				}
 
-		// the log is consistent up to `prev_log_index`. Append the leader's new
-		// entries, skipping any we already have, which handles idempotent
-		// redelivery).
-		let start_index = request.prev_log_index + 1;
-		for (i, entry) in request.entries.into_iter().enumerate() {
-			let index = start_index + i as u64;
-			if shared.log.term_at(index) == Some(entry.term) {
-				// already have this entry (and we verified no conflicts above), so
-				// skip it.
-				continue;
+				shared.log.append(entry.command, entry.term);
 			}
 
-			shared.log.append(entry.command, entry.term);
+			// confirm to the leader that we have appended the entries and report the
+			// index of our last log entry
+			let (_, last_log_index) = shared.log.last();
+			shared.bonds().send_raft_message_to::<M>(
+				Message::AppendEntriesResponse(AppendEntriesResponse {
+					term: self.term(),
+					vote: Vote::Granted,
+					last_log_index,
+				}),
+				sender,
+			);
 		}
-
-		// confirm to the leader that we have appended the entries and report the
-		// index of our last log entry
-		let (_, last_log_index) = shared.log.last();
-		shared.bonds().send_raft_message_to::<M>(
-			Message::AppendEntriesResponse(AppendEntriesResponse {
-				term: self.term(),
-				vote: Vote::Granted,
-				last_log_index,
-			}),
-			sender,
-		);
 
 		// advance local commit index to the minimum of the leader's commit index
 		// and the index of our last log entry, which ensures we only commit
 		// entries that are both replicated to a majority
+		let (_, last_log_index) = shared.log.last();
 		let prev_committed = shared.log.committed();
 		let leader_committed = request.leader_commit.min(last_log_index);
 		let mut new_committed = prev_committed;
@@ -265,12 +370,11 @@ impl<M: StateMachine> Follower<M> {
 		}
 
 		tracing::trace!(
-			committed = new_committed,
-			length = last_log_index,
+			committed_ix = new_committed,
+			log_len = last_log_index,
 			term = self.term(),
 			group = %Short(shared.group_id()),
 			network = %Short(shared.network_id()),
-			"follower log"
 		);
 	}
 }
