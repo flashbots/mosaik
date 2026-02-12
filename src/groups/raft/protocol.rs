@@ -3,6 +3,7 @@ use {
 		PeerId,
 		groups::{
 			Command,
+			Cursor,
 			log::{Index, Term},
 		},
 		primitives::Short,
@@ -30,7 +31,7 @@ pub enum Message<C: Command> {
 	RequestVoteResponse(RequestVoteResponse),
 
 	/// Sent by followers to the leader to forward client commands.
-	ForwardCommand(ForwardCommand<C>),
+	ForwardCommands(ForwardCommands<C>),
 
 	/// Response sent by the leader to followers that forwarded client commands
 	/// with a `request_id` to inform them of the log index assigned to the
@@ -58,7 +59,7 @@ impl<C: Command> Message<C> {
 			Self::AppendEntriesResponse(msg) => Some(msg.term),
 			Self::RequestVote(msg) => Some(msg.term),
 			Self::RequestVoteResponse(msg) => Some(msg.term),
-			Self::ForwardCommand(_)
+			Self::ForwardCommands(_)
 			| Self::ForwardCommandResponse(_)
 			| Self::LogSyncDiscovery(_)
 			| Self::LogSyncRequest(_)
@@ -73,7 +74,7 @@ impl<C: Command> Message<C> {
 			Self::AppendEntriesResponse(_)
 			| Self::RequestVote(_)
 			| Self::RequestVoteResponse(_)
-			| Self::ForwardCommand(_)
+			| Self::ForwardCommands(_)
 			| Self::ForwardCommandResponse(_)
 			| Self::LogSyncDiscovery(_)
 			| Self::LogSyncRequest(_)
@@ -84,7 +85,7 @@ impl<C: Command> Message<C> {
 
 /// `RequestVote` Message arguments.
 #[derive(Debug, Clone, Display, Serialize, Deserialize)]
-#[display("{}[t{term}/{last_log_term}/{last_log_index}]", Short(candidate))]
+#[display("{}[t{term}/log={log_position}]", Short(candidate))]
 pub struct RequestVote {
 	/// Candidate's term.
 	pub term: Term,
@@ -92,11 +93,8 @@ pub struct RequestVote {
 	/// Candidate requesting vote.
 	pub candidate: PeerId,
 
-	/// Index of candidate's last log entry (for log comparison).
-	pub last_log_index: u64,
-
-	/// Term of candidate's last log entry.
-	pub last_log_term: Term,
+	/// Term and index of candidate's last log entry.
+	pub log_position: Cursor,
 }
 
 #[derive(Debug, Clone, Display, Serialize, Deserialize)]
@@ -152,11 +150,8 @@ pub struct AppendEntries<C: Command> {
 	/// Leader's peer ID, so followers can redirect clients.
 	pub leader: PeerId,
 
-	/// Index of log entry immediately preceding new ones.
-	pub prev_log_index: Index,
-
-	/// Term of `prev_log_index` entry.
-	pub prev_log_term: Term,
+	/// Term and Index of log entry immediately preceding new ones.
+	pub prev_log_position: Cursor,
 
 	/// Log entries to store (empty for heartbeat).
 	pub entries: Vec<LogEntry<C>>,
@@ -210,9 +205,9 @@ pub struct LogSyncResponse<C: Command> {
 /// Message sent by followers to the leader to forward client commands.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "C: DeserializeOwned"))]
-pub struct ForwardCommand<C: Command> {
+pub struct ForwardCommands<C: Command> {
 	/// The command to be executed by the leader and replicated to the group.
-	pub command: C,
+	pub commands: Vec<C>,
 
 	/// Optionally when set, the leader will respond back to the sender with a
 	/// `ForwardCommandResponse` containing the log index assigned to the

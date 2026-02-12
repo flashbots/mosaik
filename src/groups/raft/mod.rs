@@ -116,12 +116,12 @@ where
 	/// resolves when the command is replicated and committed to the state.
 	pub fn execute(
 		&mut self,
-		command: M::Command,
+		commands: Vec<M::Command>,
 	) -> BoxPinFut<Result<Index, CommandError<M>>> {
 		match &mut self.role {
 			Role::Leader(leader) => {
 				// add the command to the leader's log
-				let expected_index = leader.enqueue_command(command, &self.shared);
+				let expected_index = leader.enqueue_commands(commands, &self.shared);
 
 				// return a future that resolves when the command is committed
 				let fut = self.shared.when().committed_up_to(expected_index);
@@ -132,7 +132,7 @@ where
 			// that resolves when the command is replicated and committed to the state
 			// machine by the leader.
 			Role::Follower(follower) => {
-				let ack_fut = follower.forward_command(command, &self.shared);
+				let ack_fut = follower.forward_commands(commands, &self.shared);
 				let when = self.shared.when().clone();
 
 				async move {
@@ -150,7 +150,7 @@ where
 			}
 
 			// nodes in candidate state cannot accept or forward commands
-			Role::Candidate(_) => ready(Err(CommandError::Offline(command))).pin(),
+			Role::Candidate(_) => ready(Err(CommandError::Offline(commands))).pin(),
 		}
 	}
 
@@ -159,12 +159,12 @@ where
 	/// command has been sent to the leader.
 	pub fn feed(
 		&mut self,
-		command: M::Command,
+		command: Vec<M::Command>,
 	) -> impl Future<Output = Result<(), CommandError<M>>> + Send + Sync + 'static
 	{
 		match &mut self.role {
 			Role::Leader(leader) => {
-				leader.enqueue_command(command, &self.shared);
+				leader.enqueue_commands(command, &self.shared);
 				ready(Ok(()))
 			}
 			Role::Follower(_follower) => todo!("feed as follower"),

@@ -399,7 +399,8 @@ impl WorkerLoop {
 				else {
 					tracing::trace!(
 						peer_id = %Short(&entry.id()),
-						"received peer entry with invalid timestamp, ignoring"
+						network = %Short(entry.network_id()),
+						"ignoring discovery entry with invalid timestamp"
 					);
 					return;
 				};
@@ -407,9 +408,10 @@ impl WorkerLoop {
 				if time_diff > self.config.max_time_drift {
 					tracing::trace!(
 						peer_id = %Short(&entry.id()),
+						network = %Short(entry.network_id()),
 						time_diff = ?time_diff,
 						max_drift = ?self.config.max_time_drift,
-						"received peer entry with invalid timestamp, ignoring"
+						"ignoring discovery entry with stale timestamp"
 					);
 					return;
 				}

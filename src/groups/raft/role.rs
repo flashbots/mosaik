@@ -99,7 +99,7 @@ impl<M: StateMachine> Role<M> {
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				sender = %Short(sender),
-				"ignoring stale message"
+				"ignoring stale raft message"
 			);
 			return;
 		}
@@ -160,8 +160,14 @@ impl<M: StateMachine> Role<M> {
 			}
 
 			// If the incoming message has a higher term, we must step down to
-			// follower state and follow the new leader (if provided).
-			*self = Follower::new(message_term, message.leader(), shared).into();
+			// follower state and follow the new leader (if provided), and process
+			// the incoming message as a follower.
+			*self = Follower::<M>::new::<S>(
+				message_term, //
+				message.leader(),
+				shared,
+			)
+			.into();
 
 			// notify status listeners that we have a new leader.
 			shared.update_leader(message.leader());
@@ -191,6 +197,18 @@ impl<M: StateMachine> Role<M> {
 		// out in the `receive` method before reaching this point.
 		assert!(request.term >= self.term());
 
+		let local_cursor = shared.log.last();
+
+		tracing::debug!(
+			candidate = %Short(request.candidate),
+			term = request.term,
+			candidate_log = %request.log_position,
+			local_log = %local_cursor,
+			group = %Short(shared.group_id()),
+			network = %Short(shared.network_id()),
+			"new leader elections started by",
+		);
+
 		let bonds = shared.group.bonds.clone();
 		let vote_with = |vote: Vote| {
 			bonds.send_raft_message_to::<M>(
@@ -208,10 +226,7 @@ impl<M: StateMachine> Role<M> {
 			return true;
 		}
 
-		let (local_term, local_index) = shared.log.last();
-		if request.last_log_term < local_term
-			|| request.last_log_index < local_index
-		{
+		if request.log_position.is_behind(&local_cursor) {
 			// The candidate's log is not as up-to-date as ours, deny.
 			vote_with(Vote::Denied);
 			return true;
@@ -223,9 +238,7 @@ impl<M: StateMachine> Role<M> {
 		shared.cast_vote(request.term, sender);
 
 		// check if this node is behind the candidate's log
-		if local_term < request.last_log_term
-			|| local_index < request.last_log_index
-		{
+		if local_cursor.is_behind(&request.log_position) {
 			// We are behind the candidate — abstain rather than grant or deny,
 			// so we don't inflate the voting committee with lagging nodes but also
 			// don't object to the candidate winning the election and becoming leader.

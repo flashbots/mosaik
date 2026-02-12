@@ -218,9 +218,15 @@ pub enum WorkerBondCommand {
 /// Commands sent to the group worker that are raft-specific and carry state
 /// machine impl types.
 pub(super) enum WorkerRaftCommand<M: StateMachine> {
-	Feed(M::Command, oneshot::Sender<Result<(), CommandError<M>>>),
+	Feed(
+		Vec<M::Command>,
+		oneshot::Sender<Result<(), CommandError<M>>>,
+	),
 
-	Execute(M::Command, oneshot::Sender<Result<Index, CommandError<M>>>),
+	Execute(
+		Vec<M::Command>,
+		oneshot::Sender<Result<Index, CommandError<M>>>,
+	),
 
 	Query(
 		M::Query,

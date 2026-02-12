@@ -11,8 +11,8 @@ use {
 				protocol::{
 					AppendEntries,
 					AppendEntriesResponse,
-					ForwardCommand,
 					ForwardCommandResponse,
+					ForwardCommands,
 					Vote,
 				},
 				role::Role,
@@ -174,9 +174,9 @@ impl<M: StateMachine> Follower<M> {
 	/// Forwards the command to the current leader and returns a future that
 	/// resolves when the leader acknowledges the command with the assigned log
 	/// index in a `ForwardCommandResponse`.
-	pub fn forward_command<S: Storage<M::Command>>(
+	pub fn forward_commands<S: Storage<M::Command>>(
 		&mut self,
-		command: M::Command,
+		commands: Vec<M::Command>,
 		shared: &Shared<S, M>,
 	) -> BoxPinFut<Result<Index, CommandError<M>>> {
 		let Some(leader) = self.leader() else {
@@ -184,7 +184,7 @@ impl<M: StateMachine> Follower<M> {
 			// elections are in progress or because it is still in the initial offline
 			// state before hearing from a leader), it cannot accept the command, so
 			// we return a future that resolves with with Offline error.
-			return ready(Err(CommandError::Offline(command))).pin();
+			return ready(Err(CommandError::Offline(commands))).pin();
 		};
 
 		// generate a random request id
@@ -197,8 +197,8 @@ impl<M: StateMachine> Follower<M> {
 		};
 
 		// send the command to the current leader
-		let message = Message::ForwardCommand(ForwardCommand {
-			command: command.clone(),
+		let message = Message::ForwardCommands(ForwardCommands {
+			commands: commands.clone(),
 			request_id: Some(request_id),
 		});
 
@@ -214,7 +214,7 @@ impl<M: StateMachine> Follower<M> {
 				Ok(index)
 			} else {
 				expired_sender.send(request_id).ok();
-				Err(CommandError::Offline(command))
+				Err(CommandError::Offline(commands))
 			}
 		}
 		.pin()
@@ -245,14 +245,15 @@ impl<M: StateMachine> Follower<M> {
 		// check the consistency of the incoming `AppendEntries` message with our
 		// local log state and if we need to catch up before we can confirm this
 		// message and update our log to match the leader's log.
-		let consistent = match shared.log.term_at(request.prev_log_index) {
+		let consistent = match shared.log.term_at(request.prev_log_position.index())
+		{
 			// The entry at `prev_log_index` matches the leader's term.
 			// If we have entries beyond this point, check whether the
 			// first new entry conflicts with what we already have.
 			// The leader's log always wins — truncate from the conflict.
-			Some(local_term) if local_term == request.prev_log_term => {
+			Some(local_term) if local_term == request.prev_log_position.term() => {
 				if let Some(first) = request.entries.first() {
-					let next_index = request.prev_log_index + 1;
+					let next_index = request.prev_log_position.index() + 1;
 					if let Some(existing_term) = shared.log.term_at(next_index) {
 						if existing_term != first.term {
 							shared.log.truncate(next_index);
@@ -266,7 +267,7 @@ impl<M: StateMachine> Follower<M> {
 			// leader. Truncate it and everything after it. This creates a gap, so we
 			// will need to catch up before we can append and confirm.
 			Some(_) => {
-				shared.log.truncate(request.prev_log_index);
+				shared.log.truncate(request.prev_log_position.index());
 				false
 			}
 
@@ -324,11 +325,12 @@ impl<M: StateMachine> Follower<M> {
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
 	) {
+		let mut appended_count = 0;
 		if !request.entries.is_empty() {
 			// the log is consistent up to `prev_log_index`. Append the leader's new
 			// entries, skipping any we already have, which handles idempotent
 			// redelivery).
-			let start_index = request.prev_log_index + 1;
+			let start_index = request.prev_log_position.index() + 1;
 			for (i, entry) in request.entries.into_iter().enumerate() {
 				let index = start_index + i as u64;
 				if shared.log.term_at(index) == Some(entry.term) {
@@ -338,16 +340,17 @@ impl<M: StateMachine> Follower<M> {
 				}
 
 				shared.log.append(entry.command, entry.term);
+				appended_count += 1;
 			}
 
 			// confirm to the leader that we have appended the entries and report the
 			// index of our last log entry
-			let (_, last_log_index) = shared.log.last();
+			let local_position = shared.log.last();
 			shared.bonds().send_raft_message_to::<M>(
 				Message::AppendEntriesResponse(AppendEntriesResponse {
 					term: self.term(),
 					vote: Vote::Granted,
-					last_log_index,
+					last_log_index: local_position.index(),
 				}),
 				sender,
 			);
@@ -356,9 +359,9 @@ impl<M: StateMachine> Follower<M> {
 		// advance local commit index to the minimum of the leader's commit index
 		// and the index of our last log entry, which ensures we only commit
 		// entries that are both replicated to a majority
-		let (_, last_log_index) = shared.log.last();
+		let local_log_pos = shared.log.last();
 		let prev_committed = shared.log.committed();
-		let leader_committed = request.leader_commit.min(last_log_index);
+		let leader_committed = request.leader_commit.min(local_log_pos.index());
 		let mut new_committed = prev_committed;
 
 		if prev_committed < leader_committed {
@@ -369,12 +372,15 @@ impl<M: StateMachine> Follower<M> {
 			}
 		}
 
-		tracing::trace!(
-			committed_ix = new_committed,
-			log_len = last_log_index,
-			term = self.term(),
-			group = %Short(shared.group_id()),
-			network = %Short(shared.network_id()),
-		);
+		if prev_committed != new_committed || appended_count > 0 {
+			tracing::trace!(
+				committed_ix = new_committed,
+				new_entries = appended_count,
+				local_log = %shared.log.last(),
+				term = self.term(),
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
+			);
+		}
 	}
 }

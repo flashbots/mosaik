@@ -6,6 +6,7 @@ use {
 mod bonds;
 mod builder;
 mod execute;
+mod feed;
 mod leader;
 
 #[derive(Debug, Default)]

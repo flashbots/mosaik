@@ -193,16 +193,7 @@ impl Acceptor {
 		);
 
 		match recv_fut.await {
-			Ok(Ok(start)) => {
-				tracing::trace!(
-					network = %self.local.network_id(),
-					peer = %Short(link.remote_id()),
-					group = %start.group_id,
-					"group handshake received",
-				);
-
-				Ok((start, link))
-			}
+			Ok(Ok(start)) => Ok((start, link)),
 			Ok(Err(e)) => {
 				tracing::debug!(
 					network = %self.local.network_id(),
@@ -212,7 +203,7 @@ impl Acceptor {
 				Err(self.abort(link, InvalidHandshake).await)
 			}
 			Err(_) => {
-				tracing::debug!(
+				tracing::trace!(
 					network = %self.local.network_id(),
 					peer = %Short(link.remote_id()),
 					"group handshake timed out",

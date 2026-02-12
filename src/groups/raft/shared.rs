@@ -12,6 +12,7 @@ use {
 			log::{self, Term},
 			state::WorkerState,
 		},
+		primitives::Short,
 	},
 	std::sync::Arc,
 };
@@ -145,7 +146,15 @@ where
 	/// Records the fact that we casted a vote for the given candidate in this
 	/// term. This is used to prevent us from voting for multiple candidates in
 	/// the same term.
-	pub const fn cast_vote(&mut self, term: Term, candidate: PeerId) {
+	pub fn cast_vote(&mut self, term: Term, candidate: PeerId) {
 		self.last_vote = Some((term, candidate));
+
+		tracing::debug!(
+			candidate = %Short(candidate),
+			term,
+			group = %Short(self.group_id()),
+			network = %Short(self.network_id()),
+			"casted vote for leader",
+		);
 	}
 }

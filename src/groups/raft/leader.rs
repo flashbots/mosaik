@@ -167,8 +167,8 @@ impl<M: StateMachine> Leader<M> {
 			}
 
 			// sent by followers that are forwarding client commands to the leader.
-			Message::ForwardCommand(request) => {
-				let log_index = self.enqueue_command(request.command, shared);
+			Message::ForwardCommands(request) => {
+				let log_index = self.enqueue_commands(request.commands, shared);
 
 				if let Some(request_id) = request.request_id {
 					// the follower is interested in knowing the log index assigned to
@@ -208,19 +208,23 @@ impl<M: StateMachine> Leader<M> {
 	/// once it is appended to the log. This allows the caller to track the
 	/// progress of their command and know when it has been committed and applied
 	/// to the state machine.
-	pub fn enqueue_command<S: Storage<M::Command>>(
+	pub fn enqueue_commands<S: Storage<M::Command>>(
 		&mut self,
-		command: M::Command,
+		commands: Vec<M::Command>,
 		shared: &Shared<S, M>,
 	) -> Index {
-		let (_, last_index) = shared.log.last();
-		self.client_commands.send(command);
+		let last_index = shared.log.last().index();
+		for command in commands {
+			self.client_commands.send(command);
+		}
+
+		let expected_index = last_index + self.client_commands.len() as u64;
 
 		for waker in self.wakers.drain(..) {
 			waker.wake();
 		}
 
-		last_index + self.client_commands.len() as u64
+		expected_index
 	}
 
 	/// Records a positive vote from a follower that has acknowledged our
@@ -245,7 +249,7 @@ impl<M: StateMachine> Leader<M> {
 				// quorum of voters in the committee.
 				tracing::trace!(
 					committed_ix = new_committed,
-					log_len = shared.log.last().1,
+					log_position = %shared.log.last(),
 					group = %Short(shared.group_id()),
 					network = %Short(shared.network_id()),
 				);
@@ -325,7 +329,7 @@ impl<M: StateMachine> Leader<M> {
 			return Poll::Pending;
 		}
 
-		let (prev_term, prev_index) = shared.log.last();
+		let prev_pos = shared.log.last();
 
 		// append the new client commands to our log before broadcasting them to
 		// followers but without committing them yet.
@@ -336,14 +340,17 @@ impl<M: StateMachine> Leader<M> {
 		// always vote for our own `AppendEntries` messages. If we are the
 		// only voter in the committee, this will immediately commit the new log
 		// entries.
-		self.record_vote(shared.local_id(), prev_index + count as u64, shared);
+		self.record_vote(
+			shared.local_id(),
+			prev_pos.index() + count as u64,
+			shared,
+		);
 
 		let message = Message::AppendEntries(AppendEntries {
 			term: self.term,
 			leader_commit: shared.log.committed(),
 			leader: shared.local_id(),
-			prev_log_index: prev_index,
-			prev_log_term: prev_term,
+			prev_log_position: prev_pos,
 			entries: entries
 				.into_iter()
 				.map(|c| LogEntry {
@@ -357,14 +364,14 @@ impl<M: StateMachine> Leader<M> {
 		let followers = shared.bonds().broadcast_raft_message::<M>(message);
 
 		if !followers.is_empty() {
-			let range = prev_index + 1..=prev_index + count as u64;
+			let range = prev_pos.index() + 1..=prev_pos.index() + count as u64;
 
 			tracing::trace!(
 				followers = %FmtIter::<Short<_>, _>::new(followers),
 				ix_range = ?range,
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
-				"published {count} new log entries to",
+				"broadcasted {count} new log entries to",
 			);
 		}
 
@@ -383,12 +390,11 @@ impl<M: StateMachine> Leader<M> {
 			return Poll::Pending;
 		}
 
-		let (prev_term, prev_index) = shared.log.last();
+		let prev_pos = shared.log.last();
 		let heartbeat = AppendEntries::<M::Command> {
 			term: self.term,
 			leader: shared.local_id(),
-			prev_log_index: prev_index,
-			prev_log_term: prev_term,
+			prev_log_position: prev_pos,
 			entries: Vec::new(),
 			leader_commit: shared.log.committed(),
 		};
@@ -440,7 +446,7 @@ impl Committee {
 		voters: HashSet<PeerId>,
 		shared: &Shared<S, M>,
 	) -> Self {
-		let (_, last_log_index) = shared.log.last();
+		let last_log_index = shared.log.last().index();
 		let voters = voters
 			.into_iter()
 			.map(|voter| (voter, last_log_index))

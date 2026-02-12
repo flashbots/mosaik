@@ -1,5 +1,8 @@
 use {
-	crate::groups::log::{Index, Term, rsm::Command},
+	crate::groups::{
+		Cursor,
+		log::{Index, Term, rsm::Command},
+	},
 	core::ops::Range,
 };
 
@@ -37,5 +40,5 @@ pub trait Storage<C: Command>: Send + Sync + Unpin + 'static {
 
 	/// Returns the index and term of the last log entry.
 	/// Returns `None` if the log is empty.
-	fn last(&self) -> Option<(Term, Index)>;
+	fn last(&self) -> Option<Cursor>;
 }

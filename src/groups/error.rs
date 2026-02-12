@@ -32,12 +32,12 @@ pub enum Error {
 pub enum CommandError<M: StateMachine> {
 	/// This is a temporary error indicating that the local node is currently
 	/// offline and cannot process the command. The error carries the unsent
-	/// command, which can be retried later when the node is back online.
+	/// commands, which can be retried later when the node is back online.
 	///
 	/// See [`When::is_online`] for more details on how the online/offline status
 	/// of the node is determined.
 	#[error("Group is temporarily offline and cannot process commands")]
-	Offline(M::Command),
+	Offline(Vec<M::Command>),
 
 	/// The group is permanently terminated and cannot process any more commands.
 	/// This error is unrecoverable and indicates the group worker loop is no

@@ -135,6 +135,31 @@ impl<M: StateMachine> Group<M> {
 		&self,
 		command: M::Command,
 	) -> Result<Index, CommandError<M>> {
+		self.execute_many(vec![command]).await
+	}
+
+	/// Issues a series of commands to the group, which will be replicated to all
+	/// voting followers and committed to the group's state machine once a quorum
+	/// of followers have acknowledged the commands.
+	///
+	/// If the local node is the leader, this method's returned future will
+	/// resolve once the commands have been replicated to a quorum of followers
+	/// and committed to the state machine.
+	///
+	/// If the local node is a follower, this method will forward the commands
+	/// to the current leader for processing, and the returned future will resolve
+	/// once the leader has replicated the commands to a quorum of followers and
+	/// committed them to the state machine.
+	///
+	/// If the local node is offline this method will return an error that carries
+	/// the unsent commands.
+	///
+	/// Consecutive calls to this method are guaranteed to be processed in the
+	/// order they were issued.
+	pub async fn execute_many(
+		&self,
+		commands: impl IntoIterator<Item = M::Command>,
+	) -> Result<Index, CommandError<M>> {
 		let Some(sender) = self
 			.state
 			.raft_cmd_tx
@@ -144,9 +169,9 @@ impl<M: StateMachine> Group<M> {
 		};
 
 		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Execute(_, _))) =
-			sender.send(WorkerRaftCommand::Execute(command, result_tx))
-		{
+		if let Err(SendError(WorkerRaftCommand::Execute(_, _))) = sender.send(
+			WorkerRaftCommand::Execute(commands.into_iter().collect(), result_tx),
+		) {
 			return Err(CommandError::GroupTerminated);
 		}
 
@@ -164,6 +189,19 @@ impl<M: StateMachine> Group<M> {
 	/// Consecutive calls to this method are not guaranteed to be processed in the
 	/// order they were issued, as the
 	pub async fn feed(&self, command: M::Command) -> Result<(), CommandError<M>> {
+		self.feed_many(vec![command]).await
+	}
+
+	/// Sends a series of commands to the group leader without waiting for them to
+	/// be committed to the state machine. The returned future will resolve once
+	/// the commands have been sent to the leader.
+	///
+	/// Consecutive calls to this method are not guaranteed to be processed in the
+	/// order they were issued, as the
+	pub async fn feed_many(
+		&self,
+		commands: impl IntoIterator<Item = M::Command>,
+	) -> Result<(), CommandError<M>> {
 		let Some(sender) = self
 			.state
 			.raft_cmd_tx
@@ -173,9 +211,9 @@ impl<M: StateMachine> Group<M> {
 		};
 
 		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Feed(_, _))) =
-			sender.send(WorkerRaftCommand::Feed(command, result_tx))
-		{
+		if let Err(SendError(WorkerRaftCommand::Feed(_, _))) = sender.send(
+			WorkerRaftCommand::Feed(commands.into_iter().collect(), result_tx),
+		) {
 			return Err(CommandError::GroupTerminated);
 		}
 

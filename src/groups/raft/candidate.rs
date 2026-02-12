@@ -68,13 +68,12 @@ impl<M: StateMachine> Candidate<M> {
 		let election_timeout = Box::pin(sleep(election_timeout));
 
 		let candidate = shared.local_id();
-		let (last_log_index, last_log_term) = shared.log.last();
+		let log_position = shared.log.last();
 
 		let request = RequestVote {
 			term,
 			candidate,
-			last_log_index,
-			last_log_term,
+			log_position,
 		};
 
 		tracing::debug!(
@@ -141,7 +140,9 @@ impl<M: StateMachine> Candidate<M> {
 				term = self.term(),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
-				"election timeout elapsed without reaching quorum, starting new election",
+				committee_size = self.requested_from.len(),
+				votes_granted = self.votes_granted.len(),
+				"quorum not reached, starting new election",
 			);
 
 			return Poll::Ready(ControlFlow::Break(

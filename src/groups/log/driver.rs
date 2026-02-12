@@ -1,4 +1,5 @@
 use crate::groups::{
+	Cursor,
 	Index,
 	Term,
 	log::{rsm::StateMachine, storage::Storage},
@@ -45,8 +46,8 @@ where
 	M: StateMachine,
 {
 	/// Returns the term and index of the latest committed log entry.
-	pub fn last(&self) -> (Term, Index) {
-		self.storage.last().unwrap_or((0, 0))
+	pub fn last(&self) -> Cursor {
+		self.storage.last().unwrap_or_default()
 	}
 
 	/// Returns the index of the latest committed log entry that has

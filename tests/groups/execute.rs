@@ -1,17 +1,16 @@
-//! Replicated State Machine tests
-
 use {
 	crate::{
 		groups::{Counter, CounterCommand, CounterValueQuery},
 		utils::{discover_all, timeout_after, timeout_s},
 	},
-	mosaik::*,
+	mosaik::{primitives::Short, *},
+	tokio::join,
 };
 
 /// This test verifies that a command can be executed on a leader and a follower
 /// when the follower does not need to catch up with any log entries.
 #[tokio::test]
-async fn no_catchup_weak_follower() -> anyhow::Result<()> {
+async fn no_catchup_weak_query() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 	let group_key = GroupKey::random();
 
@@ -124,35 +123,48 @@ async fn no_catchup_weak_follower() -> anyhow::Result<()> {
 
 	tracing::info!("follower g1 command replicated and committed on all nodes");
 
-	Ok(())
-}
+	// kill the current leader n0, and wait for followers to reorganize and elect
+	// a new leader.
+	let g1_elected_fut = g1.when().leader_changed();
+	let g2_elected_fut = g2.when().leader_changed();
 
-#[tokio::test]
-async fn feed() -> anyhow::Result<()> {
-	let network_id = NetworkId::random();
-	let group_key = GroupKey::random();
+	drop(n0); // kill the leader
+	tracing::info!("killed the leader n0");
 
-	let n0 = Network::new(network_id).await?;
-	let g0 = n0
-		.groups()
-		.with_key(group_key)
-		.with_state_machine(Counter::default())
-		.join();
+	let (g1_leader, g2_leader) = join!(g1_elected_fut, g2_elected_fut);
+	assert_eq!(g1_leader, g2_leader); // they should elect the same new leader
+	tracing::info!("new leader elected: {}", Short(g1_leader));
 
-	let timeout = 2
-		* (g0.config().intervals().bootstrap_delay
-			+ g0.config().intervals().election_timeout
-			+ g0.config().intervals().election_timeout_jitter);
+	// after new leader is elected, both nodes will execute a series of commands
+	let g1_pos = g1
+		.execute_many([
+			CounterCommand::Increment(10), //
+			CounterCommand::Decrement(2),
+		])
+		.await?;
+	assert_eq!(g1_pos, 5);
+	tracing::info!("g1 executed 2 commands committed at index {g1_pos}");
 
-	// wait for n0 to become online by electing itself as leader and being ready
-	// to accept commands
-	timeout_after(timeout, g0.when().is_online()).await?;
-	assert_eq!(g0.leader(), Some(n0.local().id()));
-	tracing::info!("g0 is online");
+	let g2_pos = g2
+		.execute_many([
+			CounterCommand::Increment(20), //
+			CounterCommand::Decrement(4),
+		])
+		.await?;
+	assert_eq!(g2_pos, 7);
+	tracing::info!("g2 executed 2 commands committed at index {g2_pos}");
 
-	// execute two commands
-	g0.feed(CounterCommand::Increment(3)).await?;
-	g0.feed(CounterCommand::Increment(4)).await?;
+	// wait for both nodes to learn that index 7 is committed
+	timeout_s(2, g1.when().committed_up_to(g2_pos)).await?;
+
+	assert_eq!(g1.committed_index(), 7);
+	assert_eq!(g2.committed_index(), 7);
+
+	let value_n1 = g1.query(CounterValueQuery, Consistency::Weak).await?;
+	let value_n2 = g2.query(CounterValueQuery, Consistency::Weak).await?;
+	assert_eq!(value_n1, 29);
+	assert_eq!(value_n2, 29);
+	tracing::info!("query result is correct: {value_n1}=={value_n2}");
 
 	Ok(())
 }

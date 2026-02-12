@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::groups::{Command, Index, Storage, Term};
+use crate::groups::{Command, Cursor, Index, Storage, Term};
 
 /// An in-memory implementation of the `Storage` trait replicated log storage in
 /// groups. This storage implementation is compatible with arbitrary command
@@ -57,12 +57,12 @@ impl<C: Command> Storage<C> for InMemory<C> {
 		}
 	}
 
-	fn last(&self) -> Option<(Term, Index)> {
+	fn last(&self) -> Option<Cursor> {
 		if self.entries.is_empty() {
 			None
 		} else {
 			let (_, term) = self.entries.last().unwrap();
-			Some((*term, self.entries.len() as Index))
+			Some(Cursor(*term, self.entries.len() as Index))
 		}
 	}
 }

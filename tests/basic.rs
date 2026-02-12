@@ -1,8 +1,10 @@
+// tests can describe long scenarios
+#![allow(clippy::too_many_lines)]
+
 use serde::{Deserialize, Serialize};
 
 mod discovery;
 mod groups;
-// mod store;
 mod streams;
 mod utils;
 
