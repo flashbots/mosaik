@@ -159,7 +159,10 @@ impl<M: StateMachine> Leader<M> {
 					// Remove it from the committee so it is not considered for quorum
 					// calculations until it catches up with our log and can grant its
 					// vote again.
-					Vote::Abstained | Vote::Denied => self.record_no_vote(sender, shared),
+					Vote::Abstained => self.record_no_vote(sender, true, shared),
+
+					// the follower explicitly denied our `AppendEntries`
+					Vote::Denied => self.record_no_vote(sender, false, shared),
 				}
 			}
 
@@ -242,7 +245,7 @@ impl<M: StateMachine> Leader<M> {
 				// quorum of voters in the committee.
 				tracing::trace!(
 					committed_ix = new_committed,
-					last_log_index = shared.log.last().1,
+					log_len = shared.log.last().1,
 					group = %Short(shared.group_id()),
 					network = %Short(shared.network_id()),
 				);
@@ -257,12 +260,17 @@ impl<M: StateMachine> Leader<M> {
 	fn record_no_vote<S: Storage<M::Command>>(
 		&mut self,
 		follower: PeerId,
+		abstained: bool,
 		shared: &mut Shared<S, M>,
 	) {
-		// remove the follower from the committee so it is not considered for quorum
-		// calculations until it catches up with our log and can grant its vote
-		// again.
-		self.committee.remove(follower);
+		if abstained {
+			// the follower didn't explicitly deny our `AppendEntries`, but it also
+			// didn't grant its vote, which means it is not up to date with our log
+			// and can't be part of the current voting committee until it catches up.
+			// Remove it from the committee so it is not considered for quorum
+			// calculations until it can grant its vote again.
+			self.committee.remove(follower);
+		}
 
 		// purge voters that are down and try to backfill voters from online
 		// non-voters.
