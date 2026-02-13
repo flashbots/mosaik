@@ -64,8 +64,9 @@ use {
 			UnknownPeer,
 			link::{Link, RecvError},
 		},
-		primitives::Short,
+		primitives::{Short, serialize},
 	},
+	bytes::Bytes,
 	core::fmt,
 	iroh::endpoint::ApplicationClose,
 	protocol::{BondMessage, HandshakeEnd},
@@ -86,10 +87,6 @@ mod protocol;
 mod worker;
 
 pub(super) use protocol::{Acceptor, HandshakeStart};
-use {
-	bincode::{config::standard, serde::encode_into_std_write},
-	bytes::{BufMut, Bytes, BytesMut},
-};
 
 /// A unique identifier for a bond connection between the local node and a
 /// remote peer in the group. This value is derived from the shared random
@@ -448,13 +445,13 @@ impl Bonds {
 	/// Notifies all active bonds that the local peer's discovery entry has
 	/// been updated.
 	pub(super) fn notify_local_info_update(&self, entry: &SignedPeerEntry) {
-		self.broadcast(BondMessage::PeerEntryUpdate(Box::new(entry.clone())), &[]);
+		self.broadcast(&BondMessage::PeerEntryUpdate(Box::new(entry.clone())), &[]);
 	}
 
 	/// Notifies all active bonds that a new bond has been formed with the
 	/// specified peer and sends its latest known discovery entry.
 	pub(super) fn notify_bond_formed(&self, with: &SignedPeerEntry) {
-		self.broadcast(BondMessage::BondFormed(Box::new(with.clone())), &[
+		self.broadcast(&BondMessage::BondFormed(Box::new(with.clone())), &[
 			*with.id()
 		]);
 	}
@@ -467,11 +464,8 @@ impl Bonds {
 		message: impl Into<raft::Message<M::Command>>,
 	) -> Vec<PeerId> {
 		let message: raft::Message<M::Command> = message.into();
-		let buffer: Bytes = bincode::serde::encode_to_vec(message, standard())
-			.expect("Raft message serialization failed")
-			.into();
-		let message = BondMessage::Raft(buffer);
-		self.broadcast(message, &[])
+		let message = BondMessage::Raft(serialize(&message));
+		self.broadcast(&message, &[])
 	}
 
 	/// Sends a raft protocol message to the specified bonded peer.
@@ -489,23 +483,16 @@ impl Bonds {
 		};
 
 		let message: raft::Message<M::Command> = message.into();
-		let buffer: Bytes = bincode::serde::encode_to_vec(message, standard())
-			.expect("Raft message serialization failed")
-			.into();
-
-		bond.send_message(BondMessage::Raft(buffer));
+		bond.send_message(BondMessage::Raft(serialize(&message)));
 	}
 
 	/// Broadcast a message to all connected peers in the group. The `except`
 	/// parameter specifies a list of peer ids to exclude from the broadcast.
 	/// Returns the list of peer ids to which the message was sent.
-	fn broadcast(&self, message: BondMessage, except: &[PeerId]) -> Vec<PeerId> {
+	fn broadcast(&self, message: &BondMessage, except: &[PeerId]) -> Vec<PeerId> {
 		// serialize once and reuse a pointer to the same encoded message bytes
 		// buffer for all bonds
-		let mut writer = BytesMut::new().writer();
-		encode_into_std_write(message, &mut writer, standard())
-			.expect("BondMessage encoding failed");
-		let encoded = writer.into_inner().freeze();
+		let encoded = serialize(&message);
 
 		let mut sent_to = Vec::new();
 		for bond in self.iter() {

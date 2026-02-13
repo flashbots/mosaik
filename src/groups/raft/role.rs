@@ -8,7 +8,7 @@ use {
 				candidate::Candidate,
 				follower::Follower,
 				leader::Leader,
-				protocol::{RequestVoteResponse, Vote},
+				protocol::{RequestVoteResponse, Sync, Vote},
 				shared::Shared,
 			},
 		},
@@ -27,6 +27,10 @@ use {
 /// Depending on the currently assumed role, protocol messages are handled
 /// differently and certain actions are taken (e.g., starting elections,
 /// sending heartbeats, etc.).
+///
+/// Messages that are common to all roles (e.g., stepping down on higher term,
+/// voting for candidates, etc.) are handled at the `Role` level, and messages
+/// that are specific to each role are forwarded to the role-specific message
 #[derive(Debug, From)]
 pub enum Role<M: StateMachine> {
 	/// Passive state: responds to messages from candidates and leaders.
@@ -104,22 +108,38 @@ impl<M: StateMachine> Role<M> {
 			return;
 		}
 
-		// each message may cause us to step down to follower state
+		// Any message with a higher term should trigger an immediate step down to
+		// follower state with the new term.
 		self.maybe_step_down(&message, shared);
 
-		// check if someone with a higher term has started an election and cast our
-		// vote if we haven't already
-		if !self.maybe_cast_vote(&message, sender, shared) {
-			match self {
-				Self::Follower(follower) => {
-					follower.receive_protocol_message(message, sender, shared);
-				}
-				Self::Candidate(candidate) => {
-					candidate.receive_protocol_message(message, sender, shared);
-				}
-				Self::Leader(leader) => {
-					leader.receive_protocol_message(message, sender, shared);
-				}
+		// Handle `RequestVote` messages and cast votes if applicable. This is
+		// common to all roles, as followers, candidates, and leaders can all
+		// receive `RequestVote` messages. There is no more role-specific handling
+		// for this message type.
+		if self.maybe_cast_vote(&message, sender, shared) {
+			// if the message was a `RequestVote` and we handled it by casting a
+			// vote, then we don't need to forward it to the role-specific message
+			// handlers.
+			return;
+		}
+
+		// Handle some catch-up at the role level
+		if Self::maybe_catchup_request(&message, sender, shared) {
+			// if the message was a `Sync::*Request` message and we handled it by
+			// processing the catch-up request, then we don't need to forward it to
+			// the role-specific message handlers.
+			return;
+		}
+
+		match self {
+			Self::Follower(follower) => {
+				follower.receive_protocol_message(message, sender, shared);
+			}
+			Self::Candidate(candidate) => {
+				candidate.receive_protocol_message(message, sender, shared);
+			}
+			Self::Leader(leader) => {
+				leader.receive_protocol_message(message, sender, shared);
 			}
 		}
 	}
@@ -143,10 +163,10 @@ impl<M: StateMachine> Role<M> {
 			if let Some(leader) = message.leader() {
 				tracing::debug!(
 					leader = %Short(leader),
-					group = %Short(shared.group_id()),
-					network = %Short(shared.network_id()),
 					old_term = %self.term(),
 					new_term = %message_term,
+					group = %Short(shared.group_id()),
+					network = %Short(shared.network_id()),
 					"following",
 				);
 			} else {
@@ -252,6 +272,51 @@ impl<M: StateMachine> Role<M> {
 		}
 
 		true
+	}
+
+	/// Handles incoming `Sync` request messages that are part of the follower
+	/// catch-up process.
+	///
+	/// Returns `true` if the message was handled at this level and should not be
+	/// forwarded to the role-specific message handlers. This method only handles
+	/// `DiscoveryRequest` and `FetchEntriesRequest` messages, the `*Response`
+	/// variants are forwarded to the follower.
+	fn maybe_catchup_request<S: Storage<M::Command>>(
+		message: &Message<M::Command>,
+		sender: PeerId,
+		shared: &Shared<S, M>,
+	) -> bool {
+		let Message::Sync(message) = message else {
+			return false;
+		};
+
+		match message {
+			Sync::DiscoveryRequest => {
+				// we only offer committed log entries to followers that are catching up
+				let available = shared.log.available();
+				let committed = shared.log.committed();
+				let available = *available.start()..=committed.min(*available.end());
+
+				tracing::trace!(
+					peer = %Short(sender),
+					range = ?available,
+					group = %shared.group_id(),
+					network = %shared.network_id(),
+					"logs availability confirmed to"
+				);
+
+				let response = Message::Sync(Sync::DiscoveryResponse { available });
+				shared.bonds().send_raft_message_to::<M>(response, sender);
+
+				true
+			}
+			Sync::FetchEntriesRequest { range: _ } => true,
+			Sync::DiscoveryResponse { .. } | Sync::FetchEntriesResponse { .. } => {
+				// these messages are handled by the follower role, so we return false
+				// to forward them to the role-specific message handlers.
+				false
+			}
+		}
 	}
 }
 

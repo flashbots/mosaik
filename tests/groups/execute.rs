@@ -7,8 +7,9 @@ use {
 	tokio::join,
 };
 
-/// This test verifies that a command can be executed on a leader and a follower
-/// when the follower does not need to catch up with any log entries.
+/// This test verifies that commands can be executed on leaders and followers,
+/// then the state queried with weak consistency when followers do not need
+/// to catch up with any log entries.
 #[tokio::test]
 async fn no_catchup_weak_query() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
@@ -140,31 +141,105 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 		.execute_many([
 			CounterCommand::Increment(10), //
 			CounterCommand::Decrement(2),
+			CounterCommand::Increment(3),
 		])
 		.await?;
-	assert_eq!(g1_pos, 5);
-	tracing::info!("g1 executed 2 commands committed at index {g1_pos}");
+	assert_eq!(g1_pos, 6);
+	tracing::info!("g1 executed 3 commands committed at index {g1_pos}");
 
 	let g2_pos = g2
 		.execute_many([
 			CounterCommand::Increment(20), //
 			CounterCommand::Decrement(4),
+			CounterCommand::Decrement(1),
 		])
 		.await?;
-	assert_eq!(g2_pos, 7);
-	tracing::info!("g2 executed 2 commands committed at index {g2_pos}");
+	assert_eq!(g2_pos, 9);
+	tracing::info!("g2 executed 3 commands committed at index {g2_pos}");
 
-	// wait for both nodes to learn that index 7 is committed
+	// wait for both nodes to learn that index 9 is committed
 	timeout_s(2, g1.when().committed_up_to(g2_pos)).await?;
 
-	assert_eq!(g1.committed_index(), 7);
-	assert_eq!(g2.committed_index(), 7);
+	assert_eq!(g1.committed_index(), 9);
+	assert_eq!(g2.committed_index(), 9);
 
 	let value_n1 = g1.query(CounterValueQuery, Consistency::Weak).await?;
 	let value_n2 = g2.query(CounterValueQuery, Consistency::Weak).await?;
-	assert_eq!(value_n1, 29);
-	assert_eq!(value_n2, 29);
-	tracing::info!("query result is correct: {value_n1}=={value_n2}");
+
+	assert_eq!(value_n1, 31);
+	assert_eq!(value_n2, 31);
+
+	tracing::info!(
+		"query result is correct on g1 and g2: {value_n1}=={value_n2}"
+	);
+
+	Ok(())
+}
+
+/// This test verifies that commands can be executed on leaders and followers,
+/// then the state queried with weak consistency when followers need to catch up
+/// with log entries.
+#[tokio::test]
+async fn catchup_weak_query() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let group_key = GroupKey::random();
+
+	let n0 = Network::new(network_id).await?;
+	let g0 = n0
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	let timeout = 2
+		* (g0.config().intervals().bootstrap_delay
+			+ g0.config().intervals().election_timeout
+			+ g0.config().intervals().election_timeout_jitter);
+
+	// wait for n0 to become online by electing itself as leader and being ready
+	// to accept commands
+	timeout_after(timeout, g0.when().is_online()).await?;
+	assert_eq!(g0.leader(), Some(n0.local().id()));
+	assert_eq!(g0.committed_index(), 0);
+	tracing::info!("g0 is online");
+
+	// execute four commands on the leader and wait for them to be committed to
+	// the state machine.
+	timeout_s(2, g0.execute(CounterCommand::Increment(3))).await??;
+	timeout_s(
+		2,
+		g0.execute_many([
+			CounterCommand::Increment(4),
+			CounterCommand::Decrement(2),
+			CounterCommand::Increment(1),
+		]),
+	)
+	.await??;
+
+	let index = g0.committed_index();
+	tracing::info!("leader committed to index {index}");
+	assert_eq!(index, 4);
+
+	let g0_value = g0.query(CounterValueQuery, Consistency::Weak).await?;
+	tracing::info!("counter value on leader (weak): {g0_value}");
+	assert_eq!(g0_value, 6);
+
+	// start a new node and have it join the group.
+	// Since there are log entries to catch up with, this node should not be
+	// online immediately after joining the group, and needs to synchronize with
+	// the group.
+	let n1 = Network::new(network_id).await?;
+	discover_all([&n0, &n1]).await?;
+	let g1 = n1
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	// wait for g1 to recognize the existing leader and catch up with the log
+	timeout_after(timeout, g1.when().is_online()).await?;
+	assert_eq!(g1.leader(), Some(n0.local().id()));
+	assert_eq!(g1.committed_index(), 4);
 
 	Ok(())
 }

@@ -8,7 +8,6 @@ use {
 		primitives::*,
 		store::StoreId,
 	},
-	bincode::{config::standard, serde::encode_into_std_write},
 	chrono::{DateTime, Utc},
 	core::fmt,
 	derive_more::{AsRef, Debug, Deref, Into},
@@ -177,9 +176,7 @@ impl PeerEntry {
 	/// Computes a Blake3 digest of the `PeerEntry`.
 	pub fn digest(&self) -> blake3::Hash {
 		let mut hasher = blake3::Hasher::new();
-		#[expect(clippy::missing_panics_doc)]
-		encode_into_std_write(self, &mut hasher, standard())
-			.expect("Failed to encode PeerEntry for digest calculation");
+		serialize_to_writer(self, &mut hasher);
 		hasher.finalize()
 	}
 
@@ -551,10 +548,7 @@ impl fmt::Display for Pretty<'_, EndpointAddr> {
 
 #[cfg(test)]
 mod tests {
-	use {
-		super::*,
-		bincode::serde::{decode_from_std_read, encode_to_vec},
-	};
+	use super::*;
 
 	#[test]
 	fn signed_peer_entry_with_invalid_signature_fails_to_deserialize() {
@@ -565,8 +559,7 @@ mod tests {
 		let signed = entry.sign(&secret).unwrap();
 
 		// Serialize the valid signed entry
-		let serialized = encode_to_vec(&signed, standard())
-			.expect("Failed to serialize SignedPeerEntry");
+		let serialized = serialize(&signed).to_vec();
 
 		// Tamper with the signature bytes (last 64 bytes are the signature)
 		let mut tampered = serialized;
@@ -574,8 +567,7 @@ mod tests {
 		tampered[len - 1] ^= 0xFF; // Flip bits in signature
 
 		// Attempt to deserialize should fail
-		let result: Result<SignedPeerEntry, _> =
-			decode_from_std_read(&mut tampered.as_slice(), standard());
+		let result: Result<SignedPeerEntry, _> = deserialize(&tampered);
 
 		assert!(
 			result.is_err(),
@@ -601,12 +593,10 @@ mod tests {
 
 		// Manually construct modified entry but original signature
 		let invalid_signed = SignedPeerEntry(modified_entry, signature);
-		let serialized = encode_to_vec(&invalid_signed, standard())
-			.expect("Failed to serialize SignedPeerEntry");
+		let serialized = serialize(&invalid_signed);
 
 		// Attempt to deserialize should fail
-		let result: Result<SignedPeerEntry, _> =
-			decode_from_std_read(&mut serialized.as_slice(), standard());
+		let result: Result<SignedPeerEntry, _> = deserialize(&serialized);
 
 		assert!(
 			result.is_err(),
@@ -622,12 +612,10 @@ mod tests {
 		let entry = PeerEntry::new(network_id, address);
 		let signed = entry.sign(&secret).unwrap();
 
-		let serialized = encode_to_vec(&signed, standard())
-			.expect("Failed to serialize SignedPeerEntry");
+		let serialized = serialize(&signed);
 
-		let deserialized: SignedPeerEntry =
-			decode_from_std_read(&mut serialized.as_slice(), standard())
-				.expect("Failed to deserialize valid SignedPeerEntry");
+		let deserialized: SignedPeerEntry = deserialize(&serialized)
+			.expect("Failed to deserialize valid SignedPeerEntry");
 
 		assert_eq!(signed, deserialized);
 	}

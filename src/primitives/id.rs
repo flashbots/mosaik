@@ -26,7 +26,7 @@ pub type Tag = UniqueId;
 /// Notes:
 ///  - when serialized to human readable formats (e.g., JSON), `UniqueId`s are
 ///    represented as hex-encoded strings.
-///  - when serialized to binary formats (e.g., bincode), `UniqueId`s are
+///  - when serialized to binary formats (e.g., postcard), `UniqueId`s are
 ///    represented as raw 32-byte arrays.
 #[derive(Clone, Copy, Deref)]
 pub struct Digest(blake3::Hash);

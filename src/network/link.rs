@@ -12,14 +12,8 @@ use {
 	},
 	crate::{
 		Digest,
-		primitives::{Bytes, Short},
+		primitives::{Bytes, Short, deserialize, serialize},
 	},
-	bincode::{
-		config::standard,
-		error::{DecodeError, EncodeError},
-		serde::{decode_from_std_read, encode_into_std_write},
-	},
-	bytes::{Buf, BufMut, BytesMut},
 	core::{fmt, marker::PhantomData},
 	futures::{FutureExt, SinkExt, StreamExt},
 	iroh::{EndpointAddr, endpoint::*, protocol::AcceptError as IrohAcceptError},
@@ -52,9 +46,8 @@ pub trait Protocol {
 ///   [`LengthDelimitedCodec`] to frame individual messages on the wire.
 ///
 /// - All data sent through the link is serialized and deserialized using
-///   [`bincode`] with the standard configuration. Any failure to deserialize
-///   incoming data results in closing the link as it is considered a protocol
-///   violation.
+///   [`postcard`]. Any failure to deserialize incoming data results in closing
+///   the link as it is considered a protocol violation.
 ///
 /// - All operations are cancellable via the attached cancellation token. An
 ///   external token can be provided when accepting or opening a link, or a
@@ -268,7 +261,7 @@ impl<P: Protocol> Link<P> {
 	}
 
 	/// Receives the next framed message and deserializes it into the given
-	/// data type `D` using bincode deserialization.
+	/// data type `D` using postcard deserialization.
 	pub async fn recv<D: DeserializeOwned>(&mut self) -> Result<D, RecvError> {
 		self.recv_with_size().await.map(|(d, _)| d)
 	}
@@ -295,19 +288,17 @@ impl<P: Protocol> Link<P> {
 			return Err(reason.into());
 		};
 
-		let mut reader = match read_result {
-			Ok(bytes) => bytes.reader(),
+		let bytes = match read_result {
+			Ok(bytes) => bytes,
 			Err(err) => match err.downcast::<ReadError>() {
 				Ok(read_err) => return Err(RecvError::Io(read_err)),
 				Err(other_err) => return Err(RecvError::Unknown(other_err)),
 			},
 		};
 
-		let bytes_len = reader.get_ref().len();
-
 		// deserialize the received bytes into the expected data type, if
 		// deserialization fails, close the connection with protocol violation
-		let decoded = match decode_from_std_read(&mut reader, standard()) {
+		let decoded = match deserialize(&bytes) {
 			Ok(datum) => datum,
 			Err(err) => {
 				close_connection(&self.connection, ProtocolViolation).await;
@@ -315,12 +306,12 @@ impl<P: Protocol> Link<P> {
 			}
 		};
 
-		Ok((decoded, bytes_len))
+		Ok((decoded, bytes.len()))
 	}
 
 	/// Sends a framed message over the link.
 	///
-	/// The message is serialized using bincode serialization and sent as a
+	/// The message is serialized using postcard serialization and sent as a
 	/// length-delimited frame.
 	///
 	/// If the serialization fails, the link is closed with a [`UnexpectedClose`].
@@ -329,15 +320,9 @@ impl<P: Protocol> Link<P> {
 		&mut self,
 		datum: D,
 	) -> Result<usize, SendError> {
-		let mut writer = BytesMut::new().writer();
-		if let Err(e) = encode_into_std_write(datum, &mut writer, standard()) {
-			close_connection(&self.connection, ProtocolViolation).await;
-			return Err(e.into());
-		}
-
 		// SAFETY: the bytes written into the writer are guaranteed to be
-		// well-formed bincode serialized `D`.
-		unsafe { self.send_raw(writer.into_inner().freeze()).await }
+		// well-formed postcard serialized `D`.
+		unsafe { self.send_raw(serialize(&datum)).await }
 	}
 
 	/// Sends raw bytes over the link without serialization.
@@ -542,7 +527,7 @@ pub enum RecvError {
 	/// This error indicates that the data was read successfully but failed to
 	/// deserialize it into a typed structure as set in [`Link::recv_as`].
 	#[error("Decode error: {0}")]
-	Decode(#[from] DecodeError),
+	Decode(#[from] postcard::Error),
 
 	#[error("Unknown error: {0}")]
 	Unknown(#[from] io::Error),
@@ -555,7 +540,7 @@ pub enum RecvError {
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
 	#[error("encoder error: {0}")]
-	Encode(#[from] EncodeError),
+	Encode(#[from] postcard::Error),
 
 	#[error("IO error: {0}")]
 	Io(#[from] WriteError),
@@ -872,7 +857,7 @@ pub struct LinkSender<P: Protocol> {
 impl<P: Protocol> LinkSender<P> {
 	/// Sends a framed message over the link.
 	///
-	/// The message is serialized using bincode serialization and sent as a
+	/// The message is serialized using postcard serialization and sent as a
 	/// length-delimited frame.
 	///
 	/// If the serialization fails, the link is closed with a [`UnexpectedClose`].
@@ -881,15 +866,9 @@ impl<P: Protocol> LinkSender<P> {
 		&mut self,
 		datum: D,
 	) -> Result<usize, SendError> {
-		let mut writer = BytesMut::new().writer();
-		if let Err(e) = encode_into_std_write(datum, &mut writer, standard()) {
-			close_connection(&self.connection, ProtocolViolation).await;
-			return Err(e.into());
-		}
-
 		// SAFETY: the bytes written into the writer are guaranteed to be
-		// well-formed bincode serialized `D`.
-		unsafe { self.send_raw(writer.into_inner().freeze()).await }
+		// well-formed postcard serialized `D`.
+		unsafe { self.send_raw(serialize(&datum)).await }
 	}
 
 	/// Sends raw bytes over the link without serialization.
@@ -932,7 +911,7 @@ pub struct LinkReceiver<P: Protocol> {
 
 impl<P: Protocol> LinkReceiver<P> {
 	/// Receives the next framed message and deserializes it into the given
-	/// data type `D` using bincode deserialization.
+	/// data type `D` using postcard deserialization.
 	pub async fn recv<D: DeserializeOwned>(&mut self) -> Result<D, RecvError> {
 		self.recv_with_size().await.map(|(d, _)| d)
 	}
@@ -959,19 +938,17 @@ impl<P: Protocol> LinkReceiver<P> {
 			return Err(reason.into());
 		};
 
-		let mut reader = match read_result {
-			Ok(bytes) => bytes.reader(),
+		let bytes = match read_result {
+			Ok(bytes) => bytes,
 			Err(err) => match err.downcast::<ReadError>() {
 				Ok(read_err) => return Err(RecvError::Io(read_err)),
 				Err(other_err) => return Err(RecvError::Unknown(other_err)),
 			},
 		};
 
-		let bytes_len = reader.get_ref().len();
-
 		// deserialize the received bytes into the expected data type, if
 		// deserialization fails, close the connection with protocol violation
-		let decoded = match decode_from_std_read(&mut reader, standard()) {
+		let decoded = match deserialize(&bytes) {
 			Ok(datum) => datum,
 			Err(err) => {
 				close_connection(&self.connection, ProtocolViolation).await;
@@ -979,6 +956,6 @@ impl<P: Protocol> LinkReceiver<P> {
 			}
 		};
 
-		Ok((decoded, bytes_len))
+		Ok((decoded, bytes.len()))
 	}
 }

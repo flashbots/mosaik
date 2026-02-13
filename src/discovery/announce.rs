@@ -6,13 +6,15 @@ use {
 		Signature,
 		discovery::PeerEntry,
 		network::{LocalNode, link::Protocol},
-		primitives::{IntoIterOrSingle, Pretty, Short, UnboundedChannel},
+		primitives::{
+			IntoIterOrSingle,
+			Pretty,
+			Short,
+			UnboundedChannel,
+			deserialize,
+			serialize,
+		},
 	},
-	bincode::{
-		config::standard,
-		serde::{decode_from_std_read, encode_to_vec},
-	},
-	bytes::Buf,
 	chrono::Utc,
 	core::{
 		sync::atomic::{AtomicUsize, Ordering},
@@ -359,9 +361,7 @@ impl WorkerLoop {
 				);
 			}
 			GossipEvent::Received(message) => {
-				let Ok(decoded) =
-					decode_from_std_read(&mut message.content.reader(), standard())
-				else {
+				let Ok(decoded) = deserialize(&message.content) else {
 					tracing::warn!(
 						network = %self.local.network_id(),
 						"failed to decode announcement message"
@@ -508,14 +508,7 @@ impl WorkerLoop {
 			return Ok(());
 		}
 
-		if let Err(e) = topic_tx
-			.broadcast(
-				encode_to_vec(&message, standard())
-					.expect("AnnouncementMessage Encoding failed")
-					.into(),
-			)
-			.await
-		{
+		if let Err(e) = topic_tx.broadcast(serialize(&message)).await {
 			tracing::warn!(
 				error = %e,
 				network = %self.local.network_id(),
@@ -599,11 +592,7 @@ impl WorkerLoop {
 				GracefulDeparture::new(&self.local, self.last_own_version),
 			);
 
-			let encoded = encode_to_vec(&goodbye, standard())
-				.expect("GracefulDeparture Encoding failed")
-				.into();
-
-			if let Err(e) = topic_tx.broadcast(encoded).await {
+			if let Err(e) = topic_tx.broadcast(serialize(&goodbye)).await {
 				tracing::warn!(
 					error = %e,
 					network = %self.local.network_id(),

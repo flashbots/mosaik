@@ -1,8 +1,11 @@
-use crate::groups::{
-	Cursor,
-	Index,
-	Term,
-	log::{rsm::StateMachine, storage::Storage},
+use {
+	crate::groups::{
+		Cursor,
+		Index,
+		Term,
+		log::{rsm::StateMachine, storage::Storage},
+	},
+	core::ops::RangeInclusive,
 };
 
 pub struct Driver<S, M>
@@ -54,6 +57,11 @@ where
 	/// received a majority of votes from followers.
 	pub const fn committed(&self) -> Index {
 		self.committed
+	}
+
+	/// Returns the range of available log indices in the store.
+	pub fn available(&self) -> RangeInclusive<Index> {
+		self.storage.available()
 	}
 
 	/// Retrieves the entry at the given index.

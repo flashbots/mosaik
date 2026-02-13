@@ -10,31 +10,27 @@ use {
 			raft::{role::Role, shared::Shared},
 			state::WorkerState,
 		},
-		primitives::{BoxPinFut, InternalFutureExt, Short},
+		primitives::{BoxPinFut, InternalFutureExt, Short, deserialize},
 	},
+	bytes::Bytes,
 	core::{
 		future::ready,
 		pin::Pin,
 		task::{Context, Poll},
 	},
-	futures::Stream,
+	futures::{FutureExt, Stream},
 	std::sync::Arc,
 };
 
 mod candidate;
+mod catchup;
 mod follower;
 mod leader;
 mod protocol;
 mod role;
 mod shared;
-mod sync;
 
 pub(super) use protocol::Message;
-use {
-	bincode::{config::standard, serde::decode_from_std_read},
-	bytes::{Buf, Bytes},
-	futures::FutureExt,
-};
 
 /// The driver of the Raft consensus algorithm for a single group. This type is
 /// responsible for:
@@ -96,8 +92,7 @@ where
 	/// group and decode it into a strongly-typed `Message` that is aware of the
 	/// state machine implementation used by the group.
 	pub fn receive_protocol_message(&mut self, buffer: Bytes, from: PeerId) {
-		let Ok(message) = decode_from_std_read(&mut buffer.reader(), standard())
-		else {
+		let Ok(message) = deserialize(buffer) else {
 			tracing::warn!(
 				peer = %Short(from),
 				group = %Short(self.shared.group_id()),

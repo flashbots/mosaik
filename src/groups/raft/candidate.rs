@@ -80,7 +80,7 @@ impl<M: StateMachine> Candidate<M> {
 			term = term,
 			group = %Short(shared.group_id()),
 			network = %Short(shared.network_id()),
-			"starting new leader election",
+			"starting new leader elections",
 		);
 
 		// Broadcast the `RequestVote` message to all bonded peers in the group.

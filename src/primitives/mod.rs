@@ -1,6 +1,7 @@
 //! Traits, helpers and types used across the SDK
 
 mod channel;
+mod encoding;
 mod fmt;
 mod fut;
 mod id;
@@ -16,6 +17,7 @@ pub use id::{Digest, Tag, UniqueId};
 /// Internal primitives.
 pub(crate) use {
 	channel::UnboundedChannel,
+	encoding::{deserialize, serialize, serialize_to_writer},
 	fut::BoxPinFut,
 	fut::InternalFutureExt,
 	iter::IntoIterOrSingle,

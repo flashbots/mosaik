@@ -3,7 +3,7 @@ use {
 		Cursor,
 		log::{Index, Term, rsm::Command},
 	},
-	core::ops::Range,
+	core::ops::{Range, RangeInclusive},
 };
 
 /// Defines the storage interface for the Raft log.
@@ -18,6 +18,14 @@ pub trait Storage<C: Command>: Send + Sync + Unpin + 'static {
 	/// Appends a new log entry to the end of the log and returns the index of
 	/// the newly appended entry.
 	fn append(&mut self, command: C, term: Term) -> Index;
+
+	/// Returns the range of available log indices in the store.
+	/// This is used to determine which log entries can be retrieved in their
+	/// original form and which ones have been truncated and compacted.
+	///
+	/// This is used during the log synchronization process when a lagging
+	/// follower needs to catch up with the leader.
+	fn available(&self) -> RangeInclusive<Index>;
 
 	/// Retrieves the log entry at the specified index, if it exists. Returns
 	/// `None` if the index is out of bounds (e.g., if it has been truncated or if

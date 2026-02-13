@@ -32,6 +32,10 @@ impl<C: Command> Storage<C> for InMemory<C> {
 		self.entries.get((index - 1) as usize).cloned()
 	}
 
+	fn available(&self) -> std::ops::RangeInclusive<Index> {
+		0..=self.entries.len() as Index
+	}
+
 	fn get_range(
 		&self,
 		range: std::ops::Range<Index>,

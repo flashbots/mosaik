@@ -11,13 +11,12 @@ use {
 		PeerId,
 		discovery::PeerEntry,
 		network::{GracefulShutdown, link::Link},
-		primitives::{Bytes, Digest, Short},
+		primitives::{Bytes, Digest, Short, serialize},
 		streams::{
 			TooSlow,
 			status::{ActiveChannelsMap, ChannelConditions},
 		},
 	},
-	bincode::{config::standard, serde::encode_to_vec},
 	core::{any::Any, cell::OnceCell},
 	futures::FutureExt,
 	slotmap::DenseSlotMap,
@@ -233,13 +232,9 @@ impl<D: Datum> WorkerLoop<D> {
 		let bytes = OnceCell::<Bytes>::new();
 		for (_, subscription) in &self.active {
 			if subscription.criteria.matches(&item) {
-				let bytes = bytes.get_or_init(|| {
-					// Serialize the datum only once for all matching consumers,
-					// if there is at least one consumer with criteria that matches.
-					encode_to_vec(&item, standard())
-						.expect("failed to serialize datum")
-						.into()
-				});
+				// Serialize the datum only once for all matching consumers,
+				// if there is at least one consumer with criteria that matches.
+				let bytes = bytes.get_or_init(|| serialize(&item));
 
 				// forward the serialized datum to the matching consumer
 				if subscription.bytes_tx.try_send(bytes.clone()).is_err() {

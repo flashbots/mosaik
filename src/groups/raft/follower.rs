@@ -8,13 +8,8 @@ use {
 			raft::{
 				Message,
 				candidate::Candidate,
-				protocol::{
-					AppendEntries,
-					AppendEntriesResponse,
-					ForwardCommandResponse,
-					ForwardCommands,
-					Vote,
-				},
+				catchup::Catchup,
+				protocol::{AppendEntries, AppendEntriesResponse, Forward, Sync, Vote},
 				role::Role,
 				shared::Shared,
 			},
@@ -63,6 +58,13 @@ pub struct Follower<M: StateMachine> {
 	/// receiving a response from the leader within the forward timeout duration.
 	expired_commands: UnboundedChannel<u64>,
 
+	/// Optional state for the catch-up process when a follower is lagging behind
+	/// the leader and needs to fetch missing log entries from peers before it
+	/// can be in sync with the leader and transition to online status. This is
+	/// set when we receive an `AppendEntries` message from the leader that is
+	/// inconsistent with our local log state.
+	catchup: Option<Catchup<M>>,
+
 	#[doc(hidden)]
 	_marker: PhantomData<M>,
 }
@@ -96,6 +98,7 @@ impl<M: StateMachine> Follower<M> {
 		Self {
 			term,
 			leader,
+			catchup: None,
 			forwarded_commands: HashMap::default(),
 			expired_commands: UnboundedChannel::default(),
 			election_timeout: Box::pin(sleep(election_timeout)),
@@ -141,8 +144,14 @@ impl<M: StateMachine> Follower<M> {
 	}
 
 	/// In follower mode the only two messages that are handled in the
-	/// role-specific logic are `AppendEntries` and `ForwardCommandResponse` from
+	/// role-specific logic are `AppendEntries` and `Forward::ExecuteAck` from
 	/// the leader.
+	///
+	/// In follower mode we care about the following message:
+	/// - `AppendEntries` from the leader
+	/// - `Forward::ExecuteAck` from the leader.
+	/// - `Sync::DiscoveryResponse` when in catch-up mode.
+	/// - `Sync::FetchEntriesResponse` when in catch-up mode.
 	///
 	/// All other messages (e.g. `RequestVote` from candidates) are handled in the
 	/// shared logic that is common to all roles.
@@ -156,9 +165,18 @@ impl<M: StateMachine> Follower<M> {
 			Message::AppendEntries(request) => {
 				self.on_append_entries(request, sender, shared);
 			}
-			Message::ForwardCommandResponse(response) => {
-				self.on_forward_command_response(response);
+			Message::Forward(Forward::ExecuteAck {
+				request_id,
+				log_index,
+			}) => {
+				self.on_forward_command_response(request_id, log_index);
 			}
+			Message::Sync(Sync::DiscoveryResponse { available }) => {
+				if let Some(catchup) = self.catchup.as_mut() {
+					catchup.record_availability(available, sender);
+				}
+			}
+			Message::Sync(Sync::FetchEntriesResponse { .. }) => {}
 			_ => {
 				tracing::warn!(
 					term = self.term(),
@@ -173,7 +191,7 @@ impl<M: StateMachine> Follower<M> {
 
 	/// Forwards the command to the current leader and returns a future that
 	/// resolves when the leader acknowledges the command with the assigned log
-	/// index in a `ForwardCommandResponse`.
+	/// index in a `Forward::ExecuteAck`.
 	pub fn forward_commands<S: Storage<M::Command>>(
 		&mut self,
 		commands: Vec<M::Command>,
@@ -197,7 +215,7 @@ impl<M: StateMachine> Follower<M> {
 		};
 
 		// send the command to the current leader
-		let message = Message::ForwardCommands(ForwardCommands {
+		let message = Message::Forward(Forward::Execute {
 			commands: commands.clone(),
 			request_id: Some(request_id),
 		});
@@ -282,20 +300,27 @@ impl<M: StateMachine> Follower<M> {
 			shared.set_online();
 			self.accept_in_sync_entries(request, sender, shared);
 		} else {
-			// Log is inconsistent - we are missing entries before `prev_log_index`.
-			// Buffer the incoming entries and enter catch-up mode to fetch the gap
-			// from peers.
+			// log is inconsistent wit the leader, go into offline mode until we're
+			// caught up.
 			shared.set_offline();
-			todo!("implement follower catch-up")
+
+			// buffer the leader's inflight entries while we're catching up on the
+			// log.
+			self
+				.catchup
+				.get_or_insert_with(|| {
+					Catchup::<M>::new(request.prev_log_position, shared)
+				})
+				.buffer_entries(request.prev_log_position, request.entries);
 		}
 	}
 
-	/// Handles an incoming `ForwardCommandResponse` message from the leader in
+	/// Handles an incoming `Forward::ExecuteAck` message from the leader in
 	/// response to a command that this follower forwarded to the leader. Signals
 	/// the assignment of a log index to the forwarded command.
-	fn on_forward_command_response(&mut self, response: ForwardCommandResponse) {
-		if let Some(ack) = self.forwarded_commands.remove(&response.request_id) {
-			let _ = ack.send(response.log_index);
+	fn on_forward_command_response(&mut self, request_id: u64, log_index: Index) {
+		if let Some(ack) = self.forwarded_commands.remove(&request_id) {
+			let _ = ack.send(log_index);
 		}
 	}
 

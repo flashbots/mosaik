@@ -154,7 +154,7 @@ where
 			term,
 			group = %Short(self.group_id()),
 			network = %Short(self.network_id()),
-			"casted vote for leader",
+			"casted vote for",
 		);
 	}
 }

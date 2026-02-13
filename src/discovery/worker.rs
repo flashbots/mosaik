@@ -442,9 +442,9 @@ impl WorkerLoop {
 
 		if modified {
 			tracing::trace!(
-				peer_id = %Short(&peer_id),
+				peer = %Short(&peer_id),
 				network = %self.handle.local.network_id(),
-				"peer gracefully departed the network"
+				"gracefully departed"
 			);
 
 			self.events.send(Event::PeerDeparted(peer_id)).ok();

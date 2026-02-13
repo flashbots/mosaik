@@ -6,7 +6,7 @@ use {
 			log::{StateMachine, Storage, Term},
 			raft::{
 				Message,
-				protocol::{AppendEntries, ForwardCommandResponse, LogEntry, Vote},
+				protocol::{AppendEntries, Forward, LogEntry, Vote},
 				role::Role,
 				shared::Shared,
 			},
@@ -167,14 +167,17 @@ impl<M: StateMachine> Leader<M> {
 			}
 
 			// sent by followers that are forwarding client commands to the leader.
-			Message::ForwardCommands(request) => {
-				let log_index = self.enqueue_commands(request.commands, shared);
+			Message::Forward(Forward::Execute {
+				commands,
+				request_id,
+			}) => {
+				let log_index = self.enqueue_commands(commands, shared);
 
-				if let Some(request_id) = request.request_id {
+				if let Some(request_id) = request_id {
 					// the follower is interested in knowing the log index assigned to
 					// this command asap.
 					shared.bonds().send_raft_message_to::<M>(
-						Message::ForwardCommandResponse(ForwardCommandResponse {
+						Message::Forward(Forward::ExecuteAck {
 							request_id,
 							log_index,
 						}),
