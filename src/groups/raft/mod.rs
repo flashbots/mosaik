@@ -119,7 +119,7 @@ where
 				let expected_index = leader.enqueue_commands(commands, &self.shared);
 
 				// return a future that resolves when the command is committed
-				let fut = self.shared.when().committed_up_to(expected_index);
+				let fut = self.shared.when().committed().reaches(expected_index);
 				fut.map(move |_| Ok(expected_index)).pin()
 			}
 
@@ -136,7 +136,7 @@ where
 
 					// resolves when the leader committed index moves up to the assigned
 					// index
-					when.committed_up_to(index).await;
+					when.committed().reaches(index).await;
 
 					// return the index at which the command was committed
 					Ok(index)

@@ -464,6 +464,7 @@ where
 									let _ = result_tx.send(Ok(()));
 								} else {
 									let _ = result_tx.send(Err(AcceptError::from_err(Cancelled)));
+									tokio::spawn(handle.close(Cancelled));
 								}
 							}
 							Entry::Occupied(_) => {

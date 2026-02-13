@@ -1,5 +1,8 @@
 use {
-	crate::{PeerId, groups::Index},
+	crate::{
+		PeerId,
+		groups::{Cursor, Index},
+	},
 	tokio::sync::watch,
 };
 
@@ -19,6 +22,9 @@ pub struct When {
 
 	/// Observer for the committed index of the group's log.
 	committed: watch::Sender<Index>,
+
+	/// Observer for the current log position of the local node.
+	log_pos: watch::Sender<Cursor>,
 }
 
 /// Public API
@@ -71,6 +77,25 @@ impl When {
 						return new_leader;
 					}
 				}
+			}
+		}
+	}
+
+	/// returns a future that resolves when the group leader becomes the expected
+	/// peer.
+	pub fn leader_is(
+		&self,
+		expected: PeerId,
+	) -> impl Future<Output = ()> + Send + Sync + 'static {
+		let mut leader = self.leader.subscribe();
+
+		async move {
+			leader.mark_changed();
+
+			if leader.wait_for(|v| *v == Some(expected)).await.is_err() {
+				// if the watch channel is closed, consider the node not leader and
+				// never resolve this future
+				core::future::pending::<()>().await;
 			}
 		}
 	}
@@ -159,39 +184,102 @@ impl When {
 		}
 	}
 
-	/// Returns a future that resolves when the committed index of the group's log
-	/// advances.
-	pub fn committed(
-		&self,
-	) -> impl Future<Output = Index> + Send + Sync + 'static {
-		let mut committed = self.committed.subscribe();
+	/// Observes changes to the local node's log position, which may include
+	/// uncommitted entries.
+	pub fn log(&self) -> CursorWatcher<Cursor> {
+		CursorWatcher::new(self.log_pos.subscribe())
+	}
+
+	/// Observes changes to the committed index of the group's log.
+	pub fn committed(&self) -> CursorWatcher<Index> {
+		CursorWatcher::new(self.committed.subscribe())
+	}
+}
+
+/// Used by [`When`] to provide observer APIs for the log position and committed
+/// index progress.
+pub struct CursorWatcher<T> {
+	value: watch::Receiver<T>,
+}
+
+impl<T: PartialOrd<Index> + Ord + Copy + Send + Sync + 'static>
+	CursorWatcher<T>
+{
+	/// Internal constructor only available to [`When`].
+	const fn new(value: watch::Receiver<T>) -> Self {
+		Self { value }
+	}
+
+	/// Returns a future that resolves when the observed cursor changes in
+	/// either direction.
+	pub fn changed(&self) -> impl Future<Output = T> + Send + Sync + 'static {
+		let mut value = self.value.clone();
 
 		async move {
-			if committed.changed().await.is_err() {
-				// if the watch channel is closed, consider no new commits and never
-				// resolve this future
-				core::future::pending::<()>().await;
+			if value.changed().await.is_ok() {
+				return *value.borrow();
 			}
 
-			*committed.borrow_and_update()
+			// if the watch channel is closed, consider no new log entries and
+			// never resolve this future
+			core::future::pending::<()>().await;
+			unreachable!();
 		}
 	}
 
-	/// Returns a future that resolves when the committed index of the group's log
-	/// advances to at least the given index.
-	pub fn committed_up_to(
-		&self,
-		index: Index,
-	) -> impl Future<Output = Index> + Send + Sync + 'static {
-		let mut committed = self.committed.subscribe();
+	/// Returns a future that resolves when the observed cursor makes forward
+	/// progress.
+	pub fn advanced(&self) -> impl Future<Output = T> + Send + Sync + 'static {
+		let current_pos = *self.value.borrow();
+		let mut value = self.value.clone();
 
 		async move {
-			if let Ok(index) = committed.wait_for(|v| *v >= index).await {
-				return *index;
+			if let Ok(pos) = value.wait_for(|v| *v > current_pos).await {
+				return *pos;
 			}
 
-			// if the watch channel is closed, consider no new commits and never
-			// resolve this future
+			// if the watch channel is closed, consider no new log entries and
+			// never resolve this future
+			core::future::pending::<()>().await;
+			unreachable!();
+		}
+	}
+
+	/// Returns a future that resolves when the observed cursor moves backwards,
+	/// usually due to log truncation or overwriting of the log by a rival leader
+	/// during network partition.
+	pub fn reverted(&self) -> impl Future<Output = T> + Send + Sync + 'static {
+		let current_pos = *self.value.borrow();
+		let mut value = self.value.clone();
+
+		async move {
+			if let Ok(pos) = value.wait_for(|v| *v < current_pos).await {
+				return *pos;
+			}
+
+			// if the watch channel is closed, consider no new log entries and
+			// never resolve this future
+			core::future::pending::<()>().await;
+			unreachable!();
+		}
+	}
+
+	/// Returns a future that resolves when the observed cursor's index reaches at
+	/// least the given index.
+	pub fn reaches(
+		&self,
+		index: impl Into<Index>,
+	) -> impl Future<Output = T> + Send + Sync + 'static {
+		let index = index.into();
+		let mut value = self.value.clone();
+
+		async move {
+			if let Ok(pos) = value.wait_for(|v| *v >= index).await {
+				return *pos;
+			}
+
+			// if the watch channel is closed, consider no new log entries and
+			// never resolve this future
 			core::future::pending::<()>().await;
 			unreachable!();
 		}
@@ -203,16 +291,19 @@ impl When {
 	pub(crate) fn new(local_id: PeerId) -> Self {
 		let leader = watch::Sender::new(None);
 		let online = watch::Sender::new(false);
-		let committed = watch::Sender::new(0);
+		let committed = watch::Sender::new(Index::default());
+		let log_pos = watch::Sender::new(Cursor::default());
+
 		Self {
 			local_id,
 			leader,
 			online,
 			committed,
+			log_pos,
 		}
 	}
 
-	/// Called by `Consensus` when the group leader is updated.
+	/// Called by [`Raft`] when the group leader is updated.
 	pub(super) fn update_leader(&self, new_leader: Option<PeerId>) {
 		self.leader.send_if_modified(|current| {
 			if *current == new_leader {
@@ -224,7 +315,7 @@ impl When {
 		});
 	}
 
-	/// Called by `Consensus` when the local node's online status changes.
+	/// Called by [`Raft`] when the local node's online status changes.
 	pub(super) fn set_online_status(&self, is_online: bool) {
 		self.online.send_if_modified(|current| {
 			let prev_value = *current;
@@ -237,15 +328,27 @@ impl When {
 		});
 	}
 
-	/// Called by `Consensus` when the committed index of the group's log
+	/// Called by [`Raft`] when the committed index of the group's log
 	/// advances.
-	pub(super) fn update_committed(&self, new_committed: Index) {
+	pub(super) fn update_committed(&self, index: Index) {
 		self.committed.send_if_modified(|current| {
-			if *current < new_committed {
-				*current = new_committed;
-				true
-			} else {
+			if *current == index {
 				false
+			} else {
+				*current = index;
+				true
+			}
+		});
+	}
+
+	/// Called by [`Raft`] when the local node's log position changes.
+	pub(super) fn update_log_pos(&self, new_log_pos: Cursor) {
+		self.log_pos.send_if_modified(|current| {
+			if *current == new_log_pos {
+				false
+			} else {
+				*current = new_log_pos;
+				true
 			}
 		});
 	}
@@ -258,5 +361,11 @@ impl When {
 	/// Returns the index of the latest committed log entry in the group.
 	pub(super) fn current_committed(&self) -> Index {
 		*self.committed.borrow()
+	}
+
+	/// Returns the current (potentially uncommitted) log position of the local
+	/// node.
+	pub(super) fn current_log_pos(&self) -> Cursor {
+		*self.log_pos.borrow()
 	}
 }

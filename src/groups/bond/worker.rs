@@ -92,6 +92,9 @@ pub struct BondWorker {
 	/// Channel for sending bond events to the group managing it.
 	events_tx: UnboundedSender<BondEvent>,
 
+	// used to signal the bond handle that the worker has terminated
+	terminated_tx: watch::Sender<Option<ApplicationClose>>,
+
 	/// The reason for closing the bond connection when it is terminated.
 	///
 	/// This is the application-level reason that will be sent to the remote peer
@@ -115,16 +118,18 @@ impl BondWorker {
 		link.replace_cancel_token(cancel.clone());
 
 		let id = link.shared_random(BOND_ID_LABEL);
+		let (terminated_tx, terminated_rx) = watch::channel(None);
 
 		let bond = Self {
 			id,
 			group,
 			peer,
 			link,
+			cancel,
 			heartbeat,
 			commands,
 			events_tx,
-			cancel: cancel.clone(),
+			terminated_tx,
 			pending_sends: UnboundedChannel::default(),
 			close_reason: Cancelled.into(),
 		};
@@ -134,9 +139,9 @@ impl BondWorker {
 		(
 			Bond {
 				id,
-				cancel,
 				commands_tx,
 				peer: peer_rx,
+				terminated_rx,
 			},
 			events_rx,
 		)
@@ -193,8 +198,10 @@ impl BondWorker {
 
 		self
 			.events_tx
-			.send(BondEvent::Terminated(self.close_reason))
+			.send(BondEvent::Terminated(self.close_reason.clone()))
 			.ok();
+
+		self.terminated_tx.send(Some(self.close_reason)).ok();
 	}
 
 	fn on_command(&mut self, command: WorkerCommand) {

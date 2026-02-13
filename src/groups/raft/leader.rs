@@ -189,8 +189,8 @@ impl<M: StateMachine> Leader<M> {
 			// all other message types are unexpected in the leader state. ignore.
 			_ => {
 				tracing::warn!(
-					local_term = self.term(),
-					message_term = message.term(),
+					local_term = %self.term(),
+					message_term = ?message.term(),
 					group = %Short(shared.group_id()),
 					network = %Short(shared.network_id()),
 					sender = %Short(sender),
@@ -221,7 +221,7 @@ impl<M: StateMachine> Leader<M> {
 			self.client_commands.send(command);
 		}
 
-		let expected_index = last_index + self.client_commands.len() as u64;
+		let expected_index = last_index + self.client_commands.len().into();
 
 		for waker in self.wakers.drain(..) {
 			waker.wake();
@@ -251,7 +251,7 @@ impl<M: StateMachine> Leader<M> {
 				// advance the commit index up to the latest index that has reached a
 				// quorum of voters in the committee.
 				tracing::trace!(
-					committed_ix = new_committed,
+					committed_ix = %new_committed,
 					log_position = %shared.log.last(),
 					group = %Short(shared.group_id()),
 					network = %Short(shared.network_id()),
@@ -295,7 +295,7 @@ impl<M: StateMachine> Leader<M> {
 				// advance the commit index up to the latest index that has reached a
 				// quorum of voters in the committee.
 				tracing::trace!(
-					committed = new_committed,
+					committed = %new_committed,
 					group = %Short(shared.group_id()),
 					network = %Short(shared.network_id()),
 				);
@@ -340,12 +340,15 @@ impl<M: StateMachine> Leader<M> {
 			shared.log.append(command.clone(), self.term);
 		}
 
+		// signal log update to public api observers
+		shared.update_log_pos(shared.log.last());
+
 		// always vote for our own `AppendEntries` messages. If we are the
 		// only voter in the committee, this will immediately commit the new log
 		// entries.
 		self.record_vote(
 			shared.local_id(),
-			prev_pos.index() + count as u64,
+			prev_pos.index() + count.into(),
 			shared,
 		);
 
@@ -367,7 +370,7 @@ impl<M: StateMachine> Leader<M> {
 		let followers = shared.bonds().broadcast_raft::<M>(message);
 
 		if !followers.is_empty() {
-			let range = prev_pos.index() + 1..=prev_pos.index() + count as u64;
+			let range = prev_pos.index().next()..=prev_pos.index() + count.into();
 
 			tracing::trace!(
 				followers = %FmtIter::<Short<_>, _>::new(followers),

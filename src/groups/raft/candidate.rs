@@ -59,7 +59,11 @@ impl<M: StateMachine> Candidate<M> {
 		term: Term,
 		shared: &mut Shared<S, M>,
 	) -> Self {
-		assert_ne!(term, 0, "Candidate role should be at least in term 1");
+		assert_ne!(
+			term,
+			Term::zero(),
+			"Candidate role should be at least in term 1"
+		);
 
 		// nodes in candidate state are always considered offline
 		shared.set_offline();
@@ -77,7 +81,7 @@ impl<M: StateMachine> Candidate<M> {
 		};
 
 		tracing::debug!(
-			term = term,
+			term = %term,
 			log = %log_position,
 			group = %Short(shared.group_id()),
 			network = %Short(shared.network_id()),
@@ -120,7 +124,7 @@ impl<M: StateMachine> Candidate<M> {
 	) -> Poll<ControlFlow<Role<M>>> {
 		if self.quorum_reached() {
 			tracing::debug!(
-				term = self.term(),
+				term = %self.term(),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				"received quorum [{}/{}] of votes, becoming leader",
@@ -138,7 +142,7 @@ impl<M: StateMachine> Candidate<M> {
 			// election by incrementing the term and broadcasting new RequestVote
 			// message to all bonded peers in the group.
 			tracing::debug!(
-				term = self.term(),
+				term = %self.term(),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				committee_size = self.requested_from.len(),
@@ -147,7 +151,7 @@ impl<M: StateMachine> Candidate<M> {
 			);
 
 			return Poll::Ready(ControlFlow::Break(
-				Self::new(self.term + 1, shared).into(),
+				Self::new(self.term.next(), shared).into(),
 			));
 		}
 
@@ -172,12 +176,12 @@ impl<M: StateMachine> Candidate<M> {
 		shared: &Shared<S, M>,
 	) {
 		let Message::RequestVoteResponse(response) = message else {
-			tracing::warn!(
+			tracing::trace!(
 				peer = %Short(sender),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				message = ?message,
-				"unexpected message type received in candidate state",
+				"received unexpected message as candidate",
 			);
 			return;
 		};
@@ -187,7 +191,7 @@ impl<M: StateMachine> Candidate<M> {
 				peer = %Short(sender),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
-				term = response.term,
+				term = %response.term,
 				"ignoring vote response from peer we did not request vote from",
 			);
 			return;

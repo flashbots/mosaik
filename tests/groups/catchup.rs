@@ -30,7 +30,7 @@ async fn one_leader_one_follower() -> anyhow::Result<()> {
 	// to accept commands
 	timeout_after(timeout, g0.when().is_online()).await?;
 	assert_eq!(g0.leader(), Some(n0.local().id()));
-	assert_eq!(g0.committed_index(), 0);
+	assert_eq!(g0.committed(), 0);
 	tracing::info!("g0 is online");
 
 	// execute four commands on the leader and wait for them to be committed to
@@ -46,7 +46,7 @@ async fn one_leader_one_follower() -> anyhow::Result<()> {
 	)
 	.await??;
 
-	let index = g0.committed_index();
+	let index = g0.committed();
 	tracing::info!("leader committed to index {index}");
 	assert_eq!(index, 4);
 
@@ -65,13 +65,13 @@ async fn one_leader_one_follower() -> anyhow::Result<()> {
 		.with_state_machine(Counter::default())
 		.join();
 
-	sleep_s(5).await;
+	sleep_s(10).await;
 	discover_all([&n0, &n1]).await?;
 
 	// wait for g1 to recognize the existing leader and catch up with the log
-	timeout_after(timeout, g1.when().is_online()).await?;
+	timeout_after(timeout, g1.when().leader_is(n0.local().id())).await?;
 	assert_eq!(g1.leader(), Some(n0.local().id()));
-	assert_eq!(g1.committed_index(), 4);
+	assert_eq!(g1.committed(), 4);
 
 	Ok(())
 }

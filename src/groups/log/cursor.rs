@@ -1,30 +1,133 @@
 use {
-	core::{cmp::Ordering, fmt},
-	derive_more::{From, Into},
+	core::{
+		cmp::Ordering,
+		fmt::{self},
+	},
+	derive_more::{Add, Display, From, Into, Sub},
 	serde::{Deserialize, Serialize},
 };
 
-/// Raft term, increases monotonically with every new leader election.
-pub type Term = u64;
+macro_rules! impl_pos_type {
+	($(#[$meta:meta])* $name:ident) => {
+		#[derive(
+				Debug, Clone, Copy, Display, Default, PartialEq, PartialOrd,
+				Eq, Ord, Hash, Serialize, Deserialize, Into, Add, Sub,
+		)]
+		$(#[$meta])*
+		pub struct $name(pub u64);
 
-/// Raft log index increases monotonically with every new log entry.
-pub type Index = u64;
+		impl $name {
+			pub const fn zero() -> Self { Self(0) }
+			pub const fn one() -> Self { Self(1) }
+			pub const fn is_zero(&self) -> bool { self.0 == 0 }
+			#[must_use] pub const fn prev(&self) -> Self { Self(self.0.saturating_sub(1)) }
+			#[must_use] pub const fn next(&self) -> Self { Self(self.0.saturating_add(1)) }
+		}
+
+		impl From<usize> for $name {
+			fn from(value: usize) -> Self {
+				Self(value as u64)
+			}
+		}
+
+		impl From<$name> for usize {
+			fn from(value: $name) -> Self {
+				usize::try_from(value.0)
+					.expect(concat!(stringify!($name), " value overflowed usize"))
+			}
+		}
+
+		impl_pos_type!(@unsigned $name: u8, u16, u32, u64);
+    impl_pos_type!(@signed $name: i8, i16, i32, i64);
+	};
+
+	(@unsigned $name:ident: $($t:ty),+) => {
+		$(
+			const _: () = {
+				#[automatically_derived]
+				impl From<$t> for $name {
+					fn from(value: $t) -> Self {
+						Self(u64::from(value))
+					}
+				}
+
+				#[automatically_derived]
+				impl PartialEq<$t> for $name {
+					fn eq(&self, other: &$t) -> bool {
+						self.0 == u64::from(*other)
+					}
+				}
+
+				#[automatically_derived]
+				impl PartialOrd<$t> for $name {
+					fn partial_cmp(&self, other: &$t) -> Option<Ordering> {
+						self.0.partial_cmp(&u64::from(*other))
+					}
+				}
+			};
+		)+
+    };
+
+    (@signed $name:ident: $($t:ty),+) => {
+			$(
+				const _: () = {
+
+					#[automatically_derived]
+					#[allow(clippy::cast_sign_loss)]
+					impl From<$t> for $name {
+						fn from(value: $t) -> Self {
+							if value < 0 { Self(0) }
+							else { Self(value as u64) }
+						}
+					}
+
+					#[automatically_derived]
+					impl PartialEq<$t> for $name {
+						#[allow(clippy::cast_sign_loss)]
+						fn eq(&self, other: &$t) -> bool {
+							let other = i64::from(*other);
+							if other < 0 { false}
+							else { self.0 == other as u64 }
+						}
+					}
+
+					#[automatically_derived]
+					impl PartialOrd<$t> for $name {
+						#[allow(clippy::cast_sign_loss)]
+						fn partial_cmp(&self, other: &$t) -> Option<Ordering> {
+							let other = i64::from(*other);
+							if other < 0 {
+								// self (u64) is always >= 0, so self > negative
+								Some(Ordering::Greater)
+							} else {
+								self.0.partial_cmp(&(other as u64))
+							}
+						}
+					}
+				};
+			)+
+    };
+}
+
+impl_pos_type!(
+	/// Raft term, increases monotonically with every new leader election.
+	Term);
+
+impl_pos_type!(
+	/// Raft log index increases monotonically with every new log entry.
+	Index);
 
 /// Progress of the log.
 #[derive(
-	Debug,
-	Default,
-	Clone,
-	Copy,
-	PartialEq,
-	Eq,
-	Hash,
-	Serialize,
-	Deserialize,
-	From,
-	Into,
+	Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, From, Into,
 )]
 pub struct Cursor(pub Term, pub Index);
+
+impl Default for Cursor {
+	fn default() -> Self {
+		Self::new(Term::default(), Index::default())
+	}
+}
 
 impl Cursor {
 	pub const fn new(term: Term, index: Index) -> Self {
@@ -39,7 +142,7 @@ impl Cursor {
 		self.1
 	}
 
-	pub const fn is_behind(&self, other: &Self) -> bool {
+	pub fn is_behind(&self, other: &Self) -> bool {
 		(self.term() < other.term()) || (self.index() < other.index())
 	}
 }
@@ -50,12 +153,54 @@ impl PartialOrd for Cursor {
 	}
 }
 
+impl PartialEq<Index> for Cursor {
+	fn eq(&self, other: &Index) -> bool {
+		self.index() == *other
+	}
+}
+
+impl PartialEq<Term> for Cursor {
+	fn eq(&self, other: &Term) -> bool {
+		self.term() == *other
+	}
+}
+
+impl PartialOrd<Index> for Cursor {
+	fn partial_cmp(&self, other: &Index) -> Option<Ordering> {
+		Some(self.index().cmp(other))
+	}
+}
+
+impl PartialOrd<Term> for Cursor {
+	fn partial_cmp(&self, other: &Term) -> Option<Ordering> {
+		Some(self.term().cmp(other))
+	}
+}
+
+impl PartialEq<Cursor> for Index {
+	fn eq(&self, other: &Cursor) -> bool {
+		*self == other.index()
+	}
+}
+
+impl PartialOrd<Cursor> for Index {
+	fn partial_cmp(&self, other: &Cursor) -> Option<Ordering> {
+		Some(self.cmp(&other.index()))
+	}
+}
+
 impl Ord for Cursor {
 	fn cmp(&self, other: &Self) -> Ordering {
 		self
 			.term()
 			.cmp(&other.term())
 			.then(self.index().cmp(&other.index()))
+	}
+}
+
+impl fmt::Debug for Cursor {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "Cursor(t:{},i:{})", self.term(), self.index())
 	}
 }
 

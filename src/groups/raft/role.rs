@@ -56,7 +56,7 @@ pub enum Role<M: StateMachine> {
 
 impl<M: StateMachine> Role<M> {
 	pub fn new<S: Storage<M::Command>>(shared: &Shared<S, M>) -> Self {
-		Self::Follower(Follower::new(0, None, shared))
+		Self::Follower(Follower::new(Term::zero(), None, shared))
 	}
 
 	/// Drives the role-specific periodic actions (e.g., elections, heartbeats).
@@ -98,11 +98,12 @@ impl<M: StateMachine> Role<M> {
 			&& message_term < self.term()
 		{
 			tracing::trace!(
-				local_term = self.term(),
-				message_term = message_term,
+				local_term = %self.term(),
+				message_term = %message_term,
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				sender = %Short(sender),
+				message = ?message,
 				"ignoring stale raft message"
 			);
 			return;
@@ -201,14 +202,16 @@ impl<M: StateMachine> Role<M> {
 			&& request.term == self.term()
 		{
 			tracing::warn!(
-				term = request.term,
+				term = %request.term,
 				other_leader = %Short(request.leader),
+				other_leader_log = %request.prev_log_position,
+				local_log = %shared.log.last(),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
-				"detected conflict with another leader in the same term, triggering new elections",
+				"rival leader detected",
 			);
 
-			*self = Candidate::<M>::new(self.term() + 1, shared).into();
+			*self = Candidate::<M>::new(self.term().next(), shared).into();
 			shared.update_leader(None);
 		}
 	}
@@ -240,7 +243,7 @@ impl<M: StateMachine> Role<M> {
 
 		tracing::debug!(
 			candidate = %Short(request.candidate),
-			term = request.term,
+			term = %request.term,
 			candidate_log = %request.log_position,
 			local_log = %local_cursor,
 			group = %Short(shared.group_id()),
@@ -265,7 +268,7 @@ impl<M: StateMachine> Role<M> {
 
 			tracing::debug!(
 				candidate = %Short(request.candidate),
-				term = request.term,
+				term = %request.term,
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				"denying vote, already voted for another candidate in this term",
@@ -279,7 +282,7 @@ impl<M: StateMachine> Role<M> {
 
 			tracing::debug!(
 				candidate = %Short(request.candidate),
-				term = request.term,
+				term = %request.term,
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				"denying vote because our log is ahead",
@@ -301,7 +304,7 @@ impl<M: StateMachine> Role<M> {
 
 			tracing::debug!(
 				candidate = %Short(request.candidate),
-				term = request.term,
+				term = %request.term,
 				candidate_log = %request.log_position,
 				local_log = %local_cursor,
 				group = %Short(shared.group_id()),
@@ -317,7 +320,7 @@ impl<M: StateMachine> Role<M> {
 
 			tracing::debug!(
 				candidate = %Short(request.candidate),
-				term = request.term,
+				term = %request.term,
 				candidate_log = %request.log_position,
 				local_log = %local_cursor,
 				group = %Short(shared.group_id()),

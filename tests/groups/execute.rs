@@ -31,7 +31,7 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 	// to accept commands
 	timeout_after(timeout, g0.when().is_online()).await?;
 	assert_eq!(g0.leader(), Some(n0.local().id()));
-	assert_eq!(g0.committed_index(), 0);
+	assert_eq!(g0.committed(), 0);
 	tracing::info!("g0 is online");
 
 	// start a new node and have it join the group.
@@ -60,13 +60,13 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 	// wait for g1 to recognize the existing leader and catch up with the log
 	timeout_after(timeout, g1.when().is_online()).await?;
 	assert_eq!(g1.leader(), Some(n0.local().id()));
-	assert_eq!(g1.committed_index(), 0);
+	assert_eq!(g1.committed(), 0);
 	tracing::info!("g1 is online and is following g0 as leader");
 
 	// wait for g2 to recognize the existing leader and catch up with the log
 	timeout_after(timeout, g2.when().is_online()).await?;
 	assert_eq!(g2.leader(), Some(n0.local().id()));
-	assert_eq!(g2.committed_index(), 0);
+	assert_eq!(g2.committed(), 0);
 	tracing::info!("g2 is online and is following g0 as leader");
 
 	// execute two commands on the leader and wait for them to be committed to the
@@ -74,7 +74,7 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 	timeout_s(2, g0.execute(CounterCommand::Increment(3))).await??;
 	timeout_s(2, g0.execute(CounterCommand::Increment(4))).await??;
 
-	let index = g0.committed_index();
+	let index = g0.committed();
 	tracing::info!("leader committed to index {index}");
 	assert_eq!(index, 2);
 
@@ -85,13 +85,13 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 
 	// wait for the follower g1 to learn from the leader about the new committed
 	// index
-	let index = timeout_s(2, g1.when().committed_up_to(2)).await?;
+	let index = timeout_s(2, g1.when().committed().reaches(2)).await?;
 	tracing::info!("follower g1 knows that index {index} is committed");
 	assert_eq!(index, 2);
 
 	// wait for the follower g2 to learn from the leader about the new committed
 	// index
-	let index = timeout_s(2, g2.when().committed_up_to(2)).await?;
+	let index = timeout_s(2, g2.when().committed().reaches(2)).await?;
 	tracing::info!("follower g2 knows that index {index} is committed");
 	assert_eq!(index, 2);
 
@@ -158,10 +158,10 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 	tracing::info!("g2 executed 3 commands committed at index {g2_pos}");
 
 	// wait for both nodes to learn that index 9 is committed
-	timeout_s(2, g1.when().committed_up_to(g2_pos)).await?;
+	timeout_s(2, g1.when().committed().reaches(g2_pos)).await?;
 
-	assert_eq!(g1.committed_index(), 9);
-	assert_eq!(g2.committed_index(), 9);
+	assert_eq!(g1.committed(), 9);
+	assert_eq!(g2.committed(), 9);
 
 	let value_n1 = g1.query(CounterValueQuery, Consistency::Weak).await?;
 	let value_n2 = g2.query(CounterValueQuery, Consistency::Weak).await?;

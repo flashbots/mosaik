@@ -34,7 +34,7 @@ where
 		Self {
 			storage,
 			machine,
-			committed: 0,
+			committed: Index::zero(),
 		}
 	}
 
@@ -73,8 +73,8 @@ where
 	/// exists at that index. Log entries are indexed starting from 1, so
 	/// `term_at(0)` always returns `Some(0)`.
 	pub fn term_at(&self, index: Index) -> Option<Term> {
-		if index == 0 {
-			return Some(0);
+		if index.is_zero() {
+			return Some(Term::zero());
 		}
 
 		self.storage.get(index).map(|(_, term)| term)
@@ -98,7 +98,12 @@ where
 	/// Returns the index of the latest committed entry after this operation,
 	/// which may be less than the given index goes beyond the end of the log.
 	pub fn commit_up_to(&mut self, index: Index) -> Index {
-		for i in self.committed + 1..=index {
+		let index: u64 = index.into();
+		let committed: u64 = self.committed.into();
+		let range = committed + 1..=index;
+
+		for i in range {
+			let i = i.into();
 			if let Some((command, _)) = self.storage.get(i) {
 				self.machine.apply(command);
 				self.committed = i;

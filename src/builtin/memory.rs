@@ -21,43 +21,42 @@ impl<C: Command> Default for InMemory<C> {
 impl<C: Command> Storage<C> for InMemory<C> {
 	fn append(&mut self, command: C, term: Term) -> Index {
 		self.entries.push((command, term));
-		self.entries.len() as Index
+		(self.entries.len() as u64).into()
 	}
 
 	fn get(&self, index: Index) -> Option<(C, Term)> {
-		if index == 0 {
+		if index.is_zero() {
 			return None;
 		}
-
-		self.entries.get((index - 1) as usize).cloned()
+		let index: usize = index.prev().into();
+		self.entries.get(index).cloned()
 	}
 
 	fn available(&self) -> std::ops::RangeInclusive<Index> {
-		0..=self.entries.len() as Index
+		Index::zero()..=(self.entries.len() as u64).into()
 	}
 
 	fn get_range(
 		&self,
 		range: std::ops::Range<Index>,
 	) -> impl Iterator<Item = (Term, Index, C)> + '_ {
-		let start = (range.start - 1) as usize;
-		let end = (range.end - 1) as usize;
+		let start: usize = range.start.prev().into();
+		let end: usize = range.end.prev().into();
+
 		self
 			.entries
 			.iter()
 			.enumerate()
 			.skip(start)
 			.take(end - start)
-			.map(move |(i, (cmd, term))| {
-				(*term, (start + i + 1) as Index, cmd.clone())
-			})
+			.map(move |(i, (cmd, term))| (*term, (start + i + 1).into(), cmd.clone()))
 	}
 
 	fn truncate(&mut self, at: Index) {
-		if at <= 1 {
+		if at <= Index(1) {
 			self.entries.clear();
 		} else {
-			self.entries.truncate((at - 1) as usize);
+			self.entries.truncate((at.prev()).into());
 		}
 	}
 
@@ -66,7 +65,7 @@ impl<C: Command> Storage<C> for InMemory<C> {
 			None
 		} else {
 			let (_, term) = self.entries.last().unwrap();
-			Some(Cursor(*term, self.entries.len() as Index))
+			Some(Cursor(*term, (self.entries.len() as u64).into()))
 		}
 	}
 }

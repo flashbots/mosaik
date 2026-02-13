@@ -3,6 +3,7 @@ use {
 		PeerId,
 		groups::{
 			Bonds,
+			Cursor,
 			GroupId,
 			Index,
 			StateMachine,
@@ -106,8 +107,14 @@ impl<M: StateMachine> Group<M> {
 
 	/// Returns the index of the latest command that has been committed to the
 	/// group's state machine.
-	pub fn committed_index(&self) -> Index {
+	pub fn committed(&self) -> Index {
 		self.state.when.current_committed()
+	}
+
+	/// Returns the current log position of the local node, which may be ahead of
+	/// the committed index if there are uncommitted log entries.
+	pub fn log_position(&self) -> Cursor {
+		self.state.when.current_log_pos()
 	}
 }
 

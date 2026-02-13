@@ -61,6 +61,7 @@ use {
 		},
 		network::{
 			CloseReason,
+			UnexpectedClose,
 			UnknownPeer,
 			link::{Link, RecvError},
 		},
@@ -78,7 +79,6 @@ use {
 		},
 		time::timeout,
 	},
-	tokio_util::sync::CancellationToken,
 	worker::BondWorker,
 };
 
@@ -120,12 +120,12 @@ pub struct Bond {
 	/// This value is identical on both sides of the bond connection.
 	id: BondId,
 
-	/// Cancellation token for terminating the bond's main loop
-	/// and to check for cancellation status.
-	cancel: CancellationToken,
-
 	/// Channel for sending commands to the bond worker loop.
 	commands_tx: UnboundedSender<WorkerCommand>,
+
+	/// Watch channel for observing when the bond worker has terminated and the
+	/// reason for termination.
+	terminated_rx: watch::Receiver<Option<ApplicationClose>>,
 
 	/// Watch channel for observing updates to the remote peer's discovery entry.
 	peer: watch::Receiver<SignedPeerEntry>,
@@ -154,10 +154,10 @@ impl fmt::Display for Bond {
 /// Public API
 impl Bond {
 	/// Closes the bond connection to the remote peer with the provided
-	/// application-level close reason.
+	/// application-level close reason and waits for the bond worker to terminate.
 	pub async fn close(self, reason: impl CloseReason) {
 		let _ = self.commands_tx.send(WorkerCommand::Close(reason.into()));
-		self.cancel.cancelled().await;
+		self.terminated().await;
 	}
 
 	/// Returns the most recent peer entry for the remote peer in the bond.
@@ -172,6 +172,25 @@ impl Bond {
 	/// in logs and metrics.
 	pub const fn id(&self) -> BondId {
 		self.id
+	}
+
+	/// Returns `true` if the bond connection has been terminated.
+	pub fn is_terminated(&self) -> bool {
+		self.terminated_rx.borrow().is_some()
+	}
+
+	/// Returns a future that resolves when the bond connection has been
+	/// terminated and provides the reason for termination if available.
+	pub fn terminated(
+		&self,
+	) -> impl Future<Output = ApplicationClose> + Send + Sync + 'static {
+		let mut rx = self.terminated_rx.clone();
+		async move {
+			rx.wait_for(|v| v.is_some()).await.map_or_else(
+				|_| UnexpectedClose.into(),
+				|reason| reason.clone().unwrap_or_else(|| UnexpectedClose.into()),
+			)
+		}
 	}
 }
 
@@ -236,11 +255,12 @@ impl Bond {
 				// catalog sync.
 				Some(reason) if reason == UnknownPeer => {
 					// trigger full catalog sync and retry bonding
-					group
-						.discovery
-						.sync_with(peer.address().clone())
-						.await
-						.map_err(Error::Discovery)?;
+					if let Err(e) =
+						group.discovery.sync_with(peer.address().clone()).await
+					{
+						link.close(UnknownPeer).await.ok();
+						return Err(Error::Discovery(e));
+					}
 
 					// retry creating the bond after syncing the catalog
 					return Box::pin(Self::create(group, peer)).await;

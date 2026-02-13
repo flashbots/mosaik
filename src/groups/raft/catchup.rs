@@ -73,7 +73,7 @@ impl<M: StateMachine> Catchup<M> {
 		position: Cursor,
 		shared: &Shared<S, M>,
 	) -> Self {
-		let gap = shared.log.last().index() + 1..=position.index();
+		let gap = shared.log.last().index() + Index::one()..=position.index();
 
 		// Broadcast a `DiscoveryRequest` message to all bonded peers to discover
 		// which peers have the log entries in the missing range so that we can

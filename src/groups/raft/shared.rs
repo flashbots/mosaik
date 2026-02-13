@@ -4,6 +4,7 @@ use {
 		PeerId,
 		groups::{
 			Bonds,
+			Cursor,
 			GroupId,
 			Index,
 			IntervalsConfig,
@@ -114,13 +115,16 @@ where
 	}
 
 	/// Updates the committed index in the group public api observers. This should
-	/// be called whenever the committed index of the log advances, which is when
-	/// new entries are applied to the state machine and become visible to the
-	/// external world through queries. This allows external observers to track
-	/// the progress of the log and know when their commands have been committed
-	/// and applied to the state machine.
+	/// be called whenever the committed index of the log advances.
 	pub fn update_committed(&self, committed: Index) {
 		self.group.when.update_committed(committed);
+	}
+
+	/// Updates the log position in the group public api observers. This should be
+	/// called whenever the local node's log position changes, which can happen
+	/// when new log entries are appended to the log or when the log is truncated.
+	pub fn update_log_pos(&self, log_pos: Cursor) {
+		self.group.when.update_log_pos(log_pos);
 	}
 
 	/// Called when we receive a `RequestVote` message from a candidate. This
@@ -156,7 +160,7 @@ where
 
 		tracing::debug!(
 			candidate = %Short(candidate),
-			term,
+			term = %term,
 			group = %Short(self.group_id()),
 			network = %Short(self.network_id()),
 			"casted vote for",

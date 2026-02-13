@@ -78,7 +78,7 @@ impl<M: StateMachine> Follower<M> {
 	) -> Self {
 		let mut election_timeout = shared.config().intervals().election_timeout();
 
-		if term == 0 {
+		if term.is_zero() {
 			// for the initial term, we introduce an additional bootstrap delay to
 			// give all nodes enough time to start up and discover each other before
 			// triggering the first election.
@@ -163,7 +163,7 @@ impl<M: StateMachine> Follower<M> {
 			// election timeout elapsed without hearing from a leader, so we start
 			// a new election by transitioning to candidate state
 			return Poll::Ready(ControlFlow::Break(
-				Candidate::new(self.term + 1, shared).into(),
+				Candidate::new(self.term.next(), shared).into(),
 			));
 		}
 
@@ -214,7 +214,7 @@ impl<M: StateMachine> Follower<M> {
 			}
 			_ => {
 				tracing::warn!(
-					term = self.term(),
+					term = %self.term(),
 					sender = %Short(sender),
 					group = %Short(shared.group_id()),
 					network = %Short(shared.network_id()),
@@ -306,7 +306,7 @@ impl<M: StateMachine> Follower<M> {
 			// The leader's log always wins — truncate from the conflict.
 			Some(local_term) if local_term == request.prev_log_position.term() => {
 				if let Some(first) = request.entries.first() {
-					let next_index = request.prev_log_position.index() + 1;
+					let next_index = request.prev_log_position.index().next();
 					if let Some(existing_term) = shared.log.term_at(next_index) {
 						if existing_term != first.term {
 							shared.log.truncate(next_index);
@@ -392,9 +392,9 @@ impl<M: StateMachine> Follower<M> {
 			// the log is consistent up to `prev_log_index`. Append the leader's new
 			// entries, skipping any we already have, which handles idempotent
 			// redelivery).
-			let start_index = request.prev_log_position.index() + 1;
+			let start_index = request.prev_log_position.index().next();
 			for (i, entry) in request.entries.into_iter().enumerate() {
-				let index = start_index + i as u64;
+				let index = start_index + i.into();
 				if shared.log.term_at(index) == Some(entry.term) {
 					// already have this entry (and we verified no conflicts above), so
 					// skip it.
@@ -436,10 +436,10 @@ impl<M: StateMachine> Follower<M> {
 
 		if prev_committed != new_committed || appended_count > 0 {
 			tracing::trace!(
-				committed_ix = new_committed,
+				committed_ix = %new_committed,
 				new_entries = appended_count,
 				local_log = %shared.log.last(),
-				term = self.term(),
+				term = %self.term(),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 			);
