@@ -78,13 +78,14 @@ impl<M: StateMachine> Candidate<M> {
 
 		tracing::debug!(
 			term = term,
+			log = %log_position,
 			group = %Short(shared.group_id()),
 			network = %Short(shared.network_id()),
 			"starting new leader elections",
 		);
 
 		// Broadcast the `RequestVote` message to all bonded peers in the group.
-		let requested_from = shared.bonds().broadcast_raft_message::<M>(request);
+		let requested_from = shared.bonds().broadcast_raft::<M>(request);
 
 		let requested_from =
 			requested_from.into_iter().chain(once(candidate)).collect();
@@ -142,7 +143,7 @@ impl<M: StateMachine> Candidate<M> {
 				network = %Short(shared.network_id()),
 				committee_size = self.requested_from.len(),
 				votes_granted = self.votes_granted.len(),
-				"quorum not reached, starting new election",
+				"quorum not reached",
 			);
 
 			return Poll::Ready(ControlFlow::Break(

@@ -81,7 +81,7 @@ impl<M: StateMachine> Catchup<M> {
 		// them.
 		shared
 			.bonds()
-			.broadcast_raft_message::<M>(Message::Sync(Sync::DiscoveryRequest));
+			.broadcast_raft::<M>(Message::Sync(Sync::DiscoveryRequest));
 
 		Self {
 			gap,
@@ -159,6 +159,7 @@ impl<M: StateMachine> Catchup<M> {
 		self.clean_timed_out_fetches(cx, shared);
 
 		tracing::info!(
+			leader = ?shared.leader(),
 			group = %Short(self.ids.0),
 			network = %Short(self.ids.1),
 			gap = ?self.gap,
@@ -193,7 +194,7 @@ impl<M: StateMachine> Catchup<M> {
 		}
 
 		for peer in expired {
-			// removed the peer that timed out from the available list
+			// remove the peer that timed out from the available peers list
 			self.pending.remove(&peer);
 			self.available.remove(&peer);
 
@@ -204,7 +205,7 @@ impl<M: StateMachine> Catchup<M> {
 			// the next tick.
 			shared
 				.bonds()
-				.send_raft_message_to::<M>(Sync::<M::Command>::DiscoveryRequest, peer);
+				.send_raft_to::<M>(Sync::<M::Command>::DiscoveryRequest, peer);
 		}
 	}
 

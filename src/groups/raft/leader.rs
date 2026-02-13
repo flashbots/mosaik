@@ -176,7 +176,7 @@ impl<M: StateMachine> Leader<M> {
 				if let Some(request_id) = request_id {
 					// the follower is interested in knowing the log index assigned to
 					// this command asap.
-					shared.bonds().send_raft_message_to::<M>(
+					shared.bonds().send_raft_to::<M>(
 						Message::Forward(Forward::ExecuteAck {
 							request_id,
 							log_index,
@@ -364,7 +364,7 @@ impl<M: StateMachine> Leader<M> {
 		});
 
 		// broadcast the new log entries to all followers.
-		let followers = shared.bonds().broadcast_raft_message::<M>(message);
+		let followers = shared.bonds().broadcast_raft::<M>(message);
 
 		if !followers.is_empty() {
 			let range = prev_pos.index() + 1..=prev_pos.index() + count as u64;
@@ -404,7 +404,7 @@ impl<M: StateMachine> Leader<M> {
 
 		shared
 			.bonds()
-			.broadcast_raft_message::<M>(Message::AppendEntries(heartbeat));
+			.broadcast_raft::<M>(Message::AppendEntries(heartbeat));
 
 		self.reset_heartbeat_timeout();
 		Poll::Ready(())

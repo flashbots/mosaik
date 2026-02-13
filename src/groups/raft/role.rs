@@ -150,7 +150,7 @@ impl<M: StateMachine> Role<M> {
 	fn maybe_step_down<S: Storage<M::Command>>(
 		&mut self,
 		message: &Message<M::Command>,
-		shared: &Shared<S, M>,
+		shared: &mut Shared<S, M>,
 	) {
 		let Some(message_term) = message.term() else {
 			// If the message does not carry a term, it cannot trigger a step down.
@@ -192,6 +192,25 @@ impl<M: StateMachine> Role<M> {
 			// notify status listeners that we have a new leader.
 			shared.update_leader(message.leader());
 		}
+
+		// if we're a leader and we're receiving a message with the same term from
+		// another leader, this means that we need to trigger new elections with a
+		// higher term.
+		if let Message::AppendEntries(request) = message
+			&& matches!(self, Self::Leader(_))
+			&& request.term == self.term()
+		{
+			tracing::warn!(
+				term = request.term,
+				other_leader = %Short(request.leader),
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
+				"detected conflict with another leader in the same term, triggering new elections",
+			);
+
+			*self = Candidate::<M>::new(self.term() + 1, shared).into();
+			shared.update_leader(None);
+		}
 	}
 
 	/// Handles incoming `RequestVote` messages by deciding whether to cast a vote
@@ -231,7 +250,7 @@ impl<M: StateMachine> Role<M> {
 
 		let bonds = shared.group.bonds.clone();
 		let vote_with = |vote: Vote| {
-			bonds.send_raft_message_to::<M>(
+			bonds.send_raft_to::<M>(
 				Message::RequestVoteResponse(RequestVoteResponse {
 					vote,
 					term: request.term,
@@ -243,12 +262,28 @@ impl<M: StateMachine> Role<M> {
 		if !shared.should_vote(request.term, request.candidate) {
 			// We have already voted for another candidate in the same term
 			vote_with(Vote::Denied);
+
+			tracing::debug!(
+				candidate = %Short(request.candidate),
+				term = request.term,
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
+				"denying vote, already voted for another candidate in this term",
+			);
 			return true;
 		}
 
 		if request.log_position.is_behind(&local_cursor) {
 			// The candidate's log is not as up-to-date as ours, deny.
 			vote_with(Vote::Denied);
+
+			tracing::debug!(
+				candidate = %Short(request.candidate),
+				term = request.term,
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
+				"denying vote because our log is ahead",
+			);
 			return true;
 		}
 
@@ -263,12 +298,32 @@ impl<M: StateMachine> Role<M> {
 			// so we don't inflate the voting committee with lagging nodes but also
 			// don't object to the candidate winning the election and becoming leader.
 			vote_with(Vote::Abstained);
+
+			tracing::debug!(
+				candidate = %Short(request.candidate),
+				term = request.term,
+				candidate_log = %request.log_position,
+				local_log = %local_cursor,
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
+				"abstained from voting because we are behind their log",
+			);
 		} else {
 			// if we are fully caught up with the candidate's log, and we are ready to
 			// become voting followers, then we grant a full vote to the candidate and
 			// the candidate upon winning the elections will consider us to be part of
 			// the initial quorum.
 			vote_with(Vote::Granted);
+
+			tracing::debug!(
+				candidate = %Short(request.candidate),
+				term = request.term,
+				candidate_log = %request.log_position,
+				local_log = %local_cursor,
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
+				"granting vote to candidate",
+			);
 		}
 
 		true
@@ -306,7 +361,7 @@ impl<M: StateMachine> Role<M> {
 				);
 
 				let response = Message::Sync(Sync::DiscoveryResponse { available });
-				shared.bonds().send_raft_message_to::<M>(response, sender);
+				shared.bonds().send_raft_to::<M>(response, sender);
 
 				true
 			}

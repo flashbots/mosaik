@@ -257,7 +257,7 @@ impl<M: StateMachine> Follower<M> {
 
 		let (forward_ack_tx, forward_ack_rx) = oneshot::channel();
 		self.forwarded_commands.insert(request_id, forward_ack_tx);
-		shared.bonds().send_raft_message_to::<M>(message, leader);
+		shared.bonds().send_raft_to::<M>(message, leader);
 
 		let expired_sender = self.expired_commands.sender().clone();
 		let forward_timeout = shared.intervals().forward_timeout;
@@ -408,7 +408,7 @@ impl<M: StateMachine> Follower<M> {
 			// confirm to the leader that we have appended the entries and report the
 			// index of our last log entry
 			let local_position = shared.log.last();
-			shared.bonds().send_raft_message_to::<M>(
+			shared.bonds().send_raft_to::<M>(
 				Message::AppendEntriesResponse(AppendEntriesResponse {
 					term: self.term(),
 					vote: Vote::Granted,

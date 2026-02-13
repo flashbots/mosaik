@@ -456,10 +456,8 @@ impl Bonds {
 		]);
 	}
 
-	/// Sends a raft protocol message to all bonded peers in the group except the
-	/// specified peer ids. Returns the list of peer ids to which the message was
-	/// sent.
-	pub(super) fn broadcast_raft_message<M: StateMachine>(
+	/// Sends a raft protocol message to all bonded peers.
+	pub(super) fn broadcast_raft<M: StateMachine>(
 		&self,
 		message: impl Into<raft::Message<M::Command>>,
 	) -> Vec<PeerId> {
@@ -469,7 +467,7 @@ impl Bonds {
 	}
 
 	/// Sends a raft protocol message to the specified bonded peer.
-	pub(super) fn send_raft_message_to<M: StateMachine>(
+	pub(super) fn send_raft_to<M: StateMachine>(
 		&self,
 		message: impl Into<raft::Message<M::Command>>,
 		to: PeerId,
