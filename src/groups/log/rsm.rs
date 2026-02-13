@@ -49,6 +49,18 @@ pub trait StateMachine: Send + Sync + Unpin + 'static {
 	/// group. The query is executed against the current state of the state
 	/// machine and returns a result without modifying the state.
 	fn query(&self, query: Self::Query) -> Self::QueryResult;
+
+	/// The recommended maximum number of commands to include in a single
+	/// follower-catchup response.
+	///
+	/// This value is used when followers lag behind the leader and need to catch
+	/// up by receiving historical commands from other group members.
+	///
+	/// As the author of the state machine implementation, try to keep this value
+	/// so that individual chunks are in the 1-2 MB range.
+	fn catchup_chunk_size(&self) -> usize {
+		1000
+	}
 }
 
 pub trait Command:

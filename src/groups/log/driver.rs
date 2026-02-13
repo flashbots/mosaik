@@ -108,4 +108,9 @@ where
 		}
 		self.committed
 	}
+
+	/// Returns a reference to the state machine.
+	pub const fn machine(&self) -> &M {
+		&self.machine
+	}
 }

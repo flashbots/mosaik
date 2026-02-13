@@ -125,12 +125,39 @@ impl<M: StateMachine> Follower<M> {
 	/// Returns `Poll::Ready(ControlFlow::Break(new_role))` if the role should
 	/// transition to a new state (e.g., candidate) or `Poll::Pending` if it
 	/// should continue waiting in the follower state.
+	///
+	/// When the follower is in catch-up mode, it suppresses the election timeout
+	/// and focuses on catching up with the leader's log. During this time, it
+	/// will not trigger elections even if it does not receive messages from the
+	/// leader, allowing other in-sync nodes to trigger elections if the leader
+	/// is unavailable.
 	pub fn poll_next_tick<S: Storage<M::Command>>(
 		&mut self,
 		cx: &mut Context<'_>,
 		shared: &mut Shared<S, M>,
 	) -> Poll<ControlFlow<Role<M>>> {
 		self.clean_expired_forwarded_commands(cx);
+
+		if let Some(catchup) = self.catchup.as_mut() {
+			// if we're in catch-up mode, suppress the election timeouts because we
+			// can't win elections anyway with a stale log. Focus on catching up and
+			// let other in-sync nodes trigger elections if the leader is
+			// unavailable.
+			match catchup.poll_next_tick(cx, shared) {
+				Poll::Ready(ControlFlow::Break(())) => {
+					// we're caught up and in sync with the leader, turn off catch-up
+					// mode and start watching the election timeout again for any
+					// potential leader failures.
+					self.catchup = None;
+				}
+				// we're still catching up
+				Poll::Ready(ControlFlow::Continue(())) => {
+					return Poll::Ready(ControlFlow::Continue(()));
+				}
+				// we're still catching up
+				Poll::Pending => return Poll::Pending,
+			}
+		}
 
 		if self.election_timeout.as_mut().poll(cx).is_ready() {
 			// election timeout elapsed without hearing from a leader, so we start
@@ -171,12 +198,20 @@ impl<M: StateMachine> Follower<M> {
 			}) => {
 				self.on_forward_command_response(request_id, log_index);
 			}
+
+			// Peers response to our `DiscoveryRequest` messages during the catch-up.
 			Message::Sync(Sync::DiscoveryResponse { available }) => {
 				if let Some(catchup) = self.catchup.as_mut() {
 					catchup.record_availability(available, sender);
 				}
 			}
-			Message::Sync(Sync::FetchEntriesResponse { .. }) => {}
+
+			// Peers response to our `FetchEntriesRequest` messages during catch-up
+			Message::Sync(Sync::FetchEntriesResponse { range, entries }) => {
+				if let Some(catchup) = self.catchup.as_mut() {
+					catchup.receive_entries(sender, range, entries);
+				}
+			}
 			_ => {
 				tracing::warn!(
 					term = self.term(),
@@ -311,7 +346,7 @@ impl<M: StateMachine> Follower<M> {
 				.get_or_insert_with(|| {
 					Catchup::<M>::new(request.prev_log_position, shared)
 				})
-				.buffer_entries(request.prev_log_position, request.entries);
+				.buffer_current_entries(request.prev_log_position, request.entries);
 		}
 	}
 
@@ -328,10 +363,12 @@ impl<M: StateMachine> Follower<M> {
 	/// without receiving a response from the leader within the forward timeout.
 	fn clean_expired_forwarded_commands(&mut self, cx: &mut Context<'_>) {
 		if !self.expired_commands.is_empty() {
-			let mut ids = Vec::with_capacity(self.expired_commands.len());
+			let count = self.expired_commands.len();
+			let mut ids = Vec::with_capacity(count);
+
 			if self
 				.expired_commands
-				.poll_recv_many(cx, &mut ids, 10)
+				.poll_recv_many(cx, &mut ids, count)
 				.is_ready()
 			{
 				for id in ids {

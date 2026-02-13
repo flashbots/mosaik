@@ -5,6 +5,7 @@ use {
 
 mod bonds;
 mod builder;
+mod catchup;
 mod execute;
 mod feed;
 mod leader;

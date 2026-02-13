@@ -16,8 +16,12 @@ use {
 		},
 		primitives::Short,
 	},
-	core::ops::RangeInclusive,
-	std::collections::HashMap,
+	core::{
+		ops::{ControlFlow, RangeInclusive},
+		pin::Pin,
+		task::{Context, Poll},
+	},
+	std::{collections::HashMap, time::Instant},
 };
 
 /// Implements the catch-up mechanism for lagging followers in the Raft
@@ -37,6 +41,12 @@ pub struct Catchup<M: StateMachine> {
 	/// message and the range of log entries they have available for replay.
 	available: HashMap<PeerId, RangeInclusive<Index>>,
 
+	/// In-flight fetches of log entries from peers. There should be at most one
+	/// pending fetch per peer at any given time. Those peers are the ones that
+	/// responded to our `DiscoveryRequest` message and have the relevant log
+	/// entries available for replay.
+	pending: HashMap<PeerId, PendingFetch>,
+
 	/// A buffer of log entries received from the leader while the follower is
 	/// offline and catching up. These entries will be applied to the state
 	/// machine once the follower has fetched any missing entries from peers and
@@ -45,6 +55,10 @@ pub struct Catchup<M: StateMachine> {
 
 	/// Used in logging when we don't have access to the shared state.
 	ids: (GroupId, NetworkId),
+
+	/// Wakers for tasks that are waiting for the catch-up process to make some
+	/// progress.
+	wakers: Vec<std::task::Waker>,
 }
 
 impl<M: StateMachine> Catchup<M> {
@@ -71,6 +85,8 @@ impl<M: StateMachine> Catchup<M> {
 
 		Self {
 			gap,
+			wakers: Vec::new(),
+			pending: HashMap::new(),
 			available: HashMap::new(),
 			buffered_entries: Vec::new(),
 			ids: (*shared.group_id(), *shared.network_id()),
@@ -94,16 +110,114 @@ impl<M: StateMachine> Catchup<M> {
 		);
 
 		self.available.insert(peer, available);
+		self.wake_poll_next_tick();
+	}
+
+	/// Called when we receive a `FetchEntriesResponse` message from a peer in
+	/// response to our `FetchEntriesRequest` message.
+	pub fn receive_entries(
+		&mut self,
+		sender: PeerId,
+		range: RangeInclusive<Index>,
+		entries: Vec<LogEntry<M::Command>>,
+	) {
+		tracing::trace!(
+			range = ?range,
+			count = entries.len(),
+			from = %Short(sender),
+			group = %Short(self.ids.0),
+			network = %Short(self.ids.1),
+			"fetched log entries"
+		);
+
+		self.wake_poll_next_tick();
 	}
 
 	/// Buffers the incoming log entries received from the leader while the
 	/// follower is offline and catching up. These entries will be applied to the
 	/// state machine once the gap is filled.
-	pub fn buffer_entries(
+	pub fn buffer_current_entries(
 		&mut self,
 		_position: Cursor,
 		entries: Vec<LogEntry<M::Command>>,
 	) {
 		self.buffered_entries.extend(entries);
+		self.wake_poll_next_tick();
 	}
+}
+
+impl<M: StateMachine> Catchup<M> {
+	/// Polled by the follower's `poll_next_tick` on every tick while the follower
+	/// is in catch-up mode. This runs at the Group worker loop rate.
+	pub fn poll_next_tick<S: Storage<M::Command>>(
+		&mut self,
+		cx: &mut Context<'_>,
+		shared: &Shared<S, M>,
+	) -> Poll<ControlFlow<()>> {
+		// remove any pending fetches that have timed out without receiving a
+		// response from the peer.
+		self.clean_timed_out_fetches(cx, shared);
+
+		tracing::info!(
+			group = %Short(self.ids.0),
+			network = %Short(self.ids.1),
+			gap = ?self.gap,
+			"polling catch-up progress"
+		);
+
+		self.wakers.push(cx.waker().clone());
+
+		Poll::Pending
+	}
+
+	/// Walks through the pending fetches and removes any that have timed out
+	/// without receiving a response from the peer. This allows the follower to
+	/// retry fetching the missing log entries from other peers that have them
+	/// available.
+	fn clean_timed_out_fetches<S: Storage<M::Command>>(
+		&mut self,
+		cx: &mut Context,
+		shared: &Shared<S, M>,
+	) {
+		let mut expired = Vec::new();
+		for (peer, pending) in &mut self.pending {
+			if pending.timeout_fut.as_mut().poll(cx).is_ready() {
+				tracing::info!(
+					peer = %Short(*peer),
+					group = %Short(self.ids.0),
+					network = %Short(self.ids.1),
+					"fetch request timeout"
+				);
+				expired.push(*peer);
+			}
+		}
+
+		for peer in expired {
+			// removed the peer that timed out from the available list
+			self.pending.remove(&peer);
+			self.available.remove(&peer);
+
+			// but still resend a new `DiscoveryRequest` to the peer to check if it's
+			// still available and has the relevant log entries for catch-up, in case
+			// the timeout was just a transient issue. If they respond, they'll be
+			// added back to the available list and we can retry fetching from them on
+			// the next tick.
+			shared
+				.bonds()
+				.send_raft_message_to::<M>(Sync::<M::Command>::DiscoveryRequest, peer);
+		}
+	}
+
+	fn wake_poll_next_tick(&mut self) {
+		for waker in self.wakers.drain(..) {
+			waker.wake();
+		}
+	}
+}
+
+#[derive(Debug)]
+struct PendingFetch {
+	range: RangeInclusive<Index>,
+	timeout_at: Instant,
+	timeout_fut: Pin<Box<tokio::time::Sleep>>,
 }
