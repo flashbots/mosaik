@@ -3,7 +3,7 @@ use {
 		Cursor,
 		log::{Index, Term, rsm::Command},
 	},
-	core::ops::{Range, RangeInclusive},
+	core::ops::RangeInclusive,
 };
 
 /// Defines the storage interface for the Raft log.
@@ -38,7 +38,7 @@ pub trait Storage<C: Command>: Send + Sync + Unpin + 'static {
 	/// skipped and not included in the returned iterator.
 	fn get_range(
 		&self,
-		range: Range<Index>,
+		range: RangeInclusive<Index>,
 	) -> impl Iterator<Item = (Term, Index, C)> + '_;
 
 	/// Removes all log entries starting from the specified index (inclusive) to

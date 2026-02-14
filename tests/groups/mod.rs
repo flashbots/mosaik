@@ -1,4 +1,5 @@
 use {
+	core::num::NonZero,
 	futures::{StreamExt, stream::FuturesUnordered},
 	mosaik::{PeerId, groups::StateMachine, primitives::UniqueId, unique_id},
 	serde::{Deserialize, Serialize},
@@ -11,9 +12,26 @@ mod execute;
 mod feed;
 mod leader;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Counter {
 	value: i64,
+	chunk_size: NonZero<u64>,
+}
+
+impl Default for Counter {
+	fn default() -> Self {
+		Self {
+			value: 0,
+			chunk_size: NonZero::new(1000).unwrap(),
+		}
+	}
+}
+
+impl Counter {
+	pub const fn with_chunk_size(mut self, chunk_size: u64) -> Self {
+		self.chunk_size = NonZero::new(chunk_size).unwrap();
+		self
+	}
 }
 
 impl StateMachine for Counter {
@@ -40,6 +58,10 @@ impl StateMachine for Counter {
 		match query {
 			CounterValueQuery => self.value,
 		}
+	}
+
+	fn catchup_chunk_size(&self) -> NonZero<u64> {
+		self.chunk_size
 	}
 }
 

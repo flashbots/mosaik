@@ -209,6 +209,10 @@ pub struct IntervalsConfig {
 	/// receiving an acknowledgment with the assigned log index.
 	#[builder(default = "Duration::from_secs(2)")]
 	pub forward_timeout: Duration,
+
+	/// The timeout duration for fetching missing log entries during catch-up.
+	#[builder(default = "Duration::from_secs(25)")]
+	pub catchup_chunk_timeout: Duration,
 }
 
 impl Default for IntervalsConfig {

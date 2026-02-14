@@ -203,7 +203,7 @@ impl<M: StateMachine> Follower<M> {
 			// Peers response to our `DiscoveryRequest` messages during the catch-up.
 			Message::Sync(Sync::DiscoveryResponse { available }) => {
 				if let Some(catchup) = self.catchup.as_mut() {
-					catchup.record_availability(available, sender);
+					catchup.receive_availability(available, sender);
 				}
 			}
 
@@ -353,12 +353,11 @@ impl<M: StateMachine> Follower<M> {
 
 			// buffer the leader's inflight entries while we're catching up on the
 			// log.
-			self
-				.catchup
-				.get_or_insert_with(|| {
-					Catchup::<M>::new(request.prev_log_position, shared)
-				})
-				.buffer_current_entries(request.prev_log_position, request.entries);
+			if let Some(catchup) = self.catchup.as_mut() {
+				catchup.buffer(request);
+			} else {
+				self.catchup = Some(Catchup::new(request, shared));
+			}
 		}
 	}
 

@@ -1,3 +1,5 @@
+use tracing_subscriber::EnvFilter;
+
 #[ctor::ctor]
 fn init_test_logging() {
 	use tracing_subscriber::{filter::filter_fn, prelude::*};
@@ -40,6 +42,7 @@ fn init_test_logging() {
 
 		let _ = tracing_subscriber::registry()
 			.with(tracing_subscriber::fmt::layer())
+			.with(EnvFilter::from_default_env())
 			.with(filter_fn(move |metadata| {
 				metadata.level() <= &level
 					&& (unmute

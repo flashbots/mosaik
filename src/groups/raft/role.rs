@@ -8,7 +8,7 @@ use {
 				candidate::Candidate,
 				follower::Follower,
 				leader::Leader,
-				protocol::{AppendEntries, RequestVoteResponse, Sync, Vote},
+				protocol::{AppendEntries, LogEntry, RequestVoteResponse, Sync, Vote},
 				shared::Shared,
 			},
 		},
@@ -31,6 +31,7 @@ use {
 /// voting for candidates, etc.) are handled at the `Role` level, and messages
 /// that are specific to each role are forwarded to the role-specific message
 #[derive(Debug, Display, From)]
+#[allow(clippy::large_enum_variant)]
 pub enum Role<M: StateMachine> {
 	/// Passive state: responds to messages from candidates and leaders.
 	/// If election timeout elapses without receiving `AppendEntries` from
@@ -413,7 +414,7 @@ impl<M: StateMachine> Role<M> {
 					range = ?available,
 					group = %shared.group_id(),
 					network = %shared.network_id(),
-					"logs availability confirmed to"
+					"logs availability confirmed for"
 				);
 
 				let response = Message::Sync(Sync::DiscoveryResponse { available });
@@ -421,7 +422,26 @@ impl<M: StateMachine> Role<M> {
 
 				true
 			}
-			Sync::FetchEntriesRequest { range: _ } => true,
+			Sync::FetchEntriesRequest { range } => {
+				tracing::trace!(
+					peer = %Short(sender),
+					range = ?range,
+					group = %shared.group_id(),
+					network = %shared.network_id(),
+					"sending log entries for"
+				);
+
+				let entries = shared.log.get_range(range.clone());
+				let response = Message::Sync(Sync::FetchEntriesResponse {
+					range: range.clone(),
+					entries: entries
+						.map(|(term, _, command)| LogEntry { term, command })
+						.collect(),
+				});
+				shared.bonds().send_raft_to::<M>(response, sender);
+
+				true
+			}
 			Sync::DiscoveryResponse { .. } | Sync::FetchEntriesResponse { .. } => {
 				// these messages are handled by the follower role, so we return false
 				// to forward them to the role-specific message handlers.

@@ -10,6 +10,7 @@ use {
 /// An asynchronous work queue that manages a set of futures to be executed
 /// concurrently. This is often used in worker loops to enqueue async tasks that
 /// need to be processed without blocking the main event loop.
+#[derive(Debug)]
 pub struct AsyncWorkQueue<T: Send + 'static = ()>(
 	FuturesUnordered<Pin<Box<dyn futures::Future<Output = T> + Send + 'static>>>,
 );

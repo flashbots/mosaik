@@ -8,7 +8,7 @@
 
 use {
 	crate::primitives::UniqueId,
-	core::fmt::Debug,
+	core::{fmt::Debug, num::NonZero},
 	serde::{Serialize, de::DeserializeOwned},
 };
 
@@ -58,8 +58,8 @@ pub trait StateMachine: Send + Sync + Unpin + 'static {
 	///
 	/// As the author of the state machine implementation, try to keep this value
 	/// so that individual chunks are in the 1-2 MB range.
-	fn catchup_chunk_size(&self) -> usize {
-		1000
+	fn catchup_chunk_size(&self) -> NonZero<u64> {
+		NonZero::new(1000).unwrap()
 	}
 }
 

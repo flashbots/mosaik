@@ -69,6 +69,17 @@ where
 		self.storage.get(index)
 	}
 
+	/// Retrieves a range of log entries from the log, starting from `start`
+	/// and ending at `end` (inclusive). Returns an iterator over the entries in
+	/// the specified range. If any index in the range is out of bounds, it is
+	/// skipped and not included in the returned iterator.
+	pub fn get_range(
+		&self,
+		range: RangeInclusive<Index>,
+	) -> impl Iterator<Item = (Term, Index, M::Command)> + '_ {
+		self.storage.get_range(range)
+	}
+
 	/// Returns the term of the entry at the given index, or None if no entry
 	/// exists at that index. Log entries are indexed starting from 1, so
 	/// `term_at(0)` always returns `Some(0)`.

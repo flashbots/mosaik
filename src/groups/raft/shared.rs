@@ -94,11 +94,6 @@ where
 		self.group.network_id()
 	}
 
-	/// Returns the current leader of the consensus group, if known.
-	pub fn leader(&self) -> Option<PeerId> {
-		self.when().current_leader()
-	}
-
 	/// Updates the leader information in the group state.
 	pub fn update_leader(&self, leader: Option<PeerId>) {
 		self.group.when.update_leader(leader);

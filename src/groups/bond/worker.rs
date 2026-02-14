@@ -311,13 +311,6 @@ impl BondWorker {
 	/// Received an update about a change to a group member's peer entry.
 	fn on_peer_entry_update(&self, entry: SignedPeerEntry) {
 		if self.group.discovery.feed(entry.clone()) {
-			tracing::trace!(
-				network = %self.group.network_id(),
-				peer = %Short(self.link.remote_id()),
-				group = %Short(self.group.group_id()),
-				"peer entry update received",
-			);
-
 			self.peer.send_modify(|existing| *existing = entry);
 		}
 	}

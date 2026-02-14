@@ -1,6 +1,9 @@
 #![allow(clippy::cast_possible_truncation)]
 
-use crate::groups::{Command, Cursor, Index, Storage, Term};
+use {
+	crate::groups::{Command, Cursor, Index, Storage, Term},
+	core::ops::RangeInclusive,
+};
 
 /// An in-memory implementation of the `Storage` trait replicated log storage in
 /// groups. This storage implementation is compatible with arbitrary command
@@ -38,17 +41,17 @@ impl<C: Command> Storage<C> for InMemory<C> {
 
 	fn get_range(
 		&self,
-		range: std::ops::Range<Index>,
+		range: RangeInclusive<Index>,
 	) -> impl Iterator<Item = (Term, Index, C)> + '_ {
-		let start: usize = range.start.prev().into();
-		let end: usize = range.end.prev().into();
+		let start: usize = range.start().prev().into();
+		let end: usize = range.end().prev().into();
 
 		self
 			.entries
 			.iter()
 			.enumerate()
 			.skip(start)
-			.take(end - start)
+			.take(end - start + 1)
 			.map(move |(i, (cmd, term))| (*term, (start + i + 1).into(), cmd.clone()))
 	}
 
