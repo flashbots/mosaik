@@ -1,7 +1,7 @@
 use {
 	crate::{
 		groups::{Counter, CounterCommand, CounterValueQuery},
-		utils::{discover_all, sleep_s, timeout_after, timeout_s},
+		utils::{discover_all, timeout_after, timeout_s},
 	},
 	mosaik::*,
 };
@@ -65,13 +65,17 @@ async fn one_leader_one_follower() -> anyhow::Result<()> {
 		.with_state_machine(Counter::default())
 		.join();
 
-	sleep_s(10).await;
 	discover_all([&n0, &n1]).await?;
 
-	// wait for g1 to recognize the existing leader and catch up with the log
+	// wait for g1 to recognize the existing leader
 	timeout_after(timeout, g1.when().leader_is(n0.local().id())).await?;
 	assert_eq!(g1.leader(), Some(n0.local().id()));
+	tracing::info!("g1 recognizes g0 as leader");
+
+	// wait for g1 to catch up with the log state of g0
+	timeout_s(10, g1.when().log().reaches(g0.log_position().index())).await?;
 	assert_eq!(g1.committed(), 4);
+	tracing::info!("g1 caught up with the log state of g0");
 
 	Ok(())
 }

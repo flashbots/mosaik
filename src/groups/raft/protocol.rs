@@ -14,28 +14,38 @@ use {
 };
 
 /// Raft messages as defined in the Raft consensus algorithm.
-#[derive(Debug, Clone, Serialize, Deserialize, From)]
+#[derive(Debug, Clone, Display, Serialize, Deserialize, From)]
 #[serde(bound(deserialize = "C: DeserializeOwned"))]
 pub enum Message<C: Command> {
 	/// Sent by leaders to assert authority (heartbeat) and replicate log
 	/// entries. When `entries` is empty, this is a pure heartbeat.
+	#[display(
+		"AppendEntries[t={}/pos={}/n={}/c={}/{}]/",
+		_0.term, _0.prev_log_position, _0.entries.len(), 
+		_0.leader_commit, Short(_0.leader)
+	)]
 	AppendEntries(AppendEntries<C>),
 
 	/// Response to an `AppendEntries` message.
+	#[display("AppendEntriesResponse[t={}/success={}]", _0.term, _0.vote)]
 	AppendEntriesResponse(AppendEntriesResponse),
 
 	/// Sent by candidates to gather votes during an election.
+	#[display("RequestVote[t={}/log={}]@{}", _0.term, _0.log_position, Short(_0.candidate))]
 	RequestVote(RequestVote),
 
 	/// Response to a `RequestVote` message.
+	#[display("RequestVoteResponse[t={}/{}]", _0.term, _0.vote)]
 	RequestVoteResponse(RequestVoteResponse),
 
 	/// Messages related to forwarding client commands and queries from followers
 	/// to the leader and acknowledging them.
+	#[display("Forward(..)")]
 	Forward(Forward<C>),
 
 	/// Messages related to the log synchronization process during catch-up of
 	/// lagging followers.
+	#[display("Sync(..)")]
 	Sync(Sync<C>),
 }
 

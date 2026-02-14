@@ -1,5 +1,6 @@
 use {
-	mosaik::{groups::StateMachine, primitives::UniqueId, unique_id},
+	futures::{StreamExt, stream::FuturesUnordered},
+	mosaik::{PeerId, groups::StateMachine, primitives::UniqueId, unique_id},
 	serde::{Deserialize, Serialize},
 };
 
@@ -50,3 +51,26 @@ enum CounterCommand {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CounterValueQuery;
+
+/// Resolves when all groups have converged on the same leader and returns the
+/// ID of the leader.
+async fn leaders_converged<M: StateMachine>(
+	groups: impl IntoIterator<Item = &mosaik::Group<M>>,
+) -> PeerId {
+	let groups = groups.into_iter().collect::<Vec<_>>();
+	assert!(!groups.is_empty());
+
+	loop {
+		let leaders = groups.iter().map(|g| g.leader()).collect::<Vec<_>>();
+
+		if let Some(first_leader) = leaders.first().and_then(|l| *l) {
+			if leaders.iter().all(|&l| l == Some(first_leader)) {
+				return first_leader;
+			}
+		}
+
+		let mut changes: FuturesUnordered<_> =
+			groups.iter().map(|g| g.when().leader_changed()).collect();
+		changes.next().await.unwrap();
+	}
+}

@@ -22,6 +22,9 @@ macro_rules! impl_pos_type {
 			pub const fn is_zero(&self) -> bool { self.0 == 0 }
 			#[must_use] pub const fn prev(&self) -> Self { Self(self.0.saturating_sub(1)) }
 			#[must_use] pub const fn next(&self) -> Self { Self(self.0.saturating_add(1)) }
+			pub fn as_usize(&self) -> usize {
+				usize::try_from(self.0).expect(concat!(stringify!($name), " value overflowed usize"))
+			}
 		}
 
 		impl From<usize> for $name {
@@ -143,7 +146,7 @@ impl Cursor {
 	}
 
 	pub fn is_behind(&self, other: &Self) -> bool {
-		(self.term() < other.term()) || (self.index() < other.index())
+		self.cmp(other) == Ordering::Less
 	}
 }
 

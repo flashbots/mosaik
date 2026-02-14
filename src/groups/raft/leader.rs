@@ -7,7 +7,7 @@ use {
 			raft::{
 				Message,
 				protocol::{AppendEntries, Forward, LogEntry, Vote},
-				role::Role,
+				role::{Role, RoleHandlerError},
 				shared::Shared,
 			},
 		},
@@ -137,12 +137,15 @@ impl<M: StateMachine> Leader<M> {
 	/// As a leader we are only interested in receiving `AppendEntriesResponse`
 	/// messages from followers to track their replication progress and update our
 	/// commit index.
+	///
+	/// Returns Ok(()) if the message was handled by the leader, or Err(message)
+	/// if the message was unexpected and was not handled by this role.
 	pub fn receive_protocol_message<S: Storage<M::Command>>(
 		&mut self,
 		message: Message<M::Command>,
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
-	) {
+	) -> Result<(), RoleHandlerError<M>> {
 		match message {
 			// sent by followers in response to our `AppendEntries` messages.
 			Message::AppendEntriesResponse(response) => {
@@ -166,6 +169,14 @@ impl<M: StateMachine> Leader<M> {
 				}
 			}
 
+			// if we're a leader and we're receiving a message with the same term from
+			// another leader, this means that the group has two rival leaders, this
+			// indicates a network partition. Trigger new elections with a higher
+			// term.
+			Message::AppendEntries(request) if request.term == self.term() => {
+				return Err(RoleHandlerError::RivalLeader(request));
+			}
+
 			// sent by followers that are forwarding client commands to the leader.
 			Message::Forward(Forward::Execute {
 				commands,
@@ -187,17 +198,12 @@ impl<M: StateMachine> Leader<M> {
 			}
 
 			// all other message types are unexpected in the leader state. ignore.
-			_ => {
-				tracing::warn!(
-					local_term = %self.term(),
-					message_term = ?message.term(),
-					group = %Short(shared.group_id()),
-					network = %Short(shared.network_id()),
-					sender = %Short(sender),
-					"unexpected message type received by leader",
-				);
+			message => {
+				return Err(RoleHandlerError::<M>::Unexpected(message));
 			}
 		}
+
+		Ok(())
 	}
 
 	/// Adds a new client command to the list of pending commands that will be

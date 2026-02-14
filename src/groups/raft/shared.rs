@@ -13,7 +13,6 @@ use {
 			log::{self, Term},
 			state::WorkerState,
 		},
-		primitives::Short,
 	},
 	std::sync::Arc,
 };
@@ -34,6 +33,10 @@ where
 
 	/// The last vote casted by the local node in leader elections.
 	pub last_vote: Option<(Term, PeerId)>,
+
+	/// Wakers for tasks that are waiting for changes in the shared state, such
+	/// as leadership changes or log commitment.
+	pub wakers: Vec<std::task::Waker>,
 }
 
 impl<S, M> Shared<S, M>
@@ -48,8 +51,9 @@ where
 	) -> Self {
 		Self {
 			group,
-			log: log::Driver::new(storage, state_machine),
 			last_vote: None,
+			log: log::Driver::new(storage, state_machine),
+			wakers: Vec::new(),
 		}
 	}
 
@@ -129,7 +133,7 @@ where
 
 	/// Called when we receive a `RequestVote` message from a candidate. This
 	/// checks if we have already voted for another candidate in the same term.
-	pub fn should_vote(&self, term: Term, candidate: PeerId) -> bool {
+	pub fn can_vote(&self, term: Term, candidate: PeerId) -> bool {
 		let Some((last_term, last_candidate)) = self.last_vote else {
 			// If we haven't casted any vote yet, we can vote for the candidate.
 			return true;
@@ -155,15 +159,17 @@ where
 	/// Records the fact that we casted a vote for the given candidate in this
 	/// term. This is used to prevent us from voting for multiple candidates in
 	/// the same term.
-	pub fn cast_vote(&mut self, term: Term, candidate: PeerId) {
+	pub const fn save_vote(&mut self, term: Term, candidate: PeerId) {
 		self.last_vote = Some((term, candidate));
+	}
 
-		tracing::debug!(
-			candidate = %Short(candidate),
-			term = %term,
-			group = %Short(self.group_id()),
-			network = %Short(self.network_id()),
-			"casted vote for",
-		);
+	pub fn add_waker(&mut self, waker: std::task::Waker) {
+		self.wakers.push(waker);
+	}
+
+	pub fn wake_all(&mut self) {
+		for waker in self.wakers.drain(..) {
+			waker.wake();
+		}
 	}
 }

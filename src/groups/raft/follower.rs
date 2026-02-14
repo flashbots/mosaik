@@ -10,7 +10,7 @@ use {
 				candidate::Candidate,
 				catchup::Catchup,
 				protocol::{AppendEntries, AppendEntriesResponse, Forward, Sync, Vote},
-				role::Role,
+				role::{Role, RoleHandlerError},
 				shared::Shared,
 			},
 		},
@@ -181,13 +181,14 @@ impl<M: StateMachine> Follower<M> {
 	/// - `Sync::FetchEntriesResponse` when in catch-up mode.
 	///
 	/// All other messages (e.g. `RequestVote` from candidates) are handled in the
-	/// shared logic that is common to all roles.
+	/// shared logic that is common to all roles and will be returned as an error
+	/// if they are unexpected for this role.
 	pub fn receive_protocol_message<S: Storage<M::Command>>(
 		&mut self,
 		message: Message<M::Command>,
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
-	) {
+	) -> Result<(), RoleHandlerError<M>> {
 		match message {
 			Message::AppendEntries(request) => {
 				self.on_append_entries(request, sender, shared);
@@ -212,16 +213,33 @@ impl<M: StateMachine> Follower<M> {
 					catchup.receive_entries(sender, range, entries);
 				}
 			}
-			_ => {
-				tracing::warn!(
-					term = %self.term(),
-					sender = %Short(sender),
-					group = %Short(shared.group_id()),
-					network = %Short(shared.network_id()),
-					"unexpected message in follower role: {message:?}",
-				);
+			message => {
+				return Err(RoleHandlerError::<M>::Unexpected(message));
 			}
 		}
+
+		Ok(())
+	}
+
+	/// Resets the election timeout.
+	///
+	/// Raft paper 5.2: If election timeout elapses without receiving
+	/// `AppendEntries` RPC from current leader or granting vote to candidate:
+	/// convert to candidate
+	///
+	/// Voting happens at the role level, so we need to expose this method to
+	/// allow `Role` to reset our timeout as a follower in `maybe_cast_vote`.
+	pub fn reset_election_timeout<S: Storage<M::Command>>(
+		&mut self,
+		shared: &Shared<S, M>,
+	) {
+		let next_election_timeout =
+			Instant::now() + shared.intervals().election_timeout();
+
+		self
+			.election_timeout
+			.as_mut()
+			.reset(next_election_timeout.into());
 	}
 
 	/// Forwards the command to the current leader and returns a future that
@@ -287,13 +305,7 @@ impl<M: StateMachine> Follower<M> {
 
 		// each valid `AppendEntries` message from a leader resets the election
 		// timeout and updates the current leader for this follower
-		let next_election_timeout =
-			Instant::now() + shared.intervals().election_timeout();
-
-		self
-			.election_timeout
-			.as_mut()
-			.reset(next_election_timeout.into());
+		self.reset_election_timeout(shared);
 
 		// check the consistency of the incoming `AppendEntries` message with our
 		// local log state and if we need to catch up before we can confirm this

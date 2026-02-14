@@ -1,6 +1,6 @@
 use {
 	crate::{
-		groups::{Counter, CounterCommand},
+		groups::{Counter, CounterCommand, leaders_converged},
 		utils::{discover_all, timeout_after, timeout_s},
 	},
 	mosaik::{primitives::Short, *},
@@ -147,25 +147,37 @@ async fn rivals_with_same_log_pos() -> anyhow::Result<()> {
 	assert_eq!(g1.committed(), 0);
 	tracing::info!("n1 ({}) self-elected as leader", Short(n1.local().id()));
 
+	// let n2 also join the group and don't do any discovery, they should both
+	// think they are the only members of the group and self-elect as leaders,
+	// creating a rivalry.
+	let n2 = Network::new(network_id).await?;
+	let g2 = n2.groups().with_key(group_key).join();
+
+	timeout_after(timeout, g2.when().is_leader()).await?;
+	assert_eq!(g2.leader(), Some(n2.local().id()));
+	assert_eq!(g2.committed(), 0);
+	tracing::info!("n2 ({}) self-elected as leader", Short(n2.local().id()));
+
 	// make them discover each other and they should detect the rivalry
-	discover_all([&n0, &n1]).await?;
+	discover_all([&n0, &n1, &n2]).await?;
 
-	let new_leader = tokio::select! {
-		new = g0.when().leader_changed() => new,
-		new = g1.when().leader_changed() => new,
-	};
-
-	tracing::info!(
-		"Rivalry detected, new leader elected: {}",
-		Short(new_leader)
-	);
+	// wait for all nodes to detect the rivalry and converge on the same new
+	// leader.
+	let new_leader = timeout_s(10, leaders_converged([&g0, &g1, &g2])).await?;
 
 	// both sides should now recognize the new leader and step down to followers.
 	timeout_s(2, g0.when().leader_is(new_leader)).await?;
 	timeout_s(2, g1.when().leader_is(new_leader)).await?;
+	timeout_s(2, g2.when().leader_is(new_leader)).await?;
 
 	assert_eq!(g0.leader(), Some(new_leader));
 	assert_eq!(g1.leader(), Some(new_leader));
+	assert_eq!(g2.leader(), Some(new_leader));
+
+	tracing::info!(
+		"Rivalry resolved, new leader elected: {}",
+		Short(new_leader)
+	);
 
 	Ok(())
 }
@@ -232,16 +244,45 @@ async fn rivals_with_different_log_pos() -> anyhow::Result<()> {
 	assert_eq!(g1.committed(), 0);
 	tracing::info!("n1 ({}) self-elected as leader", Short(n1.local().id()));
 
+	// n1 has a lower log position than n0, so when they discover each other, n0
+	// should win the rivalry and n1 should step down to follower.
+	let index = g1.execute(CounterCommand::Increment(1)).await?;
+	assert_eq!(index, 1);
+	timeout_s(3, g1.when().committed().reaches(1)).await?;
+	assert_eq!(g1.committed(), 1);
+	tracing::info!(
+		"n1 ({}) advanced log position to {}",
+		Short(n1.local().id()),
+		g1.log_position()
+	);
+
+	// let n2 also join the group and don't do any discovery, they should both
+	// think they are the only members of the group and self-elect as leaders,
+	// creating a rivalry.
+	let n2 = Network::new(network_id).await?;
+	let g2 = n2
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	timeout_after(timeout, g2.when().is_leader()).await?;
+	assert_eq!(g2.leader(), Some(n2.local().id()));
+	assert_eq!(g2.committed(), 0);
+	tracing::info!("n2 ({}) self-elected as leader", Short(n2.local().id()));
+
 	// make them discover each other and they should detect the rivalry
 	// n0 should win since it has a higher log position.
-	discover_all([&n0, &n1]).await?;
+	discover_all([&n0, &n1, &n2]).await?;
 
 	// both sides should now recognize the new leader and step down to followers.
 	timeout_s(10, g0.when().leader_is(n0.local().id())).await?;
 	timeout_s(10, g1.when().leader_is(n0.local().id())).await?;
+	timeout_s(10, g2.when().leader_is(n0.local().id())).await?;
 
 	assert_eq!(g0.leader(), Some(n0.local().id()));
 	assert_eq!(g1.leader(), Some(n0.local().id()));
+	assert_eq!(g2.leader(), Some(n0.local().id()));
 
 	tracing::info!(
 		"Rivalry detected, n0 ({}) wins with higher log position {}",
