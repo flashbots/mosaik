@@ -417,7 +417,7 @@ where
 							network = %state.local.network_id(),
 							peer = %Short(peer_id),
 							group = %Short(state.group_id()),
-							"bonding with group peer failed",
+							"bonding failed",
 						);
 					}
 				}

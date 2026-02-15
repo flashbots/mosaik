@@ -294,7 +294,7 @@ impl BondWorker {
 		if let Err(e) = self.events_tx.send(BondEvent::Raft(message))
 			&& !self.cancel.is_cancelled()
 		{
-			tracing::debug!(
+			tracing::trace!(
 				error = %e,
 				network = %self.group.network_id(),
 				peer = %Short(self.link.remote_id()),

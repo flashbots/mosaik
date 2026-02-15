@@ -470,19 +470,19 @@ async fn close_connection(
 /// variant to indicate that an operation was cancelled.
 #[derive(Debug, thiserror::Error)]
 pub enum LinkError {
-	#[error("Connection error: {0}")]
+	#[error("{0}")]
 	Open(OpenError),
 
-	#[error("Connection error: {0}")]
+	#[error("{0}")]
 	Accept(AcceptError),
 
-	#[error("Receive error: {0}")]
+	#[error("{0}")]
 	Recv(RecvError),
 
-	#[error("Send error: {0}")]
+	#[error("{0}")]
 	Write(SendError),
 
-	#[error("Link closed with unexpected reason: {0}")]
+	#[error("{0}")]
 	Close(CloseError),
 
 	#[error("Operation cancelled")]
@@ -493,7 +493,7 @@ pub enum LinkError {
 /// to a remote peer.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
-	#[error("io error: {0}")]
+	#[error("{0}")]
 	Io(#[from] ConnectError),
 
 	#[error("Operation cancelled")]
@@ -503,7 +503,7 @@ pub enum OpenError {
 /// Errors that occur when accepting a new connection from a remote peer.
 #[derive(Debug, thiserror::Error)]
 pub enum AcceptError {
-	#[error("IO error: {0}")]
+	#[error("{0}")]
 	Io(#[from] IrohAcceptError),
 
 	/// The remote peer is trying to connect with a different ALPN than expected.
@@ -521,15 +521,15 @@ pub enum AcceptError {
 /// Errors that can occur when receiving data from a link.
 #[derive(Debug, thiserror::Error)]
 pub enum RecvError {
-	#[error("Read error: {0}")]
+	#[error("{0}")]
 	Io(#[from] ReadError),
 
 	/// This error indicates that the data was read successfully but failed to
 	/// deserialize it into a typed structure as set in [`Link::recv_as`].
-	#[error("Decode error: {0}")]
+	#[error("{0}")]
 	Decode(#[from] postcard::Error),
 
-	#[error("Unknown error: {0}")]
+	#[error("{0}")]
 	Unknown(#[from] io::Error),
 
 	#[error("Operation cancelled")]
@@ -539,13 +539,13 @@ pub enum RecvError {
 /// Errors that can occur when sending data over a link.
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
-	#[error("encoder error: {0}")]
+	#[error("{0}")]
 	Encode(#[from] postcard::Error),
 
-	#[error("IO error: {0}")]
+	#[error("{0}")]
 	Io(#[from] WriteError),
 
-	#[error("Unknown error: {0}")]
+	#[error("{0}")]
 	Unknown(#[from] io::Error),
 
 	#[error("Operation cancelled")]
@@ -555,10 +555,10 @@ pub enum SendError {
 /// Errors that can occur when closing a link.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CloseError {
-	#[error("Connection already closed: {0}")]
+	#[error("{0}")]
 	AlreadyClosed(ConnectionError),
 
-	#[error("Connection closed with unexpected reason: {0}")]
+	#[error("{0}")]
 	UnexpectedReason(ConnectionError),
 
 	#[error("Operation cancelled")]
