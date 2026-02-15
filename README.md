@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">mosaik</h1>
   <p align="center">
-    A Rust SDK for building self-organizing, leaderless distributed systems.
+    A Rust runtime for building self-organizing, leaderless distributed systems.
   </p>
   <p align="center">
     <a href="https://github.com/flashbots/mosaik/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
