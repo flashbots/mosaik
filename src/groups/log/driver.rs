@@ -129,4 +129,8 @@ where
 	pub const fn machine(&self) -> &M {
 		&self.machine
 	}
+
+	pub const fn machine_mut(&mut self) -> &mut M {
+		&mut self.machine
+	}
 }

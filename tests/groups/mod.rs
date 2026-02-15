@@ -43,6 +43,10 @@ impl StateMachine for Counter {
 		"0000000000000000000000000000000000000000000000000000000000000002"
 	);
 
+	fn reset(&mut self) {
+		self.value = 0;
+	}
+
 	fn apply(&mut self, command: Self::Command) {
 		match command {
 			CounterCommand::Increment(n) => {

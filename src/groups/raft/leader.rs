@@ -530,7 +530,7 @@ impl Committee {
 	}
 
 	/// Finds the highest log index that has been replicated to a quorum of voters
-	/// in the current voting committee
+	/// in the current voting committee.
 	pub fn highest_quorum_index(&self) -> Index {
 		let mut log_indices = self.voters.values().collect::<Vec<_>>();
 		log_indices.sort_unstable();

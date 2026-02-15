@@ -14,6 +14,8 @@ impl StateMachine for NoOp {
 		"0000000000000000000000000000000000000000000000000000000000000001"
 	);
 
+	fn reset(&mut self) {}
+
 	fn apply(&mut self, (): Self::Command) {}
 
 	fn query(&self, (): Self::Query) -> Self::QueryResult {}

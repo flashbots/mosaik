@@ -91,7 +91,7 @@ impl<M: StateMachine> Catchup<M> {
 			range = ?available,
 			group = %Short(self.ids.0),
 			network = %Short(self.ids.1),
-			"log availability confirmed from"
+			"state available at"
 		);
 
 		self.scheduler.add_availability(peer, available);
@@ -152,7 +152,7 @@ impl<M: StateMachine> Catchup<M> {
 					from = %Short(from),
 					group = %Short(self.ids.0),
 					network = %Short(self.ids.1),
-					"fetched entries"
+					"synced entries"
 				);
 
 				// apply the fetched entries to the state machine
@@ -396,7 +396,7 @@ impl<M: StateMachine> Scheduler<M> {
 			range = ?range,
 			group = %Short(self.ids.0),
 			network = %Short(self.ids.1),
-			"requesting log entries from"
+			"syncing state from"
 		);
 
 		self.bonds.send_raft_to::<M>(

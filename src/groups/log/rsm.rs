@@ -40,6 +40,10 @@ pub trait StateMachine: Send + Sync + Unpin + 'static {
 	/// executed by external clients.
 	type QueryResult: QueryResult;
 
+	/// Reset to initial state. Called when the log is truncated
+	/// below the commit index due to rival leader reconciliation.
+	fn reset(&mut self);
+
 	/// Applies a command to the state machine, mutating its state. This method is
 	/// called by the log when a command is committed (replicated to a majority).
 	fn apply(&mut self, command: Self::Command);

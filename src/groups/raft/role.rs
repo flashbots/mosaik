@@ -330,6 +330,8 @@ impl<M: StateMachine> Role<M> {
 			tracing::debug!(
 				candidate = %Short(request.candidate),
 				term = %request.term,
+				our_log = %local_cursor,
+				candidate_log = %request.log_position,
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				"denying vote because our log is ahead",
