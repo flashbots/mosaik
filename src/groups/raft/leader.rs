@@ -11,7 +11,7 @@ use {
 				shared::Shared,
 			},
 		},
-		primitives::{FmtIter, Short, UnboundedChannel},
+		primitives::{FmtIter, Pretty, Short, UnboundedChannel},
 	},
 	core::{
 		cmp::Reverse,
@@ -380,7 +380,7 @@ impl<M: StateMachine> Leader<M> {
 
 			tracing::trace!(
 				followers = %FmtIter::<Short<_>, _>::new(followers),
-				ix_range = ?range,
+				ix_range = %Pretty(&range),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
 				"broadcasted {count} new log entries to",

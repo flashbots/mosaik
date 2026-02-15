@@ -14,7 +14,7 @@ use {
 				shared::Shared,
 			},
 		},
-		primitives::{AsyncWorkQueue, Short, UnboundedChannel},
+		primitives::{AsyncWorkQueue, Pretty, Short, UnboundedChannel},
 	},
 	core::{
 		ops::{ControlFlow, RangeInclusive},
@@ -88,7 +88,7 @@ impl<M: StateMachine> Catchup<M> {
 	) {
 		tracing::trace!(
 			peer = %Short(peer),
-			range = ?available,
+			range = %Pretty(&available),
 			group = %Short(self.ids.0),
 			network = %Short(self.ids.1),
 			"state available at"
@@ -148,7 +148,7 @@ impl<M: StateMachine> Catchup<M> {
 				shared.update_log_pos(shared.log.last());
 
 				tracing::debug!(
-					range = ?position..=shared.log.last().index(),
+					range = %Pretty(&(position..=shared.log.last().index())),
 					from = %Short(from),
 					group = %Short(self.ids.0),
 					network = %Short(self.ids.1),
@@ -311,7 +311,7 @@ impl<M: StateMachine> Scheduler<M> {
 		for (peer, range) in timed_out {
 			tracing::warn!(
 					peer = %Short(peer),
-					range = ?range,
+					range = %Pretty(&range),
 					group = %Short(self.ids.0),
 					network = %Short(self.ids.1),
 					"fetch request timed out"
@@ -393,7 +393,7 @@ impl<M: StateMachine> Scheduler<M> {
 	) {
 		tracing::trace!(
 			peer = %Short(peer),
-			range = ?range,
+			range = %Pretty(&range),
 			group = %Short(self.ids.0),
 			network = %Short(self.ids.1),
 			"syncing state from"

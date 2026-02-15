@@ -40,6 +40,12 @@ macro_rules! impl_pos_type {
 			}
 		}
 
+		impl core::fmt::Display for $crate::primitives::Pretty<'_, core::ops::RangeInclusive<$name>> {
+			fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+				write!(f, "[{}..={}]", self.start(), self.end())
+			}
+		}
+
 		impl_pos_type!(@unsigned $name: u8, u16, u32, u64);
     impl_pos_type!(@signed $name: i8, i16, i32, i64);
 	};

@@ -12,7 +12,7 @@ use {
 				shared::Shared,
 			},
 		},
-		primitives::Short,
+		primitives::{Pretty, Short},
 	},
 	core::{
 		ops::ControlFlow,
@@ -413,7 +413,7 @@ impl<M: StateMachine> Role<M> {
 
 				tracing::trace!(
 					peer = %Short(sender),
-					range = ?available,
+					range = %Pretty(&available),
 					group = %shared.group_id(),
 					network = %shared.network_id(),
 					"logs availability confirmed for"
@@ -427,7 +427,7 @@ impl<M: StateMachine> Role<M> {
 			Sync::FetchEntriesRequest { range } => {
 				tracing::trace!(
 					peer = %Short(sender),
-					range = ?range,
+					range = %Pretty(range),
 					group = %shared.group_id(),
 					network = %shared.network_id(),
 					"sending log entries for"

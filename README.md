@@ -162,6 +162,19 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 
 - Rust toolchain **≥ 1.87** — install with `rustup toolchain install 1.87`
 
+### Usage
+
+```bash
+cargo add mosaik
+```
+
+or in `Cargo.toml`
+
+```toml
+[dependencies]
+mosaik = "0.2.1"
+```
+
 ### Scenario Tests
 
 Read through the scenario tests in the [`tests/`](tests/) directory for practical examples of mosaik capabilities.
@@ -189,7 +202,7 @@ Core primitives for building self-organized distributed systems in trusted, perm
 
 - [x] **Discovery** — gossip announcements, catalog sync, tags
 - [x] **Streams** — producers, consumers, predicates, limits, online conditions, stats
-- [X] **Groups** — membership, shared state, failover, load balancing
+- [x] **Groups** — membership, shared state, failover, load balancing
 - [ ] **Preferences** — ranking producers by latency, geo-proximity
 - [ ] **Diagnostics** — network inspection, automatic metrics, developer debug tools
 
