@@ -86,6 +86,16 @@ pub struct Catalog {
 
 /// Public Read API
 impl Catalog {
+	/// Returns the peer ID of the local node.
+	pub const fn local_id(&self) -> PeerId {
+		self.local_id
+	}
+
+	/// Returns the network ID associated with this catalog.
+	pub const fn network_id(&self) -> NetworkId {
+		self.network_id
+	}
+
 	/// Returns an iterator over all peer entries in the catalog excluding the
 	/// local peer entry.
 	///

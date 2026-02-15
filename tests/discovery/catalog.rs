@@ -143,6 +143,7 @@ async fn different_networks_are_isolated() -> anyhow::Result<()> {
 
 	// perform full mesh syncs within each network
 	discover_all([&n0, &n1, &n2, &n3, &n4]).await?;
+	tracing::info!("full discovery sync completed");
 
 	// ensure that peers on the same network have each other in their catalogs,
 	// but peers on different networks do not appear in each other's catalogs

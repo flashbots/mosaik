@@ -1,5 +1,0 @@
-# Transport Layer
-
-## TCP
-
-## IPC

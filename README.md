@@ -22,7 +22,10 @@ Mosaik provides primitives for automatic peer discovery, typed pub/sub data stre
 
 The core claim: when binaries are deployed on arbitrary machines, the network should self-organize, infer its own data-flow graph, and converge to a stable operational topology. This property is foundational for scaling the system, adding new capabilities, and reducing operational complexity.
 
-Mosaik targets trusted, permissioned networks such as L2 chains controlled by a single organization. All members are assumed honest; the system is not Byzantine fault tolerant.
+Mosaik initially targets trusted, permissioned networks such as L2 chains controlled by a single organization. All members are assumed honest; the system is not yet Byzantine fault tolerant.
+
+> [!TIP]
+> To see mosaik in action, browse the integration tests in the [`tests`](tests/) directory.
 
 ## Core Primitives
 
@@ -57,7 +60,6 @@ p0.send(Data1(42)).await?;
 // consume item (implements futures::Stream)
 assert_eq!(c1.next().await, Some(Data1(42)));
 assert_eq!(c2.next().await, Some(Data1(42)));
-
 ```
 
 Producers and consumers can be further configured:
@@ -140,14 +142,6 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 └─────────────────────────────────────────────┘
 ```
 
-**Key design patterns:**
-
-- **Worker-loop architecture** — each subsystem spawns long-running tasks that own mutable state, controlled via command channels. Public handles are cheap, cloneable wrappers.
-- **Type-safe links** — `Link<P: Protocol>` provides typed, bidirectional, framed transport with compile-time ALPN correctness.
-- **Blake3 identifiers** — `NetworkId`, `PeerId`, `StreamId`, `GroupId`, `StoreId`, and `Tag` are all 32-byte blake3 hashes.
-- **Cancellation hierarchy** — network → subsystem → per-connection graceful shutdown via `CancellationToken`.
-- **Immutable snapshots** — catalog state uses `im::OrdMap` for cheap, thread-safe cloning.
-
 ## Repository Layout
 
 | Path              | Description                                                           |
@@ -160,26 +154,31 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 | `src/network/`    | Transport layer, connection management, typed links                   |
 | `src/primitives/` | Identifiers (`Digest`), formatting helpers, async work queues         |
 | `src/builtin/`    | Built-in implementations (`NoOp` state machine, `InMemory` storage)   |
-| `src/cli/`        | CLI tool for bootstrapping and inspecting nodes                       |
 | `tests/`          | Integration tests organized by subsystem                              |
-| `docs/`           | mdBook with protocol documentation                                    |
 
 ## Getting Started
 
 ### Prerequisites
 
 - Rust toolchain **≥ 1.87** — install with `rustup toolchain install 1.87`
-- Optional: `cargo install mdbook` for building documentation
 
-### Testing
+### Scenario Tests
+
+Read through the scenario tests in the [`tests/`](tests/) directory for practical examples of mosaik capabilities.
 
 ```bash
 # Run all integration tests
-cargo test --test basic
+TEST_TRACE=on cargo test --test basic -- --test-threads=1
 
 # Verbose test output with tracing
 TEST_TRACE=on cargo test --test basic groups::leader::is_elected
 TEST_TRACE=trace cargo test --test basic groups::leader::is_elected
+```
+
+If tests are running on a slow network, the timeouts can be extended by setting the `TIME_FACTOR` env variable that will multiply all timeout durations by the given value, e.g:
+
+```bash
+TIME_FACTOR=3 TEST_TRACE=on cargo test --test basic groups::leader::is_elected
 ```
 
 ## Roadmap
@@ -190,7 +189,7 @@ Core primitives for building self-organized distributed systems in trusted, perm
 
 - [x] **Discovery** — gossip announcements, catalog sync, tags
 - [x] **Streams** — producers, consumers, predicates, limits, online conditions, stats
-- [ ] **Groups** — membership, shared state, failover, load balancing
+- [X] **Groups** — membership, shared state, failover, load balancing
 - [ ] **Preferences** — ranking producers by latency, geo-proximity
 - [ ] **Diagnostics** — network inspection, automatic metrics, developer debug tools
 
@@ -206,8 +205,7 @@ Extending the system beyond trusted, single-operator environments.
 
 - **Commits:** concise, imperative subjects referencing the component (e.g., *"Progress on pubsub semantics"*)
 - **PRs:** include a summary, linked issues/RFCs, and a checklist confirming `cargo build`, `cargo test`, `cargo clippy`, and `cargo fmt` pass. Attach logs or screenshots for user-visible changes.
-- **Tests:** add or extend integration coverage for behavioral changes. Note remaining gaps or follow-up work in the PR body. Async tests use `#[tokio::test(flavor = "multi_thread")]`.
-- **Docs:** update `docs/` when protocol semantics or traces change.
+- **Tests:** add or extend integration coverage for behavioral changes. Note remaining gaps or follow-up work in the PR body.
 
 ## License
 

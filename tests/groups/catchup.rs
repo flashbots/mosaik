@@ -28,7 +28,7 @@ async fn one_leader_one_follower_small() -> anyhow::Result<()> {
 
 	// wait for n0 to become online by electing itself as leader and being ready
 	// to accept commands
-	timeout_after(timeout, g0.when().is_online()).await?;
+	timeout_after(timeout, g0.when().online()).await?;
 	assert_eq!(g0.leader(), Some(n0.local().id()));
 	assert_eq!(g0.committed(), 0);
 	tracing::info!("g0 is online");
@@ -127,7 +127,7 @@ async fn one_leader_one_follower_large() -> anyhow::Result<()> {
 
 	// wait for n0 to become online by electing itself as leader and being ready
 	// to accept commands
-	timeout_after(timeout, g0.when().is_online()).await?;
+	timeout_after(timeout, g0.when().online()).await?;
 	assert_eq!(g0.leader(), Some(n0.local().id()));
 	assert_eq!(g0.committed(), 0);
 	tracing::info!("g0 is online");

@@ -151,7 +151,7 @@ impl When {
 	/// - It is currently a follower and is up to date with the current leader
 	///   (i.e. it is not in the middle of catching up with the log or during
 	///   elections).
-	pub fn is_online(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
+	pub fn online(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
 		let mut online = self.online.subscribe();
 
 		async move {
@@ -172,7 +172,7 @@ impl When {
 	/// - It is in the middle of an election (i.e. it is a candidate) or voting in
 	///   an election (i.e. it is a follower that has voted for a candidate and is
 	///   waiting for the election to complete).
-	pub fn is_offline(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
+	pub fn offline(&self) -> impl Future<Output = ()> + Send + Sync + 'static {
 		let mut online = self.online.subscribe();
 
 		async move {

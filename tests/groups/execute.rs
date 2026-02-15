@@ -29,7 +29,7 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 
 	// wait for n0 to become online by electing itself as leader and being ready
 	// to accept commands
-	timeout_after(timeout, g0.when().is_online()).await?;
+	timeout_after(timeout, g0.when().online()).await?;
 	assert_eq!(g0.leader(), Some(n0.local().id()));
 	assert_eq!(g0.committed(), 0);
 	tracing::info!("g0 is online");
@@ -58,13 +58,13 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 	assert_eq!(g0.id(), g2.id());
 
 	// wait for g1 to recognize the existing leader and catch up with the log
-	timeout_after(timeout, g1.when().is_online()).await?;
+	timeout_after(timeout, g1.when().online()).await?;
 	assert_eq!(g1.leader(), Some(n0.local().id()));
 	assert_eq!(g1.committed(), 0);
 	tracing::info!("g1 is online and is following g0 as leader");
 
 	// wait for g2 to recognize the existing leader and catch up with the log
-	timeout_after(timeout, g2.when().is_online()).await?;
+	timeout_after(timeout, g2.when().online()).await?;
 	assert_eq!(g2.leader(), Some(n0.local().id()));
 	assert_eq!(g2.committed(), 0);
 	tracing::info!("g2 is online and is following g0 as leader");

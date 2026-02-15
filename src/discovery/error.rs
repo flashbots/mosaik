@@ -1,9 +1,21 @@
-use crate::network::{PeerId, link::LinkError};
+use crate::{
+	NetworkId,
+	network::{PeerId, link::LinkError},
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
 	#[error("PeerId does not match the secret key, expected {0}, got {1}")]
 	InvalidSecretKey(PeerId, PeerId),
+
+	#[error(
+		"Peer is on a different network: our={local_network}, \
+		 their={remote_network}"
+	)]
+	DifferentNetwork {
+		local_network: NetworkId,
+		remote_network: NetworkId,
+	},
 
 	#[error("Signature is invalid")]
 	InvalidSignature,
