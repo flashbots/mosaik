@@ -112,12 +112,6 @@ impl WorkerState {
 		self.types.0
 	}
 
-	/// Returns the type id of the storage implementation used by this group.
-	#[expect(dead_code)]
-	pub const fn storage_type(&self) -> TypeId {
-		self.types.1
-	}
-
 	/// Generates a proof of knowledge of the group secret key for the given link.
 	///
 	/// This is used during the bond establishment process to prove to the remote
@@ -177,7 +171,8 @@ impl WorkerState {
 		handshake: HandshakeStart,
 	) -> Result<(), AcceptError> {
 		let (result_tx, result_rx) = oneshot::channel();
-		let command = WorkerBondCommand::Accept(link, peer, handshake, result_tx);
+		let command =
+			WorkerBondCommand::Accept(link.into(), peer, handshake, result_tx);
 
 		// handoff the accept process to the background worker loop
 		self
@@ -191,13 +186,12 @@ impl WorkerState {
 }
 
 /// Bond-related commands sent to the group worker loop.
-#[expect(clippy::large_enum_variant)]
 pub enum WorkerBondCommand {
 	/// Accepts an incoming connection for this group.
 	/// Connections that are routed here have already passed preliminary
 	/// validation such as network id and group id checks.
 	Accept(
-		Link<Groups>,
+		Box<Link<Groups>>,
 		SignedPeerEntry,
 		HandshakeStart,
 		oneshot::Sender<Result<(), AcceptError>>,

@@ -282,11 +282,11 @@ where
 	/// propagate connectivity information about peers in the group faster than
 	/// waiting for discovery updates to propagate through the network.
 	fn on_bond_formed(&self, peer_id: PeerId) {
-		let bond = self
-			.state
-			.bonds
-			.get(&peer_id)
-			.expect("bond should exist for connected peer");
+		let Some(bond) = self.state.bonds.get(&peer_id) else {
+			// bond should exist for connected peer, peer dropped before we could
+			// process the event
+			return;
+		};
 
 		tracing::debug!(
 			id = %Short(bond.id()),
@@ -316,7 +316,7 @@ where
 		match command {
 			// Begins the process of accepting an incoming connection for this
 			WorkerBondCommand::Accept(link, peer, handshake, result_tx) => {
-				self.accept_bond(link, peer, handshake, result_tx);
+				self.accept_bond(*link, peer, handshake, result_tx);
 			}
 			// Attempts to create a new bond connection to the specified peer.
 			WorkerBondCommand::Connect(peer_entry) => {

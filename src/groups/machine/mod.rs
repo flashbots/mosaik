@@ -4,7 +4,7 @@
 //!
 //! Each group has a state machine that processes commands and queries, and the
 //! log module maintains a replicated log of commands that are applied to the
-//! state machine. The RSM is
+//! state machine.
 
 use {
 	crate::primitives::UniqueId,

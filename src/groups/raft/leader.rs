@@ -480,7 +480,7 @@ impl Committee {
 		Self {
 			voters,
 			non_voters: HashMap::new(),
-			max_committee_size: 5,
+			max_committee_size: 5, // todo: move to config
 		}
 	}
 
