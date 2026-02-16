@@ -3,7 +3,10 @@ use {
 		PeerId,
 		groups::{
 			CommandError,
+			CommittedQueryResult,
+			Index,
 			IndexRange,
+			QueryError,
 			StateMachine,
 			StateSync,
 			StateSyncSession,
@@ -54,11 +57,18 @@ pub struct Follower<M: StateMachine> {
 	/// Tracks the pending forwarded commands from this follower to the leader
 	/// that are awaiting acknowledgment with the assigned log index from the
 	/// leader's `ForwardCommandResponse`.
-	forwarded_commands: HashMap<u64, oneshot::Sender<IndexRange>>,
+	pending_commands: HashMap<u64, oneshot::Sender<IndexRange>>,
+
+	/// Tracks the pending forwarded queries from this follower to the leader.
+	pending_queries: HashMap<u64, oneshot::Sender<CommittedQueryResult<M>>>,
 
 	/// Channel for tracking forwarded commands that have expired without
 	/// receiving a response from the leader within the forward timeout duration.
 	expired_commands: UnboundedChannel<u64>,
+
+	/// Channel for tracking forwarded queries that have expired without
+	/// receiving a response from the leader within the forward timeout duration.
+	expired_queries: UnboundedChannel<u64>,
 
 	/// Optional state for the catch-up process when a follower is lagging behind
 	/// the leader and needs to fetch missing log entries from peers before it
@@ -101,8 +111,10 @@ impl<M: StateMachine> Follower<M> {
 			term,
 			leader,
 			catchup: None,
-			forwarded_commands: HashMap::default(),
+			pending_commands: HashMap::default(),
+			pending_queries: HashMap::default(),
 			expired_commands: UnboundedChannel::default(),
+			expired_queries: UnboundedChannel::default(),
 			election_timeout: Box::pin(sleep(election_timeout)),
 			_marker: PhantomData,
 		}
@@ -204,11 +216,18 @@ impl<M: StateMachine> Follower<M> {
 			Message::AppendEntries(request) => {
 				self.on_append_entries(request, sender, shared);
 			}
-			Message::Forward(Forward::ExecuteAck {
+			Message::Forward(Forward::CommandAck {
 				request_id,
 				assigned: assigned_indices,
 			}) => {
 				self.on_forward_command_response(request_id, assigned_indices);
+			}
+			Message::Forward(Forward::QueryResponse {
+				request_id,
+				result,
+				position,
+			}) => {
+				self.on_forward_query_response(request_id, result, position);
 			}
 
 			// state-sync related messages
@@ -266,20 +285,20 @@ impl<M: StateMachine> Follower<M> {
 		// generate a random request id
 		let request_id: u64 = loop {
 			let id = rand::random();
-			if self.forwarded_commands.contains_key(&id) {
+			if self.pending_commands.contains_key(&id) {
 				continue;
 			}
 			break id;
 		};
 
 		// send the command to the current leader
-		let message = Message::Forward(Forward::Execute {
+		let message = Message::Forward(Forward::Command {
 			commands: commands.clone(), // todo: avoid cloning!
 			request_id: Some(request_id),
 		});
 
 		let (forward_ack_tx, forward_ack_rx) = oneshot::channel();
-		self.forwarded_commands.insert(request_id, forward_ack_tx);
+		self.pending_commands.insert(request_id, forward_ack_tx);
 		shared.bonds().send_raft_to::<M>(&message, leader);
 
 		let expired_sender = self.expired_commands.sender().clone();
@@ -291,6 +310,53 @@ impl<M: StateMachine> Follower<M> {
 			} else {
 				expired_sender.send(request_id).ok();
 				Err(CommandError::Offline(commands))
+			}
+		}
+		.pin()
+	}
+
+	/// Forwards a query with strong consistency requirement to the current leader
+	/// and returns the query result from leader's state machine and the
+	/// committed log position at which the query was executed.
+	pub fn forward_query<S: Storage<M::Command>>(
+		&mut self,
+		query: M::Query,
+		shared: &Shared<S, M>,
+	) -> BoxPinFut<Result<CommittedQueryResult<M>, QueryError<M>>> {
+		let Some(leader) = self.leader() else {
+			// if the follower does not know who's the current leader, return an error
+			// with the query.
+			return ready(Err(QueryError::Offline(query))).pin();
+		};
+
+		// generate a random request id
+		let request_id: u64 = loop {
+			let id = rand::random();
+			if self.pending_queries.contains_key(&id) {
+				continue;
+			}
+			break id;
+		};
+
+		// send the query to the current leader
+		let message = Message::Forward(Forward::Query {
+			query: query.clone(), // todo: avoid cloning!
+			request_id,
+		});
+
+		let (response_tx, response_rx) = oneshot::channel();
+		self.pending_queries.insert(request_id, response_tx);
+		shared.bonds().send_raft_to::<M>(&message, leader);
+
+		let expired_sender = self.expired_queries.sender().clone();
+		let query_timeout = shared.intervals().query_timeout;
+
+		async move {
+			if let Ok(Ok(response)) = timeout(query_timeout, response_rx).await {
+				Ok(response)
+			} else {
+				expired_sender.send(request_id).ok();
+				Err(QueryError::Offline(query))
 			}
 		}
 		.pin()
@@ -391,13 +457,31 @@ impl<M: StateMachine> Follower<M> {
 		request_id: u64,
 		assigned: IndexRange,
 	) {
-		if let Some(ack) = self.forwarded_commands.remove(&request_id) {
+		if let Some(ack) = self.pending_commands.remove(&request_id) {
 			let _ = ack.send(assigned);
 		}
 	}
 
-	/// Periodically cleans up any pending forwarded commands that have expired
-	/// without receiving a response from the leader within the forward timeout.
+	/// Handles an incoming `Forward::QueryResponse` message from the leader in
+	/// response to a query with strong consistency requirement that this follower
+	/// sent to the leader.
+	fn on_forward_query_response(
+		&mut self,
+		request_id: u64,
+		result: M::QueryResult,
+		at_position: Index,
+	) {
+		if let Some(response) = self.pending_queries.remove(&request_id) {
+			let _ = response.send(CommittedQueryResult {
+				result,
+				at_position,
+			});
+		}
+	}
+
+	/// Periodically cleans up any pending forwarded commands and queries that
+	/// have expired without receiving a response from the leader within the
+	/// forward timeout.
 	fn clean_expired_forwarded_commands(&mut self, cx: &mut Context<'_>) {
 		if !self.expired_commands.is_empty() {
 			let count = self.expired_commands.len();
@@ -409,7 +493,22 @@ impl<M: StateMachine> Follower<M> {
 				.is_ready()
 			{
 				for id in ids {
-					self.forwarded_commands.remove(&id);
+					self.pending_commands.remove(&id);
+				}
+			}
+		}
+
+		if !self.expired_queries.is_empty() {
+			let count = self.expired_queries.len();
+			let mut ids = Vec::with_capacity(count);
+
+			if self
+				.expired_queries
+				.poll_recv_many(cx, &mut ids, count)
+				.is_ready()
+			{
+				for id in ids {
+					self.pending_queries.remove(&id);
 				}
 			}
 		}

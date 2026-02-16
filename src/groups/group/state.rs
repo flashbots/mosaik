@@ -7,6 +7,7 @@ use {
 		groups::{
 			Bonds,
 			CommandError,
+			CommittedQueryResult,
 			Config,
 			Group,
 			GroupId,
@@ -217,14 +218,9 @@ pub(super) enum WorkerRaftCommand<M: StateMachine> {
 		oneshot::Sender<Result<IndexRange, CommandError<M>>>,
 	),
 
-	Execute(
-		Vec<M::Command>,
-		oneshot::Sender<Result<IndexRange, CommandError<M>>>,
-	),
-
 	Query(
 		M::Query,
 		Consistency,
-		oneshot::Sender<Result<M::QueryResult, QueryError<M>>>,
+		oneshot::Sender<Result<CommittedQueryResult<M>, QueryError<M>>>,
 	),
 }

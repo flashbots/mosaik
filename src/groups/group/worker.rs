@@ -335,13 +335,6 @@ where
 	/// Handles incoming commands for the raft consensus protocol.
 	fn on_raft_command(&mut self, command: WorkerRaftCommand<M>) {
 		match command {
-			WorkerRaftCommand::Execute(cmd, result_tx) => {
-				let cmd_fut = self.raft.execute(cmd);
-				self.work_queue.enqueue(async move {
-					let result = cmd_fut.await;
-					let _ = result_tx.send(result);
-				});
-			}
 			WorkerRaftCommand::Feed(cmd, result_tx) => {
 				let cmd_fut = self.raft.feed(cmd);
 				self.work_queue.enqueue(async move {
@@ -412,7 +405,7 @@ where
 				}
 				Err(reason) => {
 					if !matches!(reason, Error::AlreadyBonded(_)) {
-						tracing::debug!(
+						tracing::trace!(
 							error = %reason,
 							network = %state.local.network_id(),
 							peer = %Short(peer_id),

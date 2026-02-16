@@ -5,6 +5,7 @@ use {
 			Index,
 			IndexRange,
 			StateMachine,
+			StateSyncContext,
 			log::{Storage, Term},
 			raft::{
 				Message,
@@ -180,7 +181,7 @@ impl<M: StateMachine> Leader<M> {
 			}
 
 			// sent by followers that are forwarding client commands to the leader.
-			Message::Forward(Forward::Execute {
+			Message::Forward(Forward::Command {
 				commands,
 				request_id,
 			}) => {
@@ -191,7 +192,7 @@ impl<M: StateMachine> Leader<M> {
 						// the follower is interested in knowing the log index assigned to
 						// this command asap.
 						shared.bonds().send_raft_to::<M>(
-							&Message::Forward(Forward::ExecuteAck {
+							&Message::Forward(Forward::CommandAck {
 								request_id,
 								assigned,
 							}),
@@ -199,6 +200,21 @@ impl<M: StateMachine> Leader<M> {
 						);
 					}
 				}
+			}
+
+			// sent by followers that are forwarding client queries to the leader.
+			// todo: run queries in parallel.
+			Message::Forward(Forward::Query { query, request_id }) => {
+				let result = shared.machine().query(query);
+				let position = shared.log.committed();
+				shared.bonds().send_raft_to::<M>(
+					&Message::Forward(Forward::QueryResponse {
+						request_id,
+						result,
+						position,
+					}),
+					sender,
+				);
 			}
 
 			// all other message types are unexpected in the leader state. ignore.

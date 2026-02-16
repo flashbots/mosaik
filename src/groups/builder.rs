@@ -218,9 +218,10 @@ pub struct IntervalsConfig {
 	#[builder(default = "Duration::from_secs(2)")]
 	pub forward_timeout: Duration,
 
-	/// The timeout duration for fetching missing log entries during catch-up.
-	#[builder(default = "Duration::from_secs(25)")]
-	pub catchup_chunk_timeout: Duration,
+	/// The timeout duration for the leader to respond to state machine queries
+	/// to a follower querying the state with strong consistency.
+	#[builder(default = "Duration::from_secs(2)")]
+	pub query_timeout: Duration,
 }
 
 impl Default for IntervalsConfig {
@@ -259,6 +260,7 @@ impl IntervalsConfig {
 			self.election_timeout_jitter.as_millis().to_le_bytes(),
 			self.bootstrap_delay.as_millis().to_le_bytes(),
 			self.forward_timeout.as_millis().to_le_bytes(),
+			self.query_timeout.as_millis().to_le_bytes(),
 		])
 	}
 }

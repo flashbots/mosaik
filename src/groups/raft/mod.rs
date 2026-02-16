@@ -4,6 +4,7 @@ use {
 		PeerId,
 		groups::{
 			CommandError,
+			CommittedQueryResult,
 			IndexRange,
 			QueryError,
 			StateMachine,
@@ -107,25 +108,6 @@ where
 			.receive_protocol_message(message, from, &mut self.shared);
 	}
 
-	/// Appends the command to the current leader's log and returns a future that
-	/// resolves when the command is replicated and committed to the state.
-	pub fn execute(
-		&mut self,
-		commands: Vec<M::Command>,
-	) -> BoxPinFut<Result<IndexRange, CommandError<M>>> {
-		// feed the command to the current leader and wait for the command to be
-		// committed to the state machine by the group.
-		let feed_fut = self.feed(commands);
-		let when = self.shared.when().clone();
-
-		async move {
-			let index = feed_fut.await?;
-			when.committed().reaches(*index.end()).await;
-			Ok(index)
-		}
-		.pin()
-	}
-
 	/// Sends the command to the current leader without waiting for it to be
 	/// committed to the state machine. The returned future will resolve once the
 	/// command has been assigned an index by the leader, but it does not
@@ -162,25 +144,40 @@ where
 	/// to the current leader and wait for a response that reflects the latest
 	/// committed state of the state machine.
 	pub fn query(
-		&self,
+		&mut self,
 		query: M::Query,
 		consistency: Consistency,
-	) -> BoxPinFut<Result<M::QueryResult, QueryError<M>>> {
-		match &self.role {
+	) -> BoxPinFut<Result<CommittedQueryResult<M>, QueryError<M>>> {
+		match &mut self.role {
 			Role::Leader(_) => {
 				// if the local node is the leader, it can process the query directly
 				// against the state machine, which is always up to date with the latest
 				// committed state of the group.
-				ready(Ok(self.shared.log.query(query))).pin()
+				ready(Ok(CommittedQueryResult {
+					result: self.shared.log.query(query),
+					at_position: self.shared.log.committed(),
+				}))
+				.pin()
 			}
 
-			Role::Follower(_) => match consistency {
+			Role::Follower(follower) => match consistency {
 				Consistency::Weak => {
 					// with weak consistency, the follower can process the query against
-					// its local state machine up to the last known committed state.
-					ready(Ok(self.shared.log.query(query))).pin()
+					// its local state machine up to the last locally known committed
+					// state.
+					ready(Ok(CommittedQueryResult {
+						result: self.shared.log.query(query),
+						at_position: self.shared.log.committed(),
+					}))
+					.pin()
 				}
-				Consistency::Strong => todo!("strong query as follower"),
+				Consistency::Strong => {
+					// With strong consistency, only the leader can guarantee that the
+					// query was processed against the latest committed state of the
+					// group, so the follower must forward the query to the leader and
+					// wait for a response.
+					follower.forward_query(query, &self.shared)
+				}
 			},
 
 			Role::Candidate(_) => {

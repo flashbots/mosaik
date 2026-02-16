@@ -16,6 +16,8 @@ use {
 		primitives::Short,
 	},
 	core::{fmt, marker::PhantomData},
+	derive_more::Deref,
+	serde::{Deserialize, Serialize},
 	state::WorkerState,
 	std::sync::Arc,
 	tokio::sync::{
@@ -42,6 +44,21 @@ pub enum Consistency {
 	/// latency if the local node is not the leader or if there are network
 	/// issues.
 	Strong,
+}
+
+/// Carries the result of executing a query against the group's state machine,
+/// along with the position of the state machine at which the query was
+/// executed.
+#[derive(Debug, Clone, Deref, Serialize, Deserialize)]
+pub struct CommittedQueryResult<M: StateMachine> {
+	/// The result of executing the query against the state machine.
+	#[deref]
+	pub result: M::QueryResult,
+
+	/// The index of the latest committed command in the log at the time the
+	/// query was processed. This can be used by clients to determine how up to
+	/// date the query result is with respect to the current state of the group.
+	pub at_position: Index,
 }
 
 /// Public API for interacting with a joined group.
@@ -164,32 +181,9 @@ impl<M: StateMachine> Group<M> {
 		&self,
 		commands: impl IntoIterator<Item = M::Command>,
 	) -> Result<IndexRange, CommandError<M>> {
-		let Some(sender) = self
-			.state
-			.raft_cmd_tx
-			.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
-		else {
-			unreachable!("invalid raft_tx type. this is a bug.");
-		};
-
-		let commands: Vec<_> = commands.into_iter().collect();
-
-		if commands.is_empty() {
-			return Err(CommandError::NoCommands);
-		}
-
-		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Execute(_, _))) =
-			sender.send(WorkerRaftCommand::Execute(commands, result_tx))
-		{
-			return Err(CommandError::GroupTerminated);
-		}
-
-		match result_rx.await {
-			Ok(Ok(index_range)) => Ok(index_range),
-			Ok(Err(e)) => Err(e), // command processing error (e.g. not leader)
-			Err(_) => Err(CommandError::GroupTerminated), // oneshot RecvError
-		}
+		let assigned_ix = self.feed_many(commands).await?;
+		self.when().committed().reaches(assigned_ix.clone()).await;
+		Ok(assigned_ix)
 	}
 
 	/// Sends a command to the group leader without waiting for it to be committed
@@ -257,7 +251,7 @@ impl<M: StateMachine> Group<M> {
 		&self,
 		query: M::Query,
 		consistency: Consistency,
-	) -> Result<M::QueryResult, QueryError<M>> {
+	) -> Result<CommittedQueryResult<M>, QueryError<M>> {
 		let Some(sender) = self
 			.state
 			.raft_cmd_tx
@@ -278,6 +272,42 @@ impl<M: StateMachine> Group<M> {
 			Ok(Err(e)) => Err(e), // query processing error
 			Err(_) => Err(QueryError::GroupTerminated), // oneshot RecvError
 		}
+	}
+}
+
+impl<M: StateMachine> CommittedQueryResult<M> {
+	/// Consumes the `CommittedQueryResult` and returns the inner query result.
+	pub fn into(self) -> M::QueryResult {
+		self.result
+	}
+
+	/// Returns a reference to the query result.
+	pub const fn result(&self) -> &M::QueryResult {
+		&self.result
+	}
+
+	/// Returns the index of the committed command at which the query was
+	/// processed.
+	pub const fn state_position(&self) -> Index {
+		self.at_position
+	}
+}
+
+impl<M: StateMachine> PartialEq<M::QueryResult> for CommittedQueryResult<M>
+where
+	M::QueryResult: PartialEq,
+{
+	fn eq(&self, other: &M::QueryResult) -> bool {
+		&self.result == other
+	}
+}
+
+impl<M: StateMachine> core::fmt::Display for CommittedQueryResult<M>
+where
+	M::QueryResult: core::fmt::Display,
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{}", &self.result)
 	}
 }
 
