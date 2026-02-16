@@ -1,10 +1,10 @@
 use {
 	super::protocol::BondMessage,
 	crate::{
-		Groups,
 		discovery::SignedPeerEntry,
 		groups::{
 			Bond,
+			Groups,
 			bond::{BondEvent, BondEvents, BondId, heartbeat::Heartbeat},
 			error::Timeout,
 			state::WorkerState,

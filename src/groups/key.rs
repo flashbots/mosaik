@@ -1,5 +1,10 @@
 use {
-	crate::{Digest, Groups, PeerId, groups::GroupId, network::link::Link},
+	crate::{
+		Digest,
+		PeerId,
+		groups::{GroupId, Groups},
+		network::link::Link,
+	},
 	core::fmt,
 	serde::{Deserialize, Serialize},
 };

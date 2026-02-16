@@ -3,7 +3,7 @@ use {
 		groups::{Counter, CounterCommand, CounterValueQuery},
 		utils::{discover_all, timeout_after, timeout_s},
 	},
-	mosaik::*,
+	mosaik::{groups::IndexRange, *},
 };
 
 /// This test verifies that commands can be executed on leaders and followers,
@@ -135,9 +135,10 @@ async fn one_leader_one_follower_large() -> anyhow::Result<()> {
 	// feed a large number of commands to the leader that spans multiple catchup
 	// chunks.
 	let commands = (0..200).map(CounterCommand::Increment).collect::<Vec<_>>();
-	let ix = timeout_s(5, g0.execute_many(commands)).await??;
+	let ixs = timeout_s(5, g0.execute_many(commands)).await??;
 
-	assert_eq!(ix, 200);
+	assert_eq!(ixs.end(), 200);
+	assert_eq!(ixs, IndexRange::new(1.into(), 200.into()));
 	assert_eq!(g0.committed(), 200);
 
 	// start a new node and have it join the group.
@@ -172,10 +173,11 @@ async fn one_leader_one_follower_large() -> anyhow::Result<()> {
 	);
 
 	// g1 issues many commands that span multiple catchup chunks,
-	let index =
+	let ixs =
 		timeout_s(5, g1.execute_many((0..200).map(CounterCommand::Increment)))
 			.await??;
-	assert_eq!(index, 400);
+	assert_eq!(ixs.end(), 400);
+	assert_eq!(ixs, IndexRange::new(201.into(), 400.into()));
 	assert_eq!(g1.committed(), 400);
 
 	timeout_s(20, g0.when().committed().reaches(400)).await?;
@@ -211,6 +213,18 @@ async fn one_leader_one_follower_large() -> anyhow::Result<()> {
 	assert_eq!(value, 39800);
 	tracing::info!(
 		"counter value on g2 after catching up with large log: {value}"
+	);
+
+	let value = g0.query(CounterValueQuery, Consistency::Weak).await?;
+	assert_eq!(value, 39800);
+	tracing::info!(
+		"counter value on g0 after g2 catches up with large log: {value}"
+	);
+
+	let value = g1.query(CounterValueQuery, Consistency::Weak).await?;
+	assert_eq!(value, 39800);
+	tracing::info!(
+		"counter value on g1 after g2 catches up with large log: {value}"
 	);
 
 	Ok(())

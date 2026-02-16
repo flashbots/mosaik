@@ -100,7 +100,7 @@ pub use {
 	error::{CommandError, Error, QueryError},
 	group::*,
 	key::GroupKey,
-	log::{Cursor, InMemoryLogStore, Index, Storage, Term},
+	log::{Cursor, InMemoryLogStore, Index, IndexRange, Storage, Term},
 	machine::*,
 	replay::*,
 	when::When,

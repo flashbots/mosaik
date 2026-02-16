@@ -3,7 +3,11 @@ use {
 		groups::{Counter, CounterCommand, CounterValueQuery},
 		utils::{discover_all, timeout_after, timeout_s},
 	},
-	mosaik::{primitives::Short, *},
+	mosaik::{
+		groups::IndexRange,
+		primitives::{Pretty, Short},
+		*,
+	},
 	tokio::join,
 };
 
@@ -144,8 +148,11 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 			CounterCommand::Increment(3),
 		])
 		.await?;
-	assert_eq!(g1_pos, 6);
-	tracing::info!("g1 executed 3 commands committed at index {g1_pos}");
+	assert_eq!(g1_pos.end(), 6);
+	tracing::info!(
+		"g1 executed 3 commands committed at index {}",
+		Pretty(&g1_pos)
+	);
 
 	let g2_pos = g2
 		.execute_many([
@@ -154,8 +161,13 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 			CounterCommand::Decrement(1),
 		])
 		.await?;
-	assert_eq!(g2_pos, 9);
-	tracing::info!("g2 executed 3 commands committed at index {g2_pos}");
+	assert_eq!(g2_pos.end(), 9);
+	assert_eq!(g2_pos, IndexRange::new(7.into(), 9.into()));
+
+	tracing::info!(
+		"g2 executed 3 commands committed at range {}",
+		Pretty(&g2_pos)
+	);
 
 	// wait for both nodes to learn that index 9 is committed
 	timeout_s(2, g1.when().committed().reaches(g2_pos)).await?;

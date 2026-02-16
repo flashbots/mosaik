@@ -6,6 +6,7 @@ use {
 			Cursor,
 			GroupId,
 			Index,
+			IndexRange,
 			StateMachine,
 			When,
 			config::GroupConfig,
@@ -68,13 +69,6 @@ impl<M: StateMachine> Group<M> {
 	/// Returns `true` if the local node is currently the leader of this group.
 	pub fn is_leader(&self) -> bool {
 		self.state.when.current_leader() == Some(self.state.local_id())
-	}
-
-	/// Returns `true` if the local node is currently a follower in this group.
-	pub fn is_follower(&self) -> bool {
-		// todo | this is not entirely accurate, as the local node could be a
-		// todo | candidate during an election, revisit this asap.
-		!self.is_leader()
 	}
 
 	/// Returns the `PeerId` of the current leader of this group, or `None` if no
@@ -142,7 +136,10 @@ impl<M: StateMachine> Group<M> {
 		&self,
 		command: M::Command,
 	) -> Result<Index, CommandError<M>> {
-		self.execute_many(vec![command]).await
+		self
+			.execute_many([command])
+			.await
+			.map(|range| *range.start())
 	}
 
 	/// Issues a series of commands to the group, which will be replicated to all
@@ -166,7 +163,7 @@ impl<M: StateMachine> Group<M> {
 	pub async fn execute_many(
 		&self,
 		commands: impl IntoIterator<Item = M::Command>,
-	) -> Result<Index, CommandError<M>> {
+	) -> Result<IndexRange, CommandError<M>> {
 		let Some(sender) = self
 			.state
 			.raft_cmd_tx
@@ -175,15 +172,21 @@ impl<M: StateMachine> Group<M> {
 			unreachable!("invalid raft_tx type. this is a bug.");
 		};
 
+		let commands: Vec<_> = commands.into_iter().collect();
+
+		if commands.is_empty() {
+			return Err(CommandError::NoCommands);
+		}
+
 		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Execute(_, _))) = sender.send(
-			WorkerRaftCommand::Execute(commands.into_iter().collect(), result_tx),
-		) {
+		if let Err(SendError(WorkerRaftCommand::Execute(_, _))) =
+			sender.send(WorkerRaftCommand::Execute(commands, result_tx))
+		{
 			return Err(CommandError::GroupTerminated);
 		}
 
 		match result_rx.await {
-			Ok(Ok(index)) => Ok(index),
+			Ok(Ok(index_range)) => Ok(index_range),
 			Ok(Err(e)) => Err(e), // command processing error (e.g. not leader)
 			Err(_) => Err(CommandError::GroupTerminated), // oneshot RecvError
 		}
@@ -191,24 +194,25 @@ impl<M: StateMachine> Group<M> {
 
 	/// Sends a command to the group leader without waiting for it to be committed
 	/// to the state machine. The returned future will resolve once the command
-	/// has been sent to the leader.
-	///
-	/// Consecutive calls to this method are not guaranteed to be processed in the
-	/// order they were issued, as the
-	pub async fn feed(&self, command: M::Command) -> Result<(), CommandError<M>> {
-		self.feed_many(vec![command]).await
+	/// has been sent to the leader and the leader has acknowledged receipt of the
+	/// command and assigned it an index, but it does not guarantee that the
+	/// command has been committed to the state.
+	pub async fn feed(
+		&self,
+		command: M::Command,
+	) -> Result<Index, CommandError<M>> {
+		self.feed_many([command]).await.map(|range| *range.start())
 	}
 
 	/// Sends a series of commands to the group leader without waiting for them to
 	/// be committed to the state machine. The returned future will resolve once
-	/// the commands have been sent to the leader.
-	///
-	/// Consecutive calls to this method are not guaranteed to be processed in the
-	/// order they were issued, as the
+	/// the commands have been sent to the leader and the leader has acknowledged
+	/// receipt of the commands and assigned them indices but does not guarantee
+	/// that the commands have been committed to the state.
 	pub async fn feed_many(
 		&self,
 		commands: impl IntoIterator<Item = M::Command>,
-	) -> Result<(), CommandError<M>> {
+	) -> Result<IndexRange, CommandError<M>> {
 		let Some(sender) = self
 			.state
 			.raft_cmd_tx
@@ -217,15 +221,21 @@ impl<M: StateMachine> Group<M> {
 			unreachable!("invalid raft_tx type. this is a bug.");
 		};
 
+		let commands: Vec<_> = commands.into_iter().collect();
+
+		if commands.is_empty() {
+			return Err(CommandError::NoCommands);
+		}
+
 		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Feed(_, _))) = sender.send(
-			WorkerRaftCommand::Feed(commands.into_iter().collect(), result_tx),
-		) {
+		if let Err(SendError(WorkerRaftCommand::Feed(_, _))) =
+			sender.send(WorkerRaftCommand::Feed(commands, result_tx))
+		{
 			return Err(CommandError::GroupTerminated);
 		}
 
 		match result_rx.await {
-			Ok(Ok(())) => Ok(()),
+			Ok(Ok(index_range)) => Ok(index_range),
 			Ok(Err(e)) => Err(e), // command processing error (e.g. not leader)
 			Err(_) => Err(CommandError::GroupTerminated), // oneshot RecvError
 		}

@@ -2,9 +2,9 @@ use {
 	crate::{
 		Digest,
 		GroupKey,
-		Groups,
 		groups::{
 			Group,
+			Groups,
 			NoOp,
 			StateMachine,
 			Storage,

@@ -24,6 +24,6 @@ impl StateMachine for NoOp {
 	fn query(&self, (): Self::Query) -> Self::QueryResult {}
 
 	fn sync_factory(&self) -> Self::StateSync {
-		todo!()
+		LogReplaySync::default()
 	}
 }

@@ -28,7 +28,7 @@ mod session;
 
 /// Generic log-replay state sync implementation
 ///
-/// This implementation  can be used with any state machine, it replays the
+/// This implementation can be used with any state machine, it replays the
 /// entire log from the beginning to synchronize a new node with the current
 /// state of the group.
 ///

@@ -139,7 +139,7 @@ pub trait StateSyncProvider: Send + Unpin + 'static {
 	///
 	/// This value should never be greater than the position of the latest
 	/// committed log entry.
-	fn safe_to_prune(
+	fn safe_to_prune_prefix(
 		&self,
 		_: &mut dyn StateSyncContext<Self::Owner>,
 	) -> Option<Index> {

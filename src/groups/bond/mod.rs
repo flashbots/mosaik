@@ -48,11 +48,11 @@
 use {
 	crate::{
 		Digest,
-		Groups,
 		PeerId,
 		discovery::SignedPeerEntry,
 		groups::{
 			Error,
+			Groups,
 			StateMachine,
 			bond::worker::WorkerCommand,
 			error::InvalidProof,

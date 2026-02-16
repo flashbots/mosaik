@@ -130,6 +130,8 @@ impl<M: StateMachine> LogReplaySession<M> {
 			}
 		});
 
+		let pos = position.index().next();
+
 		Self {
 			gap,
 			leader,
@@ -139,7 +141,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 			buffered: entries
 				.into_iter()
 				.enumerate()
-				.map(|(i, (cmd, term))| (position.index() + (i + 1).into(), term, cmd))
+				.map(|(i, (cmd, term))| (pos + i, term, cmd))
 				.collect(),
 			known_bonds: HashSet::new(),
 			availability: HashMap::new(),
@@ -292,7 +294,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 		let mut idle_peers = self.idle_peers_sorted();
 
 		while cursor <= gap_end && !idle_peers.is_empty() {
-			let chunk_end = (cursor + (chunk_size - 1).into()).min(gap_end);
+			let chunk_end = (cursor + (chunk_size - 1)).min(gap_end);
 
 			// Find a peer that covers this chunk (even partially)
 			if let Some(idx) = idle_peers.iter().position(|p| {
@@ -555,11 +557,12 @@ impl<M: StateMachine> StateSyncSession for LogReplaySession<M> {
 		entries: Vec<(M::Command, Term)>,
 		_: &mut dyn StateSyncContext<LogReplaySync<M>>,
 	) {
+		let pos = position.index().next();
 		self.buffered.extend(
 			entries
 				.into_iter()
 				.enumerate()
-				.map(|(i, (cmd, term))| (position.index() + (i + 1).into(), term, cmd)),
+				.map(|(i, (cmd, term))| (pos + i, term, cmd)),
 		);
 	}
 }

@@ -14,10 +14,15 @@ pub mod streams;
 pub use {
 	bytes::{Bytes, BytesMut},
 	futures,
-	groups::{Consistency, Group, GroupKey, Groups},
+	groups::{
+		Consistency,
+		Consistency::{Strong, Weak},
+		Group,
+		GroupId,
+		GroupKey,
+	},
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},
-	primitives::Digest,
-	store::{PrimaryStore, ReplicaStore, StoreId},
+	primitives::{Digest, Tag, UniqueId},
 	streams::{Criteria, Datum, StreamId},
 };

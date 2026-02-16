@@ -1,12 +1,12 @@
 use {
 	crate::{
-		Groups,
 		PeerId,
 		discovery::{Catalog, PeerEntryVersion, SignedPeerEntry},
 		groups::{
 			Bond,
 			Bonds,
 			Error,
+			Groups,
 			StateMachine,
 			Storage,
 			When,

@@ -45,6 +45,10 @@ pub trait StateMachine: Send + Sync + Unpin + 'static {
 	/// The type responsible for implementing the state synchronization (catch-up)
 	/// process for followers that are not up to date with the committed group
 	/// state.
+	///
+	/// When writing your own state machine use `LogReplaySync` as the initial
+	/// state sync implementation, which works with any state machine as a
+	/// starting point.
 	type StateSync: StateSync<Machine = Self>;
 
 	/// A unique identifier for the state machine type and settings. This value is
@@ -63,6 +67,16 @@ pub trait StateMachine: Send + Sync + Unpin + 'static {
 	/// called by the log when a command is committed (replicated to a majority).
 	fn apply(&mut self, command: Self::Command);
 
+	/// Optionally allows state machine implementations to optimize the
+	/// application of a batch of commands. By default, this method applies
+	/// commands one by one using the `apply` method, but state machines that
+	/// can optimize batch processing can override this method.
+	fn apply_batch(&mut self, commands: impl IntoIterator<Item = Self::Command>) {
+		for command in commands {
+			self.apply(command);
+		}
+	}
+
 	/// Executes a query against the state machine, returning a result. This
 	/// method is called when an external client sends a query to any node in the
 	/// group. The query is executed against the current state of the state
@@ -71,6 +85,10 @@ pub trait StateMachine: Send + Sync + Unpin + 'static {
 
 	/// Returns a new instance of the state synchronization implementation that is
 	/// used to synchronize lagging followers with the current state of the group.
+	///
+	/// When writing your own state machine use `LogReplaySync` as the initial
+	/// state sync implementation, which works with any state machine as a
+	/// starting point.
 	fn sync_factory(&self) -> Self::StateSync;
 }
 

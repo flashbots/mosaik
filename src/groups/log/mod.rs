@@ -4,7 +4,7 @@ mod storage;
 
 // Public API exports
 pub use {
-	cursor::{Cursor, Index, Term},
+	cursor::{Cursor, Index, IndexRange, Term},
 	driver::Driver,
 	storage::{InMemoryLogStore, Storage},
 };

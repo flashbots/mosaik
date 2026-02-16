@@ -3,7 +3,7 @@ use {
 		PeerId,
 		groups::{
 			CommandError,
-			Index,
+			IndexRange,
 			StateMachine,
 			StateSync,
 			StateSyncSession,
@@ -54,7 +54,7 @@ pub struct Follower<M: StateMachine> {
 	/// Tracks the pending forwarded commands from this follower to the leader
 	/// that are awaiting acknowledgment with the assigned log index from the
 	/// leader's `ForwardCommandResponse`.
-	forwarded_commands: HashMap<u64, oneshot::Sender<Index>>,
+	forwarded_commands: HashMap<u64, oneshot::Sender<IndexRange>>,
 
 	/// Channel for tracking forwarded commands that have expired without
 	/// receiving a response from the leader within the forward timeout duration.
@@ -206,9 +206,9 @@ impl<M: StateMachine> Follower<M> {
 			}
 			Message::Forward(Forward::ExecuteAck {
 				request_id,
-				log_index,
+				assigned: assigned_indices,
 			}) => {
-				self.on_forward_command_response(request_id, log_index);
+				self.on_forward_command_response(request_id, assigned_indices);
 			}
 
 			// state-sync related messages
@@ -254,7 +254,7 @@ impl<M: StateMachine> Follower<M> {
 		&mut self,
 		commands: Vec<M::Command>,
 		shared: &Shared<S, M>,
-	) -> BoxPinFut<Result<Index, CommandError<M>>> {
+	) -> BoxPinFut<Result<IndexRange, CommandError<M>>> {
 		let Some(leader) = self.leader() else {
 			// if the follower does not know who's the current leader (e.g. because
 			// elections are in progress or because it is still in the initial offline
@@ -274,7 +274,7 @@ impl<M: StateMachine> Follower<M> {
 
 		// send the command to the current leader
 		let message = Message::Forward(Forward::Execute {
-			commands: commands.clone(),
+			commands: commands.clone(), // todo: avoid cloning!
 			request_id: Some(request_id),
 		});
 
@@ -286,8 +286,8 @@ impl<M: StateMachine> Follower<M> {
 		let forward_timeout = shared.intervals().forward_timeout;
 
 		async move {
-			if let Ok(Ok(index)) = timeout(forward_timeout, forward_ack_rx).await {
-				Ok(index)
+			if let Ok(Ok(assigned)) = timeout(forward_timeout, forward_ack_rx).await {
+				Ok(assigned)
 			} else {
 				expired_sender.send(request_id).ok();
 				Err(CommandError::Offline(commands))
@@ -386,9 +386,13 @@ impl<M: StateMachine> Follower<M> {
 	/// Handles an incoming `Forward::ExecuteAck` message from the leader in
 	/// response to a command that this follower forwarded to the leader. Signals
 	/// the assignment of a log index to the forwarded command.
-	fn on_forward_command_response(&mut self, request_id: u64, log_index: Index) {
+	fn on_forward_command_response(
+		&mut self,
+		request_id: u64,
+		assigned: IndexRange,
+	) {
 		if let Some(ack) = self.forwarded_commands.remove(&request_id) {
-			let _ = ack.send(log_index);
+			let _ = ack.send(assigned);
 		}
 	}
 
@@ -427,7 +431,7 @@ impl<M: StateMachine> Follower<M> {
 			// redelivery).
 			let start_index = request.prev_log_position.index().next();
 			for (i, entry) in request.entries.into_iter().enumerate() {
-				let index = start_index + i.into();
+				let index = start_index + i;
 				if shared.log.term_at(index) == Some(entry.term) {
 					// already have this entry (and we verified no conflicts above), so
 					// skip it.

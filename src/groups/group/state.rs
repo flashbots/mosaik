@@ -1,7 +1,6 @@
 use {
 	crate::{
 		Consistency,
-		Groups,
 		NetworkId,
 		PeerId,
 		discovery::{Discovery, SignedPeerEntry},
@@ -11,7 +10,8 @@ use {
 			Config,
 			Group,
 			GroupId,
-			Index,
+			Groups,
+			IndexRange,
 			QueryError,
 			StateMachine,
 			When,
@@ -220,12 +220,12 @@ pub enum WorkerBondCommand {
 pub(super) enum WorkerRaftCommand<M: StateMachine> {
 	Feed(
 		Vec<M::Command>,
-		oneshot::Sender<Result<(), CommandError<M>>>,
+		oneshot::Sender<Result<IndexRange, CommandError<M>>>,
 	),
 
 	Execute(
 		Vec<M::Command>,
-		oneshot::Sender<Result<Index, CommandError<M>>>,
+		oneshot::Sender<Result<IndexRange, CommandError<M>>>,
 	),
 
 	Query(

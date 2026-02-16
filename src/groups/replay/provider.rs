@@ -68,9 +68,9 @@ impl<M: StateMachine> StateSyncProvider for LogReplayProvider<M> {
 				}
 
 				// cap the range to the configured max batch size
-				let len = *range.end() - *range.start() + 1.into();
-				let len = len.min(self.config.batch_size.into());
-				let range = *range.start()..=(*range.start() + len - 1.into());
+				let len = range.end().distance(range.start()) + 1;
+				let len = len.min(self.config.batch_size);
+				let range = *range.start()..=(*range.start() + len - 1u32);
 
 				let entries = cx.log().get_range(&range);
 

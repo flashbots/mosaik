@@ -1,7 +1,6 @@
 use crate::{
-	Groups,
 	discovery::Error as DiscoveryError,
-	groups::StateMachine,
+	groups::{Groups, StateMachine},
 	network::{
 		self,
 		link::{Link, LinkError},
@@ -39,6 +38,9 @@ pub enum CommandError<M: StateMachine> {
 	#[error("Group is temporarily offline and cannot process commands")]
 	Offline(Vec<M::Command>),
 
+	#[error("No commands provided")]
+	NoCommands,
+
 	/// The group is permanently terminated and cannot process any more commands.
 	/// This error is unrecoverable and indicates the group worker loop is no
 	/// longer running.
@@ -59,7 +61,7 @@ pub enum QueryError<M: StateMachine> {
 	#[error("Group is temporarily offline and cannot process queries")]
 	Offline(M::Query),
 
-	/// The group is permanently terminated and cannot process any more commands.
+	/// The group is permanently terminated and cannot process any more queries.
 	/// This error is unrecoverable and indicates the group worker loop is no
 	/// longer running.
 	#[error("Group is terminated")]

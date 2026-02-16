@@ -3,6 +3,7 @@ use {
 		PeerId,
 		groups::{
 			Index,
+			IndexRange,
 			StateMachine,
 			log::{Storage, Term},
 			raft::{
@@ -183,18 +184,20 @@ impl<M: StateMachine> Leader<M> {
 				commands,
 				request_id,
 			}) => {
-				let log_index = self.enqueue_commands(commands, shared);
+				if !commands.is_empty() {
+					let assigned = self.enqueue_commands(commands, shared);
 
-				if let Some(request_id) = request_id {
-					// the follower is interested in knowing the log index assigned to
-					// this command asap.
-					shared.bonds().send_raft_to::<M>(
-						&Message::Forward(Forward::ExecuteAck {
-							request_id,
-							log_index,
-						}),
-						sender,
-					);
+					if let Some(request_id) = request_id {
+						// the follower is interested in knowing the log index assigned to
+						// this command asap.
+						shared.bonds().send_raft_to::<M>(
+							&Message::Forward(Forward::ExecuteAck {
+								request_id,
+								assigned,
+							}),
+							sender,
+						);
+					}
 				}
 			}
 
@@ -214,27 +217,40 @@ impl<M: StateMachine> Leader<M> {
 	/// This will wake up any pending wakers that are waiting on the next leader
 	/// tick.
 	///
-	/// Returns the index of the log entry that will be assigned to this command
-	/// once it is appended to the log. This allows the caller to track the
-	/// progress of their command and know when it has been committed and applied
-	/// to the state machine.
+	/// Returns the index of the log entry that will be assigned to the last
+	/// command in the batch once it is appended to the log. This allows the
+	/// caller to track the progress of their command and know when it has been
+	/// committed and applied to the state machine.
+	///
+	/// If the batch of commands is empty it returns [0,0].
 	pub fn enqueue_commands<S: Storage<M::Command>>(
 		&mut self,
-		commands: Vec<M::Command>,
+		commands: impl IntoIterator<Item = M::Command>,
 		shared: &Shared<S, M>,
-	) -> Index {
+	) -> IndexRange {
 		let last_index = shared.log.last().index();
+		let pending_commands_count = self.client_commands.len();
+		let last_index = last_index + pending_commands_count;
+
 		for command in commands {
 			self.client_commands.send(command);
 		}
 
-		let expected_index = last_index + self.client_commands.len().into();
+		let new_commands_count = self
+			.client_commands
+			.len()
+			.saturating_sub(pending_commands_count);
 
-		for waker in self.wakers.drain(..) {
-			waker.wake();
+		if new_commands_count != 0 {
+			let new_position = last_index + new_commands_count;
+			let assigned_range = last_index.next()..=new_position;
+			for waker in self.wakers.drain(..) {
+				waker.wake();
+			}
+			return assigned_range;
 		}
 
-		expected_index
+		IndexRange::new(Index::zero(), Index::zero())
 	}
 
 	/// Records a positive vote from a follower that has acknowledged our
@@ -353,11 +369,7 @@ impl<M: StateMachine> Leader<M> {
 		// always vote for our own `AppendEntries` messages. If we are the
 		// only voter in the committee, this will immediately commit the new log
 		// entries.
-		self.record_vote(
-			shared.local_id(),
-			prev_pos.index() + count.into(),
-			shared,
-		);
+		self.record_vote(shared.local_id(), prev_pos.index() + count, shared);
 
 		let message = Message::AppendEntries(AppendEntries {
 			term: self.term,
@@ -377,7 +389,7 @@ impl<M: StateMachine> Leader<M> {
 		let followers = shared.bonds().broadcast_raft::<M>(&message);
 
 		if !followers.is_empty() {
-			let range = prev_pos.index().next()..=prev_pos.index() + count.into();
+			let range = prev_pos.index().next()..=prev_pos.index() + count;
 
 			tracing::trace!(
 				followers = %FmtIter::<Short<_>, _>::new(followers),

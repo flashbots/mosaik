@@ -80,19 +80,16 @@ where
 	/// Returns the index of the latest committed entry after this operation,
 	/// which may be less than the given index goes beyond the end of the log.
 	pub fn commit_up_to(&mut self, index: Index) -> Index {
-		let index: u64 = index.into();
-		let committed: u64 = self.committed.into();
-		let range = committed + 1..=index;
+		let committed = self.committed;
+		let range = committed.next()..=index;
+		let commands = self.storage.get_range(&range);
+		let commands_count = commands.len() as u64;
 
-		for i in range {
-			let i = i.into();
-			if let Some((command, _)) = self.storage.get(i) {
-				self.machine.apply(command);
-				self.committed = i;
-			} else {
-				break;
-			}
-		}
+		self
+			.machine
+			.apply_batch(commands.into_iter().map(|(_, _, cmd)| cmd));
+		self.committed = committed + commands_count;
+
 		self.committed
 	}
 

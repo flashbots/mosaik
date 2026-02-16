@@ -4,7 +4,7 @@ use {
 		PeerId,
 		groups::{
 			CommandError,
-			Index,
+			IndexRange,
 			QueryError,
 			StateMachine,
 			log,
@@ -19,7 +19,7 @@ use {
 		pin::Pin,
 		task::{Context, Poll},
 	},
-	futures::{FutureExt, Stream},
+	futures::Stream,
 	std::sync::Arc,
 };
 
@@ -112,58 +112,44 @@ where
 	pub fn execute(
 		&mut self,
 		commands: Vec<M::Command>,
-	) -> BoxPinFut<Result<Index, CommandError<M>>> {
-		match &mut self.role {
-			Role::Leader(leader) => {
-				// add the command to the leader's log
-				let expected_index = leader.enqueue_commands(commands, &self.shared);
+	) -> BoxPinFut<Result<IndexRange, CommandError<M>>> {
+		// feed the command to the current leader and wait for the command to be
+		// committed to the state machine by the group.
+		let feed_fut = self.feed(commands);
+		let when = self.shared.when().clone();
 
-				// return a future that resolves when the command is committed
-				let fut = self.shared.when().committed().reaches(expected_index);
-				fut.map(move |_| Ok(expected_index)).pin()
-			}
-
-			// followers forward the command to the current leader and return a future
-			// that resolves when the command is replicated and committed to the state
-			// machine by the leader.
-			Role::Follower(follower) => {
-				let ack_fut = follower.forward_commands(commands, &self.shared);
-				let when = self.shared.when().clone();
-
-				async move {
-					// resolves when the leader acks the command an assigns it an index
-					let index = ack_fut.await?;
-
-					// resolves when the leader committed index moves up to the assigned
-					// index
-					when.committed().reaches(index).await;
-
-					// return the index at which the command was committed
-					Ok(index)
-				}
-				.pin()
-			}
-
-			// nodes in candidate state cannot accept or forward commands
-			Role::Candidate(_) => ready(Err(CommandError::Offline(commands))).pin(),
+		async move {
+			let index = feed_fut.await?;
+			when.committed().reaches(*index.end()).await;
+			Ok(index)
 		}
+		.pin()
 	}
 
 	/// Sends the command to the current leader without waiting for it to be
 	/// committed to the state machine. The returned future will resolve once the
-	/// command has been sent to the leader.
+	/// command has been assigned an index by the leader, but it does not
+	/// guarantee that the command has been committed to the state.
 	pub fn feed(
 		&mut self,
-		command: Vec<M::Command>,
-	) -> impl Future<Output = Result<(), CommandError<M>>> + Send + Sync + 'static
-	{
+		commands: Vec<M::Command>,
+	) -> BoxPinFut<Result<IndexRange, CommandError<M>>> {
 		match &mut self.role {
 			Role::Leader(leader) => {
-				leader.enqueue_commands(command, &self.shared);
-				ready(Ok(()))
+				// add the command to the leader's log and return immediately with the
+				// assigned index, without waiting for it to be committed
+				ready(Ok(leader.enqueue_commands(commands, &self.shared))).pin()
 			}
-			Role::Follower(_follower) => todo!("feed as follower"),
-			Role::Candidate(_) => ready(Err(CommandError::Offline(command))),
+
+			// followers forward the command to the current leader and return a future
+			// that resolves when the command is acknowledged and assigned an index.
+			Role::Follower(follower) => {
+				follower.forward_commands(commands, &self.shared).pin()
+			}
+			Role::Candidate(_) => {
+				// nodes in candidate state cannot accept or forward commands
+				ready(Err(CommandError::Offline(commands))).pin()
+			}
 		}
 	}
 
