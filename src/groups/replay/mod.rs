@@ -63,6 +63,10 @@ mod session;
 ///   before sending the next sync request to the same peer. This ensures that
 ///   the follower does not overwhelm any single peer with too many sync
 ///   requests at once.
+///
+/// - This state sync provider does not support pruning log entries, for
+///   high-throughput groups using this state sync implementation consider using
+///   on-disk logs storage.
 pub struct LogReplaySync<M: StateMachine> {
 	/// Configuration parameters for the log replay sync process.
 	/// Those parameters contribute to the signature of this state sync

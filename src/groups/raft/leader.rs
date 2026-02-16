@@ -297,6 +297,10 @@ impl<M: StateMachine> Leader<M> {
 				);
 
 				shared.update_committed(new_committed);
+
+				// check with the state sync provider if we can prune any log entries up
+				// to the new committed index after advancing the commit index.
+				shared.prune_safe_prefix();
 			}
 		}
 	}
@@ -340,6 +344,10 @@ impl<M: StateMachine> Leader<M> {
 				);
 
 				shared.update_committed(new_committed);
+
+				// check with the state sync provider if we can prune any log entries up
+				// to the new committed index after advancing the commit index.
+				shared.prune_safe_prefix();
 			}
 		}
 	}

@@ -154,6 +154,28 @@ where
 		sync.create_session(self, position, entries)
 	}
 
+	/// Queries the state sync provider for the log index up to which it is safe
+	/// to prune log entries, and prunes them if the provider indicates it is
+	/// safe to do so.
+	///
+	/// This should be called after the committed index advances, as pruning is
+	/// only meaningful for committed entries that the provider has determined
+	/// are no longer needed for state synchronization.
+	pub fn prune_safe_prefix(&mut self) {
+		// SAFETY: The `sync_provider` field is initialized in the constructor of
+		// `Shared` and is never mutated after that, so it is safe to assume that
+		// it is always initialized when accessed through this method.
+		let provider: *mut _ = unsafe { self.sync_provider.assume_init_mut() };
+
+		// SAFETY: There is no public API on `StateSyncContext` that allows the
+		// mutation of the `sync_provider` field of `Shared`.
+		let provider = unsafe { &mut *provider };
+
+		if let Some(up_to) = provider.safe_to_prune_prefix(self) {
+			self.log.prune_prefix(up_to);
+		}
+	}
+
 	/// Updates the leader information in the group state.
 	pub fn update_leader(&self, leader: Option<PeerId>) {
 		self.group.when.update_leader(leader);

@@ -1,7 +1,7 @@
 [package]
 name = "mosaik"
 description = "A Rust runtime for building self-organizing, leaderless distributed systems."
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 rust-version = "1.89"
 license = "MIT"
@@ -26,6 +26,7 @@ must_use_candidate = "allow"
 redundant_closure_for_method_calls = "allow"
 similar_names = "allow"
 cast_precision_loss = "allow"
+cast_possible_truncation = "allow"
 unused_async = "warn"
 
 [dependencies]
@@ -63,3 +64,4 @@ iroh-gossip = "0.96.0"
 anyhow = "1.0"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 ctor = { version = "0.6" }
+rstest = "0.26"

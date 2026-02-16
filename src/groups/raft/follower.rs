@@ -567,6 +567,7 @@ impl<M: StateMachine> Follower<M> {
 			if prev_committed < new_committed {
 				// Signal to public api observers that the committed index has advanced
 				shared.when().update_committed(new_committed);
+				shared.prune_safe_prefix();
 			}
 		}
 

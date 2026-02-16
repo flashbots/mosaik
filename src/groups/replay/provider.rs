@@ -82,16 +82,24 @@ impl<M: StateMachine> StateSyncProvider for LogReplayProvider<M> {
 					return Ok(());
 				}
 
+				// The actual range may differ from requested if some
+				// prefix entries have been pruned from the log. Use the
+				// indices reported by the storage to build the accurate
+				// range so the session can place entries correctly.
+				let actual_start = entries.first().unwrap().1;
+				let actual_end = entries.last().unwrap().1;
+				let actual_range = actual_start..=actual_end;
+
 				tracing::trace!(
 					peer = %Short(sender),
-					range = %Pretty(&range),
+					range = %Pretty(&actual_range),
 					group = %Short(cx.group_id()),
 					network = %Short(cx.network_id()),
 					"providing state to"
 				);
 
 				cx.send_to(sender, LogReplaySyncMessage::FetchEntriesResponse {
-					range,
+					range: actual_range,
 					entries: entries
 						.into_iter()
 						.map(|(term, _, command)| (command, term))

@@ -4,6 +4,7 @@ use {
 		utils::{discover_all, timeout_after, timeout_s},
 	},
 	mosaik::{groups::IndexRange, *},
+	rstest::rstest,
 };
 
 /// This test verifies that commands can be executed on leaders and followers,
@@ -108,9 +109,15 @@ async fn one_leader_one_follower_small() -> anyhow::Result<()> {
 	Ok(())
 }
 
+#[rstest]
+#[case(7)]
+#[case(20)]
+#[case(100)]
+#[case(1000)]
 #[tokio::test]
-async fn one_leader_one_follower_large() -> anyhow::Result<()> {
-	const SYNC_BATCH_SIZE: u64 = 7;
+async fn one_leader_one_follower_large(
+	#[case] batch_size: u64,
+) -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 	let group_key = GroupKey::random();
 
@@ -118,9 +125,7 @@ async fn one_leader_one_follower_large() -> anyhow::Result<()> {
 	let g0 = n0
 		.groups()
 		.with_key(group_key)
-		.with_state_machine(
-			Counter::default().with_sync_batch_size(SYNC_BATCH_SIZE),
-		)
+		.with_state_machine(Counter::default().with_sync_batch_size(batch_size))
 		.join();
 
 	let timeout = 2
@@ -152,9 +157,7 @@ async fn one_leader_one_follower_large() -> anyhow::Result<()> {
 	let g1 = n1
 		.groups()
 		.with_key(group_key)
-		.with_state_machine(
-			Counter::default().with_sync_batch_size(SYNC_BATCH_SIZE),
-		)
+		.with_state_machine(Counter::default().with_sync_batch_size(batch_size))
 		.join();
 
 	discover_all([&n0, &n1]).await?;
@@ -194,9 +197,7 @@ async fn one_leader_one_follower_large() -> anyhow::Result<()> {
 	let g2 = n2
 		.groups()
 		.with_key(group_key)
-		.with_state_machine(
-			Counter::default().with_sync_batch_size(SYNC_BATCH_SIZE),
-		)
+		.with_state_machine(Counter::default().with_sync_batch_size(batch_size))
 		.join();
 
 	discover_all([&n0, &n1, &n2]).await?;

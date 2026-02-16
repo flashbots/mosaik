@@ -67,6 +67,23 @@ where
 		self.storage.truncate(at);
 	}
 
+	/// Prunes log entries up to the given index (inclusive) from the beginning
+	/// of the log. This should only be called when the state sync provider has
+	/// determined that those entries are no longer needed for state
+	/// synchronization of lagging followers.
+	///
+	/// The given index must not exceed the committed index, as uncommitted
+	/// entries must never be pruned.
+	pub fn prune_prefix(&mut self, up_to: Index) {
+		debug_assert!(
+			up_to <= self.committed,
+			"cannot prune uncommitted entries (up_to: {up_to}, committed: {})",
+			self.committed,
+		);
+		let up_to = up_to.min(self.committed);
+		self.storage.prune_prefix(up_to);
+	}
+
 	/// Appends a new entry.
 	pub fn append(&mut self, command: M::Command, term: Term) -> Index {
 		self.storage.append(command, term)
