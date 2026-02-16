@@ -264,15 +264,16 @@ impl Sender {
 		self.state.send_replace(State::Terminated);
 		self.stats.disconnected();
 
-		if let Err(error) = self.link.close(reason.clone()).await {
-			if !error.is_cancelled() && !error.was_already_closed() {
-				tracing::debug!(
-					error = %error,
-					stream_id = %Short(self.config.stream_id),
-					consumer_id = %Short(*self.peer.id()),
-					"error while disconnecting consumer",
-				);
-			}
+		if let Err(error) = self.link.close(reason.clone()).await
+			&& !error.is_cancelled()
+			&& !error.was_already_closed()
+		{
+			tracing::debug!(
+				error = %error,
+				stream_id = %Short(self.config.stream_id),
+				consumer_id = %Short(*self.peer.id()),
+				"error while disconnecting consumer",
+			);
 		}
 
 		tracing::trace!(

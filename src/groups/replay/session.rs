@@ -74,6 +74,9 @@ pub struct LogReplaySession<M: StateMachine> {
 	wakers: Vec<Waker>,
 
 	// debug metrics
+	total: usize,
+
+	// debug metrics
 	downloaded: usize,
 
 	// debug metrics
@@ -103,6 +106,12 @@ impl<M: StateMachine> LogReplaySession<M> {
 	) -> Self {
 		let local_pos = cx.log().last().unwrap_or_default();
 		let gap = local_pos.index().next()..=position.index();
+		let total = (position.index() - local_pos.index()).as_usize();
+
+		assert_ne!(
+			total, 0,
+			"no need to create a sync session if we're not behind"
+		);
 
 		let leader = cx
 			.leader()
@@ -151,6 +160,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 			downloaded: 0,
 			started_at: Instant::now(),
 			unique_peers: HashSet::new(),
+			total,
 		}
 	}
 
@@ -338,7 +348,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 			range = %Pretty(&range),
 			group = %Short(sync_cx.group_id()),
 			network = %Short(sync_cx.network_id()),
-			"syncing state from"
+			"requesting state from"
 		);
 
 		sync_cx.send_to(
@@ -438,12 +448,14 @@ impl<M: StateMachine> LogReplaySession<M> {
 			let synced_range =
 				start..=sync_cx.log().last().unwrap_or_default().index();
 
+			let progress = self.downloaded as f64 / self.total as f64 * 100.0;
+
 			tracing::debug!(
 				range = %Pretty(&synced_range),
 				from = %Short(peer),
 				group = %Short(sync_cx.group_id()),
 				network = %Short(sync_cx.network_id()),
-				"syncing state"
+				"syncing state {progress:.1}% complete",
 			);
 
 			cursor = end.next();

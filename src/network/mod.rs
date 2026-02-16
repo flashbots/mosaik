@@ -5,7 +5,6 @@ use {
 		discovery::Discovery,
 		groups::Groups,
 		primitives::Digest,
-		store::Stores,
 		streams::Streams,
 	},
 	iroh::protocol::{Router, RouterBuilder},
@@ -62,9 +61,6 @@ pub struct Network {
 
 	/// Groups system
 	groups: Groups,
-
-	/// Stores system
-	stores: Stores,
 
 	/// The protocol router.
 	/// Responsible for routing incoming connections to the appropriate protocol
@@ -136,11 +132,6 @@ impl Network {
 	/// Returns a reference to the groups system.
 	pub const fn groups(&self) -> &Groups {
 		&self.groups
-	}
-
-	/// Returns a reference to the stores system.
-	pub const fn stores(&self) -> &Stores {
-		&self.stores
 	}
 }
 

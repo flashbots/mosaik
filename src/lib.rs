@@ -1,8 +1,6 @@
 //! # Mosaik
 //!
-//! A Rust SDK for building self-organizing, leaderless distributed systems,
-//! providing primitives for automatic discovery, topology management, and
-//! load-balancing.
+//! A Rust runtime for building self-organizing, leaderless distributed systems.
 
 pub mod discovery;
 pub mod groups;

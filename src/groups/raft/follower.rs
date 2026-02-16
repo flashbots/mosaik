@@ -390,10 +390,10 @@ impl<M: StateMachine> Follower<M> {
 			Some(local_term) if local_term == request.prev_log_position.term() => {
 				if let Some(first) = request.entries.first() {
 					let next_index = request.prev_log_position.index().next();
-					if let Some(existing_term) = shared.log.term_at(next_index) {
-						if existing_term != first.term {
-							shared.log.truncate(next_index);
-						}
+					if let Some(existing_term) = shared.log.term_at(next_index)
+						&& existing_term != first.term
+					{
+						shared.log.truncate(next_index);
 					}
 				}
 				true

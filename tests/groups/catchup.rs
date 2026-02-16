@@ -110,6 +110,7 @@ async fn one_leader_one_follower_small() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn one_leader_one_follower_large() -> anyhow::Result<()> {
+	const SYNC_BATCH_SIZE: u64 = 7;
 	let network_id = NetworkId::random();
 	let group_key = GroupKey::random();
 
@@ -117,7 +118,9 @@ async fn one_leader_one_follower_large() -> anyhow::Result<()> {
 	let g0 = n0
 		.groups()
 		.with_key(group_key)
-		.with_state_machine(Counter::default().with_chunk_size(20))
+		.with_state_machine(
+			Counter::default().with_sync_batch_size(SYNC_BATCH_SIZE),
+		)
 		.join();
 
 	let timeout = 2
@@ -149,7 +152,9 @@ async fn one_leader_one_follower_large() -> anyhow::Result<()> {
 	let g1 = n1
 		.groups()
 		.with_key(group_key)
-		.with_state_machine(Counter::default().with_chunk_size(20))
+		.with_state_machine(
+			Counter::default().with_sync_batch_size(SYNC_BATCH_SIZE),
+		)
 		.join();
 
 	discover_all([&n0, &n1]).await?;
@@ -189,7 +194,9 @@ async fn one_leader_one_follower_large() -> anyhow::Result<()> {
 	let g2 = n2
 		.groups()
 		.with_key(group_key)
-		.with_state_machine(Counter::default().with_chunk_size(20))
+		.with_state_machine(
+			Counter::default().with_sync_batch_size(SYNC_BATCH_SIZE),
+		)
 		.join();
 
 	discover_all([&n0, &n1, &n2]).await?;

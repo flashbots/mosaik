@@ -72,10 +72,10 @@ impl When {
 				}
 
 				let value = *leader.borrow_and_update();
-				if let Some(new_leader) = value {
-					if Some(new_leader) != current_leader {
-						return new_leader;
-					}
+				if let Some(new_leader) = value
+					&& Some(new_leader) != current_leader
+				{
+					return new_leader;
 				}
 			}
 		}

@@ -19,21 +19,21 @@ mod leader;
 #[derive(Debug)]
 struct Counter {
 	value: i64,
-	chunk_size: NonZero<u64>,
+	sync_batch_size: NonZero<u64>,
 }
 
 impl Default for Counter {
 	fn default() -> Self {
 		Self {
 			value: 0,
-			chunk_size: NonZero::new(1000).unwrap(),
+			sync_batch_size: NonZero::new(1000).unwrap(),
 		}
 	}
 }
 
 impl Counter {
-	pub const fn with_chunk_size(mut self, chunk_size: u64) -> Self {
-		self.chunk_size = NonZero::new(chunk_size).unwrap();
+	pub const fn with_sync_batch_size(mut self, sync_batch_size: u64) -> Self {
+		self.sync_batch_size = NonZero::new(sync_batch_size).unwrap();
 		self
 	}
 }
@@ -66,7 +66,7 @@ impl StateMachine for Counter {
 	}
 
 	fn sync_factory(&self) -> Self::StateSync {
-		LogReplaySync::default().with_batch_size(self.chunk_size)
+		LogReplaySync::default().with_batch_size(self.sync_batch_size)
 	}
 }
 
@@ -90,10 +90,10 @@ async fn leaders_converged<M: StateMachine>(
 	loop {
 		let leaders = groups.iter().map(|g| g.leader()).collect::<Vec<_>>();
 
-		if let Some(first_leader) = leaders.first().and_then(|l| *l) {
-			if leaders.iter().all(|&l| l == Some(first_leader)) {
-				return first_leader;
-			}
+		if let Some(first_leader) = leaders.first().and_then(|l| *l)
+			&& leaders.iter().all(|&l| l == Some(first_leader))
+		{
+			return first_leader;
 		}
 
 		let mut changes: FuturesUnordered<_> =

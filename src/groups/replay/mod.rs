@@ -175,7 +175,7 @@ struct Config {
 impl Default for Config {
 	fn default() -> Self {
 		Self {
-			batch_size: 200,
+			batch_size: 2000,
 			fetch_timeout: Duration::from_secs(25),
 		}
 	}
