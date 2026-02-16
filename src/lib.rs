@@ -4,7 +4,6 @@
 //! providing primitives for automatic discovery, topology management, and
 //! load-balancing.
 
-pub mod builtin;
 pub mod discovery;
 pub mod groups;
 pub mod network;

@@ -3,7 +3,8 @@ use {
 	crate::{
 		PeerId,
 		groups::{
-			log::{StateMachine, Storage, Term},
+			StateMachine,
+			log::{Storage, Term},
 			raft::{
 				Message,
 				leader::Leader,
@@ -105,7 +106,9 @@ impl<M: StateMachine> Candidate<M> {
 		);
 
 		// Broadcast the `RequestVote` message to all bonded peers in the group.
-		let requested_from = shared.bonds().broadcast_raft::<M>(request);
+		let requested_from = shared
+			.bonds()
+			.broadcast_raft::<M>(&Message::RequestVote(request));
 
 		let requested_from =
 			requested_from.into_iter().chain(once(candidate)).collect();
@@ -192,7 +195,7 @@ impl<M: StateMachine> Candidate<M> {
 	/// role.
 	pub fn receive_protocol_message<S: Storage<M::Command>>(
 		&mut self,
-		message: Message<M::Command>,
+		message: Message<M>,
 		sender: PeerId,
 		shared: &Shared<S, M>,
 	) -> Result<(), RoleHandlerError<M>> {

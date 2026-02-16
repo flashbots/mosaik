@@ -83,7 +83,9 @@ mod error;
 mod group;
 mod key;
 mod log;
+mod machine;
 mod raft;
+mod replay;
 mod when;
 
 pub use {
@@ -98,7 +100,9 @@ pub use {
 	error::{CommandError, Error, QueryError},
 	group::*,
 	key::GroupKey,
-	log::*,
+	log::{Cursor, InMemoryLogStore, Index, Storage, Term},
+	machine::*,
+	replay::*,
 	when::When,
 };
 

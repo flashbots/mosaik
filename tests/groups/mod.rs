@@ -1,7 +1,11 @@
 use {
 	core::num::NonZero,
 	futures::{StreamExt, stream::FuturesUnordered},
-	mosaik::{PeerId, groups::StateMachine, primitives::UniqueId, unique_id},
+	mosaik::{
+		PeerId,
+		groups::{LogReplaySync, StateMachine},
+		primitives::UniqueId,
+	},
 	serde::{Deserialize, Serialize},
 };
 
@@ -38,13 +42,10 @@ impl StateMachine for Counter {
 	type Command = CounterCommand;
 	type Query = CounterValueQuery;
 	type QueryResult = i64;
+	type StateSync = LogReplaySync<Self>;
 
-	const ID: UniqueId = unique_id!(
-		"0000000000000000000000000000000000000000000000000000000000000002"
-	);
-
-	fn reset(&mut self) {
-		self.value = 0;
+	fn signature(&self) -> UniqueId {
+		UniqueId::from_u8(2)
 	}
 
 	fn apply(&mut self, command: Self::Command) {
@@ -64,8 +65,8 @@ impl StateMachine for Counter {
 		}
 	}
 
-	fn catchup_chunk_size(&self) -> NonZero<u64> {
-		self.chunk_size
+	fn sync_factory(&self) -> Self::StateSync {
+		LogReplaySync::default().with_batch_size(self.chunk_size)
 	}
 }
 

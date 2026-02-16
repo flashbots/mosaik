@@ -3,18 +3,20 @@ use {
 		Digest,
 		GroupKey,
 		Groups,
-		builtin::groups::{InMemory, NoOp},
 		groups::{
 			Group,
+			NoOp,
 			StateMachine,
 			Storage,
 			config::GroupConfig,
+			log::InMemoryLogStore,
 			worker::Worker,
 		},
 	},
 	core::time::Duration,
 	dashmap::Entry,
 	derive_builder::Builder,
+	serde::{Deserialize, Serialize},
 };
 
 /// Configures the behavior of a [`Group`] that is being joined.
@@ -74,12 +76,12 @@ impl<'g> GroupBuilder<'g, (), ()> {
 	pub fn with_state_machine<SM: StateMachine>(
 		self,
 		state_machine: SM,
-	) -> GroupBuilder<'g, InMemory<SM::Command>, SM> {
+	) -> GroupBuilder<'g, InMemoryLogStore<SM::Command>, SM> {
 		GroupBuilder {
 			groups: self.groups,
 			key: self.key,
 			intervals: self.intervals,
-			storage: InMemory::<SM::Command>::default(),
+			storage: InMemoryLogStore::<SM::Command>::default(),
 			state_machine,
 		}
 	}
@@ -95,7 +97,7 @@ impl<'g> GroupBuilder<'g, (), ()> {
 	}
 }
 
-impl<'g, M> GroupBuilder<'g, InMemory<M::Command>, M>
+impl<'g, M> GroupBuilder<'g, InMemoryLogStore<M::Command>, M>
 where
 	M: StateMachine,
 {
@@ -103,7 +105,7 @@ where
 	/// This is used to persist the current state of the log and must be
 	/// compatible with the command type of the state machine. This value does
 	/// not affect the generated group id.
-	pub fn with_storage<S>(self, storage: S) -> GroupBuilder<'g, S, M>
+	pub fn with_log_storage<S>(self, storage: S) -> GroupBuilder<'g, S, M>
 	where
 		S: Storage<M::Command>,
 	{
@@ -141,9 +143,13 @@ where
 	/// Joins a group with the specified configuration.
 	///
 	/// The group builder values will generate a unique group id that is derived
-	/// from the group key, the
+	/// from the group key, the state machine, and the intervals configuration.
 	pub fn join(self) -> Group<M> {
-		let config = GroupConfig::new::<M>(self.key, self.intervals);
+		let config = GroupConfig::new(
+			self.key, //
+			self.intervals,
+			&self.state_machine,
+		);
 
 		let group_id = *config.group_id();
 		match self.groups.active.entry(group_id) {
@@ -161,7 +167,9 @@ where
 	}
 }
 
-#[derive(Builder, Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(
+	Builder, Debug, Clone, Hash, PartialEq, Serialize, Deserialize, Eq,
+)]
 #[builder(pattern = "owned", setter(prefix = "with"), derive(Debug, Clone))]
 #[builder_struct_attr(doc(hidden))]
 pub struct IntervalsConfig {

@@ -6,6 +6,7 @@ use {
 			CommandError,
 			Index,
 			QueryError,
+			StateMachine,
 			log,
 			raft::{role::Role, shared::Shared},
 			state::WorkerState,
@@ -23,7 +24,6 @@ use {
 };
 
 mod candidate;
-mod catchup;
 mod follower;
 mod leader;
 mod protocol;
@@ -64,7 +64,7 @@ pub(super) use protocol::Message;
 pub struct Raft<S, M>
 where
 	S: log::Storage<M::Command>,
-	M: log::StateMachine,
+	M: StateMachine,
 {
 	/// The current role of this node in the Raft consensus algorithm and its
 	/// role-specific state.
@@ -77,7 +77,7 @@ where
 impl<S, M> Raft<S, M>
 where
 	S: log::Storage<M::Command>,
-	M: log::StateMachine,
+	M: StateMachine,
 {
 	/// Creates a new consensus instance with the given storage and state machine
 	/// implementations. This is called when initializing the Worker task for a
@@ -215,7 +215,7 @@ where
 impl<S, M> Stream for Raft<S, M>
 where
 	S: log::Storage<M::Command>,
-	M: log::StateMachine,
+	M: StateMachine,
 {
 	type Item = ();
 

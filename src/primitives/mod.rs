@@ -33,3 +33,10 @@ use {backoff::backoff::Backoff, std::sync::Arc};
 pub type BackoffFactory = Arc<
 	dyn Fn() -> Box<dyn Backoff + Send + Sync + 'static> + Send + Sync + 'static,
 >;
+
+/// Used internally as a sealed trait to prevent external implementations of
+/// certain traits.
+#[doc(hidden)]
+pub(crate) mod sealed {
+	pub trait Sealed {}
+}

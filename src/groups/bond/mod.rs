@@ -479,9 +479,8 @@ impl Bonds {
 	/// Sends a raft protocol message to all bonded peers.
 	pub(super) fn broadcast_raft<M: StateMachine>(
 		&self,
-		message: impl Into<raft::Message<M::Command>>,
+		message: &raft::Message<M>,
 	) -> Vec<PeerId> {
-		let message: raft::Message<M::Command> = message.into();
 		let message = BondMessage::Raft(serialize(&message));
 		self.broadcast(&message, &[])
 	}
@@ -489,7 +488,7 @@ impl Bonds {
 	/// Sends a raft protocol message to the specified bonded peer.
 	pub(super) fn send_raft_to<M: StateMachine>(
 		&self,
-		message: impl Into<raft::Message<M::Command>>,
+		message: &raft::Message<M>,
 		to: PeerId,
 	) {
 		let Some(bond) = self.get(&to) else {
@@ -500,8 +499,7 @@ impl Bonds {
 			return;
 		};
 
-		let message: raft::Message<M::Command> = message.into();
-		bond.send_message(BondMessage::Raft(serialize(&message)));
+		bond.send_message(BondMessage::Raft(serialize(message)));
 	}
 
 	/// Broadcast a message to all connected peers in the group. The `except`
@@ -510,7 +508,7 @@ impl Bonds {
 	fn broadcast(&self, message: &BondMessage, except: &[PeerId]) -> Vec<PeerId> {
 		// serialize once and reuse a pointer to the same encoded message bytes
 		// buffer for all bonds
-		let encoded = serialize(&message);
+		let encoded = serialize(message);
 
 		let mut sent_to = Vec::new();
 		for bond in self.iter() {

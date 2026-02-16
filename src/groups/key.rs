@@ -1,6 +1,7 @@
 use {
 	crate::{Digest, Groups, PeerId, groups::GroupId, network::link::Link},
 	core::fmt,
+	serde::{Deserialize, Serialize},
 };
 
 /// Group secret key used during initial handshake to authorize group
@@ -29,7 +30,7 @@ pub type SecretProof = Digest;
 ///   the secret itself by generating a proof of knowledge derived from the
 ///   secret and the shared random (see [`Link::shared_random`]) value for the
 ///   link.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GroupKey {
 	/// The secret key used to derive the group id and authenticate peers during
 	/// bonding handshake.
@@ -89,65 +90,5 @@ impl fmt::Display for GroupKey {
 		let head = hex::encode(&self.secret().as_bytes()[..1]);
 		let tail = hex::encode(&self.secret().as_bytes()[31..]);
 		write!(f, "{head}****{tail}")
-	}
-}
-
-impl serde::Serialize for GroupKey {
-	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-	where
-		S: serde::Serializer,
-	{
-		if serializer.is_human_readable() {
-			serializer.serialize_str(&hex::encode(self.secret.as_bytes()))
-		} else {
-			serializer.serialize_bytes(self.secret.as_bytes())
-		}
-	}
-}
-
-impl<'de> serde::Deserialize<'de> for GroupKey {
-	fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-	where
-		D: serde::Deserializer<'de>,
-	{
-		struct GroupKeyVisitor;
-
-		impl serde::de::Visitor<'_> for GroupKeyVisitor {
-			type Value = GroupKey;
-
-			fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-				formatter.write_str("a valid group secret key")
-			}
-
-			fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-			where
-				E: serde::de::Error,
-			{
-				let bytes = hex::decode(v).map_err(serde::de::Error::custom)?;
-				let secret = Digest::from_bytes(
-					bytes
-						.try_into()
-						.map_err(|_| serde::de::Error::custom("invalid secret length"))?,
-				);
-				Ok(GroupKey::from_secret(secret))
-			}
-
-			fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-			where
-				E: serde::de::Error,
-			{
-				let secret = Digest::from_bytes(
-					v.try_into()
-						.map_err(|_| serde::de::Error::custom("invalid secret length"))?,
-				);
-				Ok(GroupKey::from_secret(secret))
-			}
-		}
-
-		if deserializer.is_human_readable() {
-			deserializer.deserialize_str(GroupKeyVisitor)
-		} else {
-			deserializer.deserialize_bytes(GroupKeyVisitor)
-		}
 	}
 }

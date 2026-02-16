@@ -149,6 +149,11 @@ impl<'de> Deserialize<'de> for Digest {
 }
 
 impl Digest {
+	/// Returns a unique id consisting of 32 zero bytes.
+	pub const fn zero() -> Self {
+		Self(blake3::Hash::from_bytes([0u8; 32]))
+	}
+
 	/// Returns the byte representation of the unique id.
 	pub const fn as_bytes(&self) -> &[u8; 32] {
 		self.0.as_bytes()

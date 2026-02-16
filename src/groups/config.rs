@@ -1,7 +1,7 @@
 use {
 	crate::{
 		GroupKey,
-		groups::{GroupId, IntervalsConfig, StateMachine},
+		groups::{GroupId, IntervalsConfig, StateMachine, StateSync},
 	},
 	core::time::Duration,
 	derive_builder::Builder,
@@ -38,15 +38,17 @@ pub struct GroupConfig {
 }
 
 impl GroupConfig {
-	pub fn new<M: StateMachine>(
+	pub fn new(
 		key: GroupKey,
 		intervals: IntervalsConfig,
+		state_machine: &impl StateMachine,
 	) -> Self {
 		let id = key
 			.secret()
 			.hashed()
 			.derive(intervals.digest())
-			.derive(M::ID);
+			.derive(state_machine.signature())
+			.derive(state_machine.sync_factory().signature());
 
 		Self { id, key, intervals }
 	}

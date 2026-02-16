@@ -3,7 +3,8 @@ use {
 		PeerId,
 		groups::{
 			Index,
-			log::{StateMachine, Storage, Term},
+			StateMachine,
+			log::{Storage, Term},
 			raft::{
 				Message,
 				protocol::{AppendEntries, Forward, LogEntry, Vote},
@@ -142,7 +143,7 @@ impl<M: StateMachine> Leader<M> {
 	/// if the message was unexpected and was not handled by this role.
 	pub fn receive_protocol_message<S: Storage<M::Command>>(
 		&mut self,
-		message: Message<M::Command>,
+		message: Message<M>,
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
 	) -> Result<(), RoleHandlerError<M>> {
@@ -188,7 +189,7 @@ impl<M: StateMachine> Leader<M> {
 					// the follower is interested in knowing the log index assigned to
 					// this command asap.
 					shared.bonds().send_raft_to::<M>(
-						Message::Forward(Forward::ExecuteAck {
+						&Message::Forward(Forward::ExecuteAck {
 							request_id,
 							log_index,
 						}),
@@ -373,7 +374,7 @@ impl<M: StateMachine> Leader<M> {
 		});
 
 		// broadcast the new log entries to all followers.
-		let followers = shared.bonds().broadcast_raft::<M>(message);
+		let followers = shared.bonds().broadcast_raft::<M>(&message);
 
 		if !followers.is_empty() {
 			let range = prev_pos.index().next()..=prev_pos.index() + count.into();
@@ -413,7 +414,7 @@ impl<M: StateMachine> Leader<M> {
 
 		shared
 			.bonds()
-			.broadcast_raft::<M>(Message::AppendEntries(heartbeat));
+			.broadcast_raft::<M>(&Message::AppendEntries(heartbeat));
 
 		self.reset_heartbeat_timeout();
 		Poll::Ready(())

@@ -1,12 +1,4 @@
-use {
-	crate::groups::{
-		Cursor,
-		Index,
-		Term,
-		log::{rsm::StateMachine, storage::Storage},
-	},
-	core::ops::RangeInclusive,
-};
+use crate::groups::{Cursor, Index, StateMachine, Term, log::storage::Storage};
 
 pub struct Driver<S, M>
 where
@@ -59,27 +51,6 @@ where
 		self.committed
 	}
 
-	/// Returns the range of available log indices in the store.
-	pub fn available(&self) -> RangeInclusive<Index> {
-		self.storage.available()
-	}
-
-	/// Retrieves the entry at the given index.
-	pub fn get(&self, index: Index) -> Option<(M::Command, Term)> {
-		self.storage.get(index)
-	}
-
-	/// Retrieves a range of log entries from the log, starting from `start`
-	/// and ending at `end` (inclusive). Returns an iterator over the entries in
-	/// the specified range. If any index in the range is out of bounds, it is
-	/// skipped and not included in the returned iterator.
-	pub fn get_range(
-		&self,
-		range: RangeInclusive<Index>,
-	) -> impl Iterator<Item = (Term, Index, M::Command)> + '_ {
-		self.storage.get_range(range)
-	}
-
 	/// Returns the term of the entry at the given index, or None if no entry
 	/// exists at that index. Log entries are indexed starting from 1, so
 	/// `term_at(0)` always returns `Some(0)`.
@@ -130,7 +101,18 @@ where
 		&self.machine
 	}
 
+	/// Returns a mutable reference to the state machine.
 	pub const fn machine_mut(&mut self) -> &mut M {
 		&mut self.machine
+	}
+
+	/// Returns a reference to the raw log storage.
+	pub const fn storage(&self) -> &S {
+		&self.storage
+	}
+
+	/// Returns a mutable reference to the raw log storage.
+	pub const fn storage_mut(&mut self) -> &mut S {
+		&mut self.storage
 	}
 }

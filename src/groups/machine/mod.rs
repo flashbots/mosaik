@@ -8,20 +8,22 @@
 
 use {
 	crate::primitives::UniqueId,
-	core::{fmt::Debug, num::NonZero},
+	core::fmt::Debug,
 	serde::{Serialize, de::DeserializeOwned},
 };
+
+mod noop;
+mod sync;
+
+#[doc(hidden)]
+pub use noop::NoOp;
+// Public API traits for user-provided state machine implementations.
+pub use sync::*;
 
 /// This trait defines the replicated state machine (RSM) that is used by the
 /// Raft log. Each group has a state machine that represents the
 /// application-specific logic of the group.
 pub trait StateMachine: Send + Sync + Unpin + 'static {
-	/// A unique identifier for the state machine type. This value is part of the
-	/// group id derivation and must be identical for all members of the same
-	/// group. Any difference in this value will render a different group id and
-	/// will prevent peers from joining the same group.
-	const ID: UniqueId;
-
 	/// The type of commands that are applied to the state machine and replicated
 	/// in the log. Commands represent state transitions and mutate the state
 	/// machine. They are sent to the leader by clients and replicated to
@@ -40,9 +42,22 @@ pub trait StateMachine: Send + Sync + Unpin + 'static {
 	/// executed by external clients.
 	type QueryResult: QueryResult;
 
-	/// Reset to initial state. Called when the log is truncated
-	/// below the commit index due to rival leader reconciliation.
-	fn reset(&mut self);
+	/// The type responsible for implementing the state synchronization (catch-up)
+	/// process for followers that are not up to date with the committed group
+	/// state.
+	type StateSync: StateSync<Machine = Self>;
+
+	/// A unique identifier for the state machine type and settings. This value is
+	/// part of the group id derivation and must be identical for all members of
+	/// the same group. Any difference in this value will render a different
+	/// group id and will prevent peers from joining the same group.
+	///
+	/// This value should be derived from the state machine implementation type
+	/// and any relevant init parameters, such that different state machine
+	/// implementations or configurations yield different ids. This is used to
+	/// prevent peers with incompatible state machines from joining the same group
+	/// and causing undefined behavior.
+	fn signature(&self) -> UniqueId;
 
 	/// Applies a command to the state machine, mutating its state. This method is
 	/// called by the log when a command is committed (replicated to a majority).
@@ -54,17 +69,9 @@ pub trait StateMachine: Send + Sync + Unpin + 'static {
 	/// machine and returns a result without modifying the state.
 	fn query(&self, query: Self::Query) -> Self::QueryResult;
 
-	/// The recommended maximum number of commands to include in a single
-	/// follower-catchup response.
-	///
-	/// This value is used when followers lag behind the leader and need to catch
-	/// up by receiving historical commands from other group members.
-	///
-	/// As the author of the state machine implementation, try to keep this value
-	/// so that individual chunks are in the 1-2 MB range.
-	fn catchup_chunk_size(&self) -> NonZero<u64> {
-		NonZero::new(1000).unwrap()
-	}
+	/// Returns a new instance of the state synchronization implementation that is
+	/// used to synchronize lagging followers with the current state of the group.
+	fn sync_factory(&self) -> Self::StateSync;
 }
 
 pub trait Command:

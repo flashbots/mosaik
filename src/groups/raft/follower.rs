@@ -4,12 +4,14 @@ use {
 		groups::{
 			CommandError,
 			Index,
-			log::{StateMachine, Storage, Term},
+			StateMachine,
+			StateSync,
+			StateSyncSession,
+			log::{Storage, Term},
 			raft::{
 				Message,
 				candidate::Candidate,
-				catchup::Catchup,
-				protocol::{AppendEntries, AppendEntriesResponse, Forward, Sync, Vote},
+				protocol::{AppendEntries, AppendEntriesResponse, Forward, Vote},
 				role::{Role, RoleHandlerError},
 				shared::Shared,
 			},
@@ -63,7 +65,7 @@ pub struct Follower<M: StateMachine> {
 	/// can be in sync with the leader and transition to online status. This is
 	/// set when we receive an `AppendEntries` message from the leader that is
 	/// inconsistent with our local log state.
-	catchup: Option<Catchup<M>>,
+	catchup: Option<<M::StateSync as StateSync>::Session>,
 
 	#[doc(hidden)]
 	_marker: PhantomData<M>,
@@ -144,15 +146,24 @@ impl<M: StateMachine> Follower<M> {
 			// let other in-sync nodes trigger elections if the leader is
 			// unavailable.
 			match catchup.poll_next_tick(cx, shared) {
-				Poll::Ready(ControlFlow::Break(())) => {
+				Poll::Ready(cursor) => {
+					assert_eq!(cursor, shared.log.last());
+
 					// we're caught up and in sync with the leader, turn off catch-up
 					// mode and start watching the election timeout again for any
 					// potential leader failures.
 					self.catchup = None;
-				}
-				// we're still catching up
-				Poll::Ready(ControlFlow::Continue(())) => {
-					return Poll::Ready(ControlFlow::Continue(()));
+
+					tracing::info!(
+						log_at = %cursor,
+						term = %self.term(),
+						group = %Short(shared.group_id()),
+						network = %Short(shared.network_id()),
+						"state sync complete, back online"
+					);
+
+					// signal updated log position to public api observers.
+					shared.update_log_pos(cursor);
 				}
 				// we're still catching up
 				Poll::Pending => return Poll::Pending,
@@ -177,7 +188,7 @@ impl<M: StateMachine> Follower<M> {
 	/// In follower mode we care about the following message:
 	/// - `AppendEntries` from the leader
 	/// - `Forward::ExecuteAck` from the leader.
-	/// - `Sync::DiscoveryResponse` when in catch-up mode.
+	/// - `Sync::AvailabilityResponse` when in catch-up mode.
 	/// - `Sync::FetchEntriesResponse` when in catch-up mode.
 	///
 	/// All other messages (e.g. `RequestVote` from candidates) are handled in the
@@ -185,7 +196,7 @@ impl<M: StateMachine> Follower<M> {
 	/// if they are unexpected for this role.
 	pub fn receive_protocol_message<S: Storage<M::Command>>(
 		&mut self,
-		message: Message<M::Command>,
+		message: Message<M>,
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
 	) -> Result<(), RoleHandlerError<M>> {
@@ -200,19 +211,13 @@ impl<M: StateMachine> Follower<M> {
 				self.on_forward_command_response(request_id, log_index);
 			}
 
-			// Peers response to our `DiscoveryRequest` messages during the catch-up.
-			Message::Sync(Sync::DiscoveryResponse { available }) => {
+			// state-sync related messages
+			Message::StateSync(message) => {
 				if let Some(catchup) = self.catchup.as_mut() {
-					catchup.receive_availability(available, sender);
+					catchup.receive(message, sender, shared);
 				}
 			}
 
-			// Peers response to our `FetchEntriesRequest` messages during catch-up
-			Message::Sync(Sync::FetchEntriesResponse { range, entries }) => {
-				if let Some(catchup) = self.catchup.as_mut() {
-					catchup.receive_entries(sender, range, entries);
-				}
-			}
 			message => {
 				return Err(RoleHandlerError::<M>::Unexpected(message));
 			}
@@ -275,7 +280,7 @@ impl<M: StateMachine> Follower<M> {
 
 		let (forward_ack_tx, forward_ack_rx) = oneshot::channel();
 		self.forwarded_commands.insert(request_id, forward_ack_tx);
-		shared.bonds().send_raft_to::<M>(message, leader);
+		shared.bonds().send_raft_to::<M>(&message, leader);
 
 		let expired_sender = self.expired_commands.sender().clone();
 		let forward_timeout = shared.intervals().forward_timeout;
@@ -353,10 +358,27 @@ impl<M: StateMachine> Follower<M> {
 
 			// buffer the leader's inflight entries while we're catching up on the
 			// log.
+			let entries = request
+				.entries
+				.into_iter()
+				.map(|entry| (entry.command, entry.term))
+				.collect();
 			if let Some(catchup) = self.catchup.as_mut() {
-				catchup.buffer(request);
+				catchup.buffer(request.prev_log_position, entries, shared);
 			} else {
-				self.catchup = Some(Catchup::new(request, shared));
+				tracing::info!(
+					leader_pos = %request.prev_log_position,
+					local_pos = %shared.log.last(),
+					term = %self.term(),
+					group = %Short(shared.group_id()),
+					network = %Short(shared.network_id()),
+					"starting state sync"
+				);
+
+				self.catchup = Some(shared.create_sync_session(
+					request.prev_log_position, //
+					entries,
+				));
 			}
 		}
 	}
@@ -420,7 +442,7 @@ impl<M: StateMachine> Follower<M> {
 			// index of our last log entry
 			let local_position = shared.log.last();
 			shared.bonds().send_raft_to::<M>(
-				Message::AppendEntriesResponse(AppendEntriesResponse {
+				&Message::AppendEntriesResponse(AppendEntriesResponse {
 					term: self.term(),
 					vote: Vote::Granted,
 					last_log_index: local_position.index(),

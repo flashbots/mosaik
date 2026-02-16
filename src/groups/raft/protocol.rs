@@ -4,19 +4,18 @@ use {
 		groups::{
 			Command,
 			Cursor,
+			StateMachine, StateSync,
 			log::{Index, Term},
 		},
 		primitives::Short,
 	},
-	core::ops::RangeInclusive,
-	derive_more::{Display, From},
+	derive_more::{Display},
 	serde::{Deserialize, Serialize, de::DeserializeOwned},
 };
 
 /// Raft messages as defined in the Raft consensus algorithm.
-#[derive(Debug, Clone, Display, Serialize, Deserialize, From)]
-#[serde(bound(deserialize = "C: DeserializeOwned"))]
-pub enum Message<C: Command> {
+#[derive(Debug, Clone, Display, Serialize, Deserialize)]
+pub enum Message<M: StateMachine> {
 	/// Sent by leaders to assert authority (heartbeat) and replicate log
 	/// entries. When `entries` is empty, this is a pure heartbeat.
 	#[display(
@@ -24,7 +23,7 @@ pub enum Message<C: Command> {
 		_0.term, _0.prev_log_position, _0.entries.len(), 
 		_0.leader_commit, Short(_0.leader)
 	)]
-	AppendEntries(AppendEntries<C>),
+	AppendEntries(AppendEntries<M::Command>),
 
 	/// Response to an `AppendEntries` message.
 	#[display("AppendEntriesResponse[t={}/success={}]", _0.term, _0.vote)]
@@ -41,15 +40,15 @@ pub enum Message<C: Command> {
 	/// Messages related to forwarding client commands and queries from followers
 	/// to the leader and acknowledging them.
 	#[display("Forward(..)")]
-	Forward(Forward<C>),
+	Forward(Forward<M::Command>),
 
 	/// Messages related to the log synchronization process during catch-up of
 	/// lagging followers.
-	#[display("Sync(..)")]
-	Sync(Sync<C>),
+	#[display("StateSync(..)")]
+	StateSync(<M::StateSync as StateSync>::Message),
 }
 
-impl<C: Command> Message<C> {
+impl<M: StateMachine> Message<M> {
 	/// Returns the term carried by the message.
 	pub const fn term(&self) -> Option<Term> {
 		match self {
@@ -57,7 +56,7 @@ impl<C: Command> Message<C> {
 			Self::AppendEntriesResponse(msg) => Some(msg.term),
 			Self::RequestVote(msg) => Some(msg.term),
 			Self::RequestVoteResponse(msg) => Some(msg.term),
-			Self::Forward(_) | Self::Sync(_) => None,
+			Self::Forward(_) | Self::StateSync(_) => None,
 		}
 	}
 
@@ -69,7 +68,7 @@ impl<C: Command> Message<C> {
 			| Self::RequestVote(_)
 			| Self::RequestVoteResponse(_)
 			| Self::Forward(_)
-			| Self::Sync(_) => None,
+			| Self::StateSync(_) => None,
 		}
 	}
 }
@@ -208,32 +207,5 @@ pub enum Forward<C: Command> {
 		/// follower can use to track the commit progress of the log and determine
 		/// when the command has been committed to the state machine.
 		log_index: Index,
-	},
-}
-
-/// Messages used for log synchronization during catch-up of lagging followers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "C: DeserializeOwned"))]
-pub enum Sync<C: Command> {
-	/// Message broadcasted by a lagging follower to all bonded peers to discover
-	/// which peers have the log entries it is missing and to coordinate the
-	/// catch-up process.
-	DiscoveryRequest,
-
-	/// Message sent by peers in response to a `DiscoveryRequest` message to
-	/// inform the lagging follower of the range of log entries they have, which
-	/// the follower can use to determine which peers to fetch which log entries
-	/// from during the catch-up process.
-	DiscoveryResponse { available: RangeInclusive<Index> },
-
-	/// Message sent to individual peers to request the log entries in the
-	/// specified range during the catch-up process.
-	FetchEntriesRequest { range: RangeInclusive<Index> },
-
-	/// Response to a `FetchEntriesRequest` containing the requested historical
-	/// log entries.
-	FetchEntriesResponse {
-		range: RangeInclusive<Index>,
-		entries: Vec<LogEntry<C>>,
 	},
 }
