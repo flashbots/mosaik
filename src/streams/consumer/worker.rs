@@ -14,7 +14,7 @@ use {
 	},
 	core::pin::Pin,
 	futures::{Stream, StreamExt, stream::SelectAll},
-	std::sync::Arc,
+	std::{collections::HashMap, sync::Arc},
 	tokio::sync::{mpsc, watch},
 	tokio_stream::wrappers::WatchStream,
 	tokio_util::sync::CancellationToken,
@@ -53,6 +53,11 @@ pub(super) struct ConsumerWorker<D: Datum> {
 	/// Aggregated status streams from all active receiver workers.
 	status_rx: StateUpdatesStream,
 
+	/// Cancellation tokens for individual receiver workers, keyed by the same
+	/// `sub_id` used in the `active` map. Cancelling a token terminates its
+	/// corresponding receiver.
+	receiver_cancels: HashMap<Digest, CancellationToken>,
+
 	/// A one-time set handle that is completed when the consumer worker loop is
 	/// ready.
 	online: watch::Sender<bool>,
@@ -79,6 +84,7 @@ impl<D: Datum> ConsumerWorker<D> {
 			cancel: cancel.clone(),
 			active: active.clone(),
 			status_rx: StateUpdatesStream::new(),
+			receiver_cancels: HashMap::new(),
 			online: online.clone(),
 		};
 
@@ -161,12 +167,16 @@ impl<D: Datum> ConsumerWorker<D> {
 					continue;
 				}
 
+				// create a per-receiver cancellation token so the consumer worker
+				// can terminate this specific receiver independently
+				let receiver_cancel = self.cancel.child_token();
+
 				// spawn a new receiver worker for this producer and track its status
 				let channel_info = Receiver::spawn(
 					producer.clone(),
 					&self.local,
 					&self.discovery,
-					&self.cancel,
+					&receiver_cancel,
 					&self.data_tx,
 					Arc::clone(&self.config),
 				);
@@ -185,20 +195,53 @@ impl<D: Datum> ConsumerWorker<D> {
 				self.active.send_modify(|active| {
 					active.insert(sub_id, channel_info);
 				});
+				self.receiver_cancels.insert(sub_id, receiver_cancel);
 			}
+		}
+
+		// Re-evaluate the subscribe_if predicate for active connections.
+		// Disconnect receivers whose producers no longer satisfy the predicate
+		// (e.g. a tag was removed) or are no longer in the catalog.
+		let to_disconnect: Vec<(Digest, PeerId)> = self
+			.active
+			.borrow()
+			.iter()
+			.filter_map(|(sub_id, info)| {
+				let peer_id = *info.producer_id();
+				let dominated = latest.get(&peer_id).is_none_or(|entry| {
+					!entry.streams().contains(&self.config.stream_id)
+						|| !(self.config.subscribe_if)(entry)
+				});
+				dominated.then_some((*sub_id, peer_id))
+			})
+			.collect();
+
+		for (sub_id, peer_id) in to_disconnect {
+			tracing::info!(
+				producer_id = %Short(&peer_id),
+				stream_id = %Short(self.config.stream_id),
+				"disconnecting producer that no longer satisfies eligibility criteria"
+			);
+
+			if let Some(cancel) = self.receiver_cancels.remove(&sub_id) {
+				cancel.cancel();
+			}
+			self.active
+				.send_if_modified(|active| active.remove(&sub_id).is_some());
 		}
 	}
 
 	/// Handles state updates from remote receiver workers.
-	fn on_receiver_state_update(&self, peer_id: PeerId, state: State) {
+	fn on_receiver_state_update(&mut self, peer_id: PeerId, state: State) {
 		if state == State::Terminated {
 			// The receiver has unrecoverably terminated, remove it from the active
-			// list
+			// list and clean up its cancellation token
 			let sub_id = Digest::from_bytes(*peer_id.as_bytes());
 
 			self
 				.active
 				.send_if_modified(|active| active.remove(&sub_id).is_some());
+			self.receiver_cancels.remove(&sub_id);
 
 			tracing::info!(
 				producer_id = %Short(&peer_id),
@@ -210,10 +253,11 @@ impl<D: Datum> ConsumerWorker<D> {
 	}
 
 	/// Gracefully closes all connections with remote producers.
-	fn on_terminated(&self) {
+	fn on_terminated(&mut self) {
 		// terminate all active receiver workers
 		let producers_count = self.active.borrow().len();
 		self.active.send_replace(ActiveChannelsMap::default());
+		self.receiver_cancels.clear();
 
 		tracing::debug!(
 			stream_id = %Short(self.config.stream_id),
