@@ -30,12 +30,16 @@ pub struct GroupBuilder<'g, S = (), M = ()> {
 	/// group id.
 	pub(super) key: GroupKey,
 
-	/// Configures various timing intervals for the group protocol, such as
-	/// heartbeat intervals, election timeouts, and consensus tick durations.
+	/// Configures consensus parameters for the group protocol, such as
+	/// heartbeat intervals or election timeouts.
+	///
 	/// Those values are used when deriving the group id, all members of the
 	/// group must have identical configuration settings for these values, any
 	/// difference will render a different group id.
-	pub(super) intervals: IntervalsConfig,
+	///
+	/// If the state machine implementation provides a default consensus config,
+	/// that will be used unless the value is explicitly set in the builder.
+	pub(super) consensus: Option<ConsensusConfig>,
 
 	/// The storage implementation to use for this group. This is used to persist
 	/// the current state of the replicated raft log. This value does not affect
@@ -53,11 +57,11 @@ pub struct GroupBuilder<'g, S = (), M = ()> {
 /// are set.
 impl<'g> GroupBuilder<'g, (), ()> {
 	/// Initialize a group builder for the given group key.
-	pub fn new(groups: &'g Groups, key: GroupKey) -> Self {
+	pub(super) const fn new(groups: &'g Groups, key: GroupKey) -> Self {
 		Self {
 			groups,
 			key,
-			intervals: IntervalsConfig::default(),
+			consensus: None,
 			storage: (),
 			state_machine: (),
 		}
@@ -70,9 +74,6 @@ impl<'g> GroupBuilder<'g, (), ()> {
 	/// This setting must be set before the storage implementation, since the
 	/// storage implementation must be compatible with the command type of the
 	/// state machine.
-	///
-	/// By default `InMemory` storage is set with the command type of the state
-	/// machine.
 	pub fn with_state_machine<SM: StateMachine>(
 		self,
 		state_machine: SM,
@@ -80,7 +81,7 @@ impl<'g> GroupBuilder<'g, (), ()> {
 		GroupBuilder {
 			groups: self.groups,
 			key: self.key,
-			intervals: self.intervals,
+			consensus: state_machine.consensus_config(),
 			storage: InMemoryLogStore::<SM::Command>::default(),
 			state_machine,
 		}
@@ -102,9 +103,12 @@ where
 	M: StateMachine,
 {
 	/// Sets the storage implementation for the state machine's replicated log.
+	///
 	/// This is used to persist the current state of the log and must be
 	/// compatible with the command type of the state machine. This value does
 	/// not affect the generated group id.
+	///
+	/// Defaults to an in-memory log store if not set explicitly.
 	pub fn with_log_storage<S>(self, storage: S) -> GroupBuilder<'g, S, M>
 	where
 		S: Storage<M::Command>,
@@ -112,25 +116,38 @@ where
 		GroupBuilder {
 			groups: self.groups,
 			key: self.key,
-			intervals: self.intervals,
+			consensus: self.consensus,
 			state_machine: self.state_machine,
 			storage,
 		}
 	}
 }
 
-impl<S, M> GroupBuilder<'_, S, M> {
-	/// Intervals configuration for the group protocol, such as heartbeat
-	/// intervals, election timeouts, and consensus tick durations. This is used
+impl<S, M> GroupBuilder<'_, S, M>
+where
+	S: Storage<M::Command>,
+	M: StateMachine,
+{
+	/// Consensus configuration for the group protocol, such as heartbeat
+	/// intervals, election timeouts. This is used
+	///
 	/// when deriving the group id, all members of the group must have identical
 	/// configuration settings for these values, any difference will render a
 	/// different group id.
 	///
-	/// This setting can be set independently of the state machine and storage
-	/// settings.
+	/// If not set explicitly, the value defaults to either the value hinted by
+	/// the state machine implementation via [`StateMachine::consensus_config`]
+	/// method, or to the default consensus config if the state machine does not
+	/// provide a hint.
+	///
+	/// Setting this value overrides the default consensus config provided by the
+	/// state machine, if any.
 	#[must_use]
-	pub const fn with_intervals(mut self, intervals: IntervalsConfig) -> Self {
-		self.intervals = intervals;
+	pub const fn with_consensus_config(
+		mut self,
+		consensus: ConsensusConfig,
+	) -> Self {
+		self.consensus = Some(consensus);
 		self
 	}
 }
@@ -143,11 +160,11 @@ where
 	/// Joins a group with the specified configuration.
 	///
 	/// The group builder values will generate a unique group id that is derived
-	/// from the group key, the state machine, and the intervals configuration.
+	/// from the group key, the state machine, and the consensus configuration.
 	pub fn join(self) -> Group<M> {
 		let config = GroupConfig::new(
 			self.key, //
-			self.intervals,
+			self.consensus.unwrap_or_default(),
 			&self.state_machine,
 		);
 
@@ -172,14 +189,20 @@ where
 )]
 #[builder(pattern = "owned", setter(prefix = "with"), derive(Debug, Clone))]
 #[builder_struct_attr(doc(hidden))]
-pub struct IntervalsConfig {
+pub struct ConsensusConfig {
 	/// The interval at which heartbeat messages are sent over established
 	/// bonds to peers in the group to ensure liveness of the connection.
+	///
+	/// This value is used when deriving the group id and must be identical
+	/// across all members of the group.
 	#[builder(default = "Duration::from_millis(500)")]
 	pub heartbeat_interval: Duration,
 
 	/// The maximum jitter to apply to the heartbeat interval to avoid
 	/// an avalanche of heartbeats being sent at the same time.
+	///
+	/// This value is used when deriving the group id and must be identical
+	/// across all members of the group.
 	///
 	/// heartbeats are sent at intervals of
 	/// `heartbeat_interval - rand(0, heartbeat_jitter)`.
@@ -188,6 +211,9 @@ pub struct IntervalsConfig {
 
 	/// The maximum number of consecutive missed heartbeats before considering
 	/// the bond connection to be dead and closing it.
+	///
+	/// This value is used when deriving the group id and must be identical
+	/// across all members of the group.
 	#[builder(default = "10")]
 	pub max_missed_heartbeats: u32,
 
@@ -196,6 +222,17 @@ pub struct IntervalsConfig {
 	/// from the leader before starting a new election. See the Raft paper
 	/// section 5.2 for more details on the role of election timeouts in the Raft
 	/// algorithm.
+	///
+	/// Nodes in the same group might have different preferences for the election
+	/// timeout duration based on their role in the system. This affects the
+	/// preference of the node to be a leader or a follower, and can be used to
+	/// optimize the behavior of the group. For example, a node that prefers to
+	/// be a follower can set a longer election timeout to reduce the chances of
+	/// it becoming a leader, while a node that prefers to be a leader can set a
+	/// shorter election timeout to increase the chances of it becoming a
+	/// leader.
+	///
+	/// This value must be larger than the heartbeat interval.
 	#[builder(default = "Duration::from_secs(2)")]
 	pub election_timeout: Duration,
 
@@ -209,7 +246,7 @@ pub struct IntervalsConfig {
 	///
 	/// This is the time given to allow nodes to discover other members of the
 	/// group on the network before beginning leader elections process and
-	/// self-nomination.
+	/// potentially self-nomination.
 	#[builder(default = "Duration::from_secs(3)")]
 	pub bootstrap_delay: Duration,
 
@@ -224,16 +261,16 @@ pub struct IntervalsConfig {
 	pub query_timeout: Duration,
 }
 
-impl Default for IntervalsConfig {
+impl Default for ConsensusConfig {
 	fn default() -> Self {
-		IntervalsConfigBuilder::default().build().unwrap()
+		ConsensusConfigBuilder::default().build().unwrap()
 	}
 }
 
-impl IntervalsConfig {
+impl ConsensusConfig {
 	/// Creates a new intervals config builder with default values.
-	pub fn builder() -> IntervalsConfigBuilder {
-		IntervalsConfigBuilder::default()
+	pub fn builder() -> ConsensusConfigBuilder {
+		ConsensusConfigBuilder::default()
 	}
 
 	/// Returns a randomized election timeout duration.
@@ -250,17 +287,12 @@ impl IntervalsConfig {
 }
 
 /// Internal API
-impl IntervalsConfig {
+impl ConsensusConfig {
 	pub(crate) fn digest(&self) -> Digest {
 		Digest::from_parts(&[
 			self.heartbeat_interval.as_millis().to_le_bytes(),
 			self.heartbeat_jitter.as_millis().to_le_bytes(),
 			u128::from(self.max_missed_heartbeats).to_le_bytes(),
-			self.election_timeout.as_millis().to_le_bytes(),
-			self.election_timeout_jitter.as_millis().to_le_bytes(),
-			self.bootstrap_delay.as_millis().to_le_bytes(),
-			self.forward_timeout.as_millis().to_le_bytes(),
-			self.query_timeout.as_millis().to_le_bytes(),
 		])
 	}
 }

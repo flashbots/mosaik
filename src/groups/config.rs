@@ -1,7 +1,7 @@
 use {
 	crate::{
 		GroupKey,
-		groups::{GroupId, IntervalsConfig, StateMachine, StateSync},
+		groups::{ConsensusConfig, GroupId, StateMachine, StateSync},
 	},
 	core::time::Duration,
 	derive_builder::Builder,
@@ -34,23 +34,23 @@ impl Config {
 pub struct GroupConfig {
 	id: GroupId,
 	key: GroupKey,
-	intervals: IntervalsConfig,
+	consensus: ConsensusConfig,
 }
 
 impl GroupConfig {
 	pub fn new(
 		key: GroupKey,
-		intervals: IntervalsConfig,
+		consensus: ConsensusConfig,
 		state_machine: &impl StateMachine,
 	) -> Self {
 		let id = key
 			.secret()
 			.hashed()
-			.derive(intervals.digest())
+			.derive(consensus.digest())
 			.derive(state_machine.signature())
-			.derive(state_machine.sync_factory().signature());
+			.derive(state_machine.state_sync().signature());
 
-		Self { id, key, intervals }
+		Self { id, key, consensus }
 	}
 
 	pub const fn group_id(&self) -> &GroupId {
@@ -61,7 +61,7 @@ impl GroupConfig {
 		&self.key
 	}
 
-	pub const fn intervals(&self) -> &IntervalsConfig {
-		&self.intervals
+	pub const fn consensus(&self) -> &ConsensusConfig {
+		&self.consensus
 	}
 }

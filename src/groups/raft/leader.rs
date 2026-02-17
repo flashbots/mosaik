@@ -80,7 +80,7 @@ impl<M: StateMachine> Leader<M> {
 		// us in the election.
 		let committee = Committee::new(voted_by, shared);
 
-		let heartbeat_interval = shared.config().intervals().heartbeat_interval;
+		let heartbeat_interval = shared.config().consensus().heartbeat_interval;
 		let heartbeat_timeout = Box::pin(sleep(heartbeat_interval));
 
 		// Notify the group that we are the new leader. This will cause followers to

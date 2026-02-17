@@ -36,7 +36,7 @@ use {
 #[derive(Debug)]
 pub struct WorkerState {
 	/// Configuration settings for this group, such as the group key and the
-	/// intervals configuration. Those values must be identical across all
+	/// consensus configuration. Those values must be identical across all
 	/// members of the group, any difference will render a different group id and
 	/// will prevent the members from forming a bond connection with each other.
 	pub config: GroupConfig,

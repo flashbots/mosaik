@@ -1,5 +1,5 @@
 use {
-	crate::groups::IntervalsConfig,
+	crate::groups::ConsensusConfig,
 	core::time::Duration,
 	rand::random,
 	std::{sync::Arc, time::Instant},
@@ -32,7 +32,7 @@ pub struct Heartbeat {
 }
 
 impl Heartbeat {
-	pub fn new(config: &IntervalsConfig) -> Self {
+	pub fn new(config: &ConsensusConfig) -> Self {
 		let next_tick_at = Self::next_tick_at(
 			&config.heartbeat_interval, //
 			&config.heartbeat_jitter,

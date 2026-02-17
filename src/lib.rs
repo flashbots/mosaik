@@ -2,11 +2,11 @@
 //!
 //! A Rust runtime for building self-organizing, leaderless distributed systems.
 
+pub mod collections;
 pub mod discovery;
 pub mod groups;
 pub mod network;
 pub mod primitives;
-pub mod store;
 pub mod streams;
 
 pub use {

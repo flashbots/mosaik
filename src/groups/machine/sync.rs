@@ -188,12 +188,12 @@ pub trait StateSyncSession: Debug + Send + Unpin + 'static {
 }
 
 pub trait StateSyncMessage:
-	Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static
+	Clone + Serialize + DeserializeOwned + Send + Sync + 'static
 {
 }
 
 impl<T> StateSyncMessage for T where
-	T: Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static
+	T: Clone + Serialize + DeserializeOwned + Send + Sync + 'static
 {
 }
 

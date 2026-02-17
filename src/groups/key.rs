@@ -6,6 +6,7 @@ use {
 		network::link::Link,
 	},
 	core::fmt,
+	derive_more::From,
 	serde::{Deserialize, Serialize},
 };
 
@@ -35,7 +36,9 @@ pub type SecretProof = Digest;
 ///   the secret itself by generating a proof of knowledge derived from the
 ///   secret and the shared random (see [`Link::shared_random`]) value for the
 ///   link.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(
+	Debug, Clone, Copy, PartialEq, Eq, Hash, From, Serialize, Deserialize,
+)]
 pub struct GroupKey {
 	/// The secret key used to derive the group id and authenticate peers during
 	/// bonding handshake.

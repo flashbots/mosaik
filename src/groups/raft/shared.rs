@@ -4,10 +4,10 @@ use {
 		PeerId,
 		groups::{
 			Bonds,
+			ConsensusConfig,
 			Cursor,
 			GroupId,
 			Index,
-			IntervalsConfig,
 			StateMachine,
 			StateSync,
 			StateSyncContext,
@@ -69,7 +69,7 @@ where
 		let mut instance = Self {
 			group,
 			last_vote: None,
-			sync: state_machine.sync_factory(),
+			sync: state_machine.state_sync(),
 			log: log::Driver::new(storage, state_machine),
 			wakers: Vec::new(),
 			sync_provider: MaybeUninit::uninit(),
@@ -87,8 +87,8 @@ where
 	}
 
 	/// Returns the timing intervals configuration for this consensus group.
-	pub fn intervals(&self) -> &IntervalsConfig {
-		self.config().intervals()
+	pub fn consensus(&self) -> &ConsensusConfig {
+		self.config().consensus()
 	}
 
 	/// Returns the list of active bonds for this consensus group.

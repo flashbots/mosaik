@@ -26,9 +26,9 @@ async fn is_elected() -> anyhow::Result<()> {
 	// Wait for longer than the bootstrap delay and election timeout to allow
 	// leader election.
 	let timeout = 2
-		* (g0.config().intervals().bootstrap_delay
-			+ g0.config().intervals().election_timeout
-			+ g0.config().intervals().election_timeout_jitter);
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
 	let new_leader = timeout_after(timeout, g0.when().leader_elected()).await?;
 	tracing::debug!("New leader elected: {}", Short(new_leader));
 
@@ -120,9 +120,9 @@ async fn rivals_with_same_log_pos() -> anyhow::Result<()> {
 	let g0 = n0.groups().with_key(group_key).join();
 
 	let timeout = 2
-		* (g0.config().intervals().bootstrap_delay
-			+ g0.config().intervals().election_timeout
-			+ g0.config().intervals().election_timeout_jitter);
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
 
 	// no other members in the group, n0 should eventually self-elect itself as
 	// the leader of the group.
@@ -193,9 +193,9 @@ async fn rivals_with_different_log_pos() -> anyhow::Result<()> {
 		.join();
 
 	let timeout = 2
-		* (g0.config().intervals().bootstrap_delay
-			+ g0.config().intervals().election_timeout
-			+ g0.config().intervals().election_timeout_jitter);
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
 
 	// no other members in the group, n0 should eventually self-elect itself as
 	// the leader of the group.

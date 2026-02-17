@@ -3,9 +3,9 @@
 
 use serde::{Deserialize, Serialize};
 
+mod collections;
 mod discovery;
 mod groups;
-mod store;
 mod streams;
 mod utils;
 

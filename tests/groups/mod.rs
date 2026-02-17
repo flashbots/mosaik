@@ -65,7 +65,7 @@ impl StateMachine for Counter {
 		}
 	}
 
-	fn sync_factory(&self) -> Self::StateSync {
+	fn state_sync(&self) -> Self::StateSync {
 		LogReplaySync::default().with_batch_size(self.sync_batch_size)
 	}
 }

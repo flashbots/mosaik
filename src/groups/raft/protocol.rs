@@ -14,7 +14,7 @@ use {
 };
 
 /// Raft messages as defined in the Raft consensus algorithm.
-#[derive(Debug, Clone, Display, Serialize, Deserialize)]
+#[derive(Clone, Display, Serialize, Deserialize)]
 #[serde(bound(
 	deserialize = 
 		"M::Command: DeserializeOwned, 
@@ -84,7 +84,7 @@ impl<M: StateMachine> Message<M> {
 }
 
 /// `RequestVote` Message arguments.
-#[derive(Debug, Clone, Display, Serialize, Deserialize)]
+#[derive(Clone, Display, Serialize, Deserialize)]
 #[display("{}[t{term}/log={log_position}]", Short(candidate))]
 pub struct RequestVote {
 	/// Candidate's term.
@@ -126,7 +126,7 @@ pub struct RequestVoteResponse {
 }
 
 /// Log entry stored in the Raft log.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "C: DeserializeOwned"))]
 pub struct LogEntry<C: Command> {
 	/// Term when entry was received by leader.
@@ -141,7 +141,7 @@ pub struct LogEntry<C: Command> {
 ///
 /// Sent by leader to replicate log entries and as heartbeat.
 /// When `entries` is empty, this serves as a heartbeat to maintain leadership.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(bound(deserialize = "C: DeserializeOwned"))]
 pub struct AppendEntries<C: Command> {
 	/// Leader's term.
@@ -180,7 +180,7 @@ pub struct AppendEntriesResponse {
 }
 
 /// Messages used for forwarding client commands from followers to the leader.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum Forward<M: StateMachine> {
 	/// Message sent by followers to the leader to forward client commands.
 	Command {

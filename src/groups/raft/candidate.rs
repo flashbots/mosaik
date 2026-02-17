@@ -85,7 +85,7 @@ impl<M: StateMachine> Candidate<M> {
 			term = term.next();
 		}
 
-		let election_timeout = shared.intervals().election_timeout();
+		let election_timeout = shared.consensus().election_timeout();
 		let election_timeout = Box::pin(sleep(election_timeout));
 
 		let candidate = shared.local_id();

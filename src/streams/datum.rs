@@ -7,7 +7,9 @@ use {
 ///
 /// This type gives us zero-friction default implementations for
 /// any serializable rust type.
-pub trait Datum: Serialize + DeserializeOwned + Send + Sync + 'static {
+pub trait Datum:
+	Serialize + DeserializeOwned + Send + Sync + Unpin + 'static
+{
 	/// Returns the default stream id derived from the datum type name.
 	/// This is the stream id used if no custom stream id is provided when
 	/// building producers or consumers for this datum type.
@@ -16,5 +18,7 @@ pub trait Datum: Serialize + DeserializeOwned + Send + Sync + 'static {
 	}
 }
 
-impl<T> Datum for T where T: Serialize + DeserializeOwned + Send + Sync + 'static
-{}
+impl<T> Datum for T where
+	T: Serialize + DeserializeOwned + Send + Sync + Unpin + 'static
+{
+}

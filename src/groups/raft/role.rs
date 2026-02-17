@@ -31,7 +31,7 @@ use {
 /// Messages that are common to all roles (e.g., stepping down on higher term,
 /// voting for candidates, etc.) are handled at the `Role` level, and messages
 /// that are specific to each role are forwarded to the role-specific message
-#[derive(Debug, Display, From)]
+#[derive(Display, From)]
 #[allow(clippy::large_enum_variant)]
 pub enum Role<M: StateMachine> {
 	/// Passive state: responds to messages from candidates and leaders.

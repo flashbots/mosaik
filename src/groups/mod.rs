@@ -91,10 +91,10 @@ mod when;
 pub use {
 	bond::{Bond, Bonds},
 	builder::{
+		ConsensusConfig,
+		ConsensusConfigBuilder,
+		ConsensusConfigBuilderError,
 		GroupBuilder,
-		IntervalsConfig,
-		IntervalsConfigBuilder,
-		IntervalsConfigBuilderError,
 	},
 	config::{Config, ConfigBuilder, ConfigBuilderError},
 	error::{CommandError, Error, QueryError},
@@ -164,7 +164,7 @@ impl Groups {
 	/// values for all the consensus-relevant parameters, otherwise they will
 	/// generate different group ids and will not be able to form a bond
 	/// connection with each other.
-	pub fn with_key(&self, key: GroupKey) -> GroupBuilder<'_> {
+	pub const fn with_key(&self, key: GroupKey) -> GroupBuilder<'_> {
 		GroupBuilder::new(self, key)
 	}
 }

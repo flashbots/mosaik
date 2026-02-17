@@ -39,7 +39,6 @@ use {
 /// candidates and leaders. If the election timeout elapses without receiving
 /// `AppendEntries` from the current leader, the follower transitions to
 /// leader candidate state and starts a new election.
-#[derive(Debug)]
 pub struct Follower<M: StateMachine> {
 	/// The current term for this node.
 	term: Term,
@@ -88,13 +87,13 @@ impl<M: StateMachine> Follower<M> {
 		leader: Option<PeerId>,
 		shared: &Shared<S, M>,
 	) -> Self {
-		let mut election_timeout = shared.config().intervals().election_timeout();
+		let mut election_timeout = shared.config().consensus().election_timeout();
 
 		if term.is_zero() {
 			// for the initial term, we introduce an additional bootstrap delay to
 			// give all nodes enough time to start up and discover each other before
 			// triggering the first election.
-			election_timeout += shared.config().intervals().bootstrap_delay;
+			election_timeout += shared.config().consensus().bootstrap_delay;
 		}
 
 		if let Some(leader) = leader {
@@ -258,7 +257,7 @@ impl<M: StateMachine> Follower<M> {
 		shared: &Shared<S, M>,
 	) {
 		let next_election_timeout =
-			Instant::now() + shared.intervals().election_timeout();
+			Instant::now() + shared.consensus().election_timeout();
 
 		self
 			.election_timeout
@@ -302,7 +301,7 @@ impl<M: StateMachine> Follower<M> {
 		shared.bonds().send_raft_to::<M>(&message, leader);
 
 		let expired_sender = self.expired_commands.sender().clone();
-		let forward_timeout = shared.intervals().forward_timeout;
+		let forward_timeout = shared.consensus().forward_timeout;
 
 		async move {
 			if let Ok(Ok(assigned)) = timeout(forward_timeout, forward_ack_rx).await {
@@ -349,7 +348,7 @@ impl<M: StateMachine> Follower<M> {
 		shared.bonds().send_raft_to::<M>(&message, leader);
 
 		let expired_sender = self.expired_queries.sender().clone();
-		let query_timeout = shared.intervals().query_timeout;
+		let query_timeout = shared.consensus().query_timeout;
 
 		async move {
 			if let Ok(Ok(response)) = timeout(query_timeout, response_rx).await {

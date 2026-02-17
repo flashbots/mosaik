@@ -2,6 +2,7 @@
 
 use {
 	crate::{
+		Tag,
 		discovery::{
 			announce::Announce,
 			catalog::UpsertResult,
@@ -164,6 +165,18 @@ impl Discovery {
 			.0
 			.catalog
 			.send_if_modified(|catalog| catalog.clear_unsigned())
+	}
+
+	/// Adds the given tags to the local peer discovery entry.
+	pub fn add_tags<V>(&self, tags: impl IntoIterOrSingle<Tag, V>) {
+		let tags: Vec<_> = tags.iterator().into_iter().collect();
+		self.update_local_entry(|entry| entry.add_tags(tags));
+	}
+
+	/// Removes the given tags from the local peer discovery entry.
+	pub fn remove_tags<V>(&self, tags: impl IntoIterOrSingle<Tag, V>) {
+		let tags: Vec<_> = tags.iterator().into_iter().collect();
+		self.update_local_entry(|entry| entry.remove_tags(tags));
 	}
 }
 

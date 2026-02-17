@@ -19,9 +19,9 @@ async fn smoke() -> anyhow::Result<()> {
 		.join();
 
 	let timeout = 2
-		* (g0.config().intervals().bootstrap_delay
-			+ g0.config().intervals().election_timeout
-			+ g0.config().intervals().election_timeout_jitter);
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
 
 	// wait for n0 to become online by electing itself as leader and being ready
 	// to accept commands

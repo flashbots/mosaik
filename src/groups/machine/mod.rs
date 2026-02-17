@@ -7,8 +7,7 @@
 //! state machine.
 
 use {
-	crate::primitives::UniqueId,
-	core::fmt::Debug,
+	crate::{groups::ConsensusConfig, primitives::UniqueId},
 	serde::{Serialize, de::DeserializeOwned},
 };
 
@@ -23,7 +22,7 @@ pub use sync::*;
 /// This trait defines the replicated state machine (RSM) that is used by the
 /// Raft log. Each group has a state machine that represents the
 /// application-specific logic of the group.
-pub trait StateMachine: Send + Sync + Unpin + 'static {
+pub trait StateMachine: Sized + Send + Sync + Unpin + 'static {
 	/// The type of commands that are applied to the state machine and replicated
 	/// in the log. Commands represent state transitions and mutate the state
 	/// machine. They are sent to the leader by clients and replicated to
@@ -46,7 +45,7 @@ pub trait StateMachine: Send + Sync + Unpin + 'static {
 	/// process for followers that are not up to date with the committed group
 	/// state.
 	///
-	/// When writing your own state machine use `LogReplaySync` as the initial
+	/// When writing your own state machine use [`LogReplaySync`] as the initial
 	/// state sync implementation, which works with any state machine as a
 	/// starting point.
 	type StateSync: StateSync<Machine = Self>;
@@ -86,59 +85,47 @@ pub trait StateMachine: Send + Sync + Unpin + 'static {
 	/// Returns a new instance of the state synchronization implementation that is
 	/// used to synchronize lagging followers with the current state of the group.
 	///
-	/// When writing your own state machine use `LogReplaySync` as the initial
+	/// When writing your own state machine use [`LogReplaySync`] as the initial
 	/// state sync implementation, which works with any state machine as a
 	/// starting point.
-	fn sync_factory(&self) -> Self::StateSync;
+	fn state_sync(&self) -> Self::StateSync;
+
+	/// Optionally allows the state machine to provide a default consensus
+	/// configuration that is used when joining a group without explicitly setting
+	/// the consensus config in the builder.
+	///
+	/// This is useful in several cases such as:
+	///
+	/// - If the state machine instance knows that it has preference for being a
+	///   follower or a leader, it can set more aggressive election timeouts to
+	///   optimize for that role.
+	///
+	/// - If the state machine has specific performance characteristics that can
+	///   be optimized by tuning the consensus parameters, it can provide a
+	///   default config that is optimized for its behavior.
+	///
+	/// If this value is not set, the value of
+	/// [`ConsensusConfig::default()`] will be used.
+	fn consensus_config(&self) -> Option<ConsensusConfig> {
+		None
+	}
 }
 
-pub trait Command:
-	Debug + Clone + Send + Sync + Unpin + Serialize + DeserializeOwned + 'static
+pub trait StateMachineMessage:
+	Clone + Send + Sync + Unpin + Serialize + DeserializeOwned + 'static
 {
 }
 
-impl<T> Command for T where
-	T: Debug
-		+ Clone
-		+ Send
-		+ Sync
-		+ Unpin
-		+ Serialize
-		+ DeserializeOwned
-		+ 'static
+impl<T> StateMachineMessage for T where
+	T: Clone + Send + Sync + Unpin + Serialize + DeserializeOwned + 'static
 {
 }
 
-pub trait Query:
-	Debug + Clone + Send + Sync + Unpin + Serialize + DeserializeOwned + 'static
-{
-}
+pub trait Command: StateMachineMessage {}
+impl<T> Command for T where T: StateMachineMessage {}
 
-impl<T> Query for T where
-	T: Debug
-		+ Clone
-		+ Send
-		+ Sync
-		+ Unpin
-		+ Serialize
-		+ DeserializeOwned
-		+ 'static
-{
-}
+pub trait Query: StateMachineMessage {}
+impl<T> Query for T where T: StateMachineMessage {}
 
-pub trait QueryResult:
-	Debug + Clone + Send + Sync + Unpin + Serialize + DeserializeOwned + 'static
-{
-}
-
-impl<T> QueryResult for T where
-	T: Debug
-		+ Clone
-		+ Send
-		+ Sync
-		+ Unpin
-		+ Serialize
-		+ DeserializeOwned
-		+ 'static
-{
-}
+pub trait QueryResult: StateMachineMessage {}
+impl<T> QueryResult for T where T: StateMachineMessage {}
