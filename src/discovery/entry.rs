@@ -6,7 +6,6 @@ use {
 		groups::GroupId,
 		network::PeerId,
 		primitives::*,
-		store::StoreId,
 	},
 	chrono::{DateTime, Utc},
 	core::fmt,
@@ -109,7 +108,6 @@ pub struct PeerEntry {
 	address: EndpointAddr,
 	tags: BTreeSet<Tag>,
 	streams: BTreeSet<StreamId>,
-	stores: BTreeSet<StoreId>,
 	groups: BTreeSet<GroupId>,
 }
 
@@ -149,11 +147,6 @@ impl PeerEntry {
 	/// List of streams produced by the peer.
 	pub const fn streams(&self) -> &BTreeSet<StreamId> {
 		&self.streams
-	}
-
-	/// List of stores available on this peer.
-	pub const fn stores(&self) -> &BTreeSet<StoreId> {
-		&self.stores
 	}
 
 	/// List of groups this peer is a member of.
@@ -199,7 +192,6 @@ impl PeerEntry {
 			address,
 			tags: BTreeSet::new(),
 			streams: BTreeSet::new(),
-			stores: BTreeSet::new(),
 			groups: BTreeSet::new(),
 			version: PeerEntryVersion::default(),
 			protocol: env!("CARGO_PKG_VERSION")
@@ -247,40 +239,6 @@ impl PeerEntry {
 		let mut was_present = false;
 		for stream in streams.iterator() {
 			was_present |= self.streams.remove(&stream);
-		}
-
-		if was_present {
-			self.version = self.version.increment();
-		}
-
-		self
-	}
-
-	/// Adds store id(s) to the list of stores available on the peer.
-	#[must_use]
-	pub fn add_stores<V>(
-		mut self,
-		stores: impl IntoIterOrSingle<StoreId, V>,
-	) -> Self {
-		let count = self.stores.len();
-		self.stores.extend(stores.iterator());
-
-		if count != self.stores.len() {
-			self.version = self.version.increment();
-		}
-
-		self
-	}
-
-	/// Removes store id(s) from the list of stores available on the peer.
-	#[must_use]
-	pub fn remove_stores<V>(
-		mut self,
-		stores: impl IntoIterOrSingle<StoreId, V>,
-	) -> Self {
-		let mut was_present = false;
-		for store in stores.iterator() {
-			was_present |= self.stores.remove(&store);
 		}
 
 		if was_present {
@@ -427,7 +385,6 @@ impl fmt::Debug for Pretty<'_, PeerEntry> {
 			FmtIter::<Short<_>, _>::new(&self.streams)
 		)?;
 
-		writeln!(f, "  stores: {}", FmtIter::<Short<_>, _>::new(&self.stores))?;
 		writeln!(f, "  update: {}", self.update_version())?;
 		writeln!(f, "  protocol: {}", self.protocol)
 	}

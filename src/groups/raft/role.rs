@@ -2,17 +2,18 @@ use {
 	crate::{
 		PeerId,
 		groups::{
-			log::{StateMachine, Storage, Term},
+			StateMachine,
+			log::{Storage, Term},
 			raft::{
 				Message,
 				candidate::Candidate,
 				follower::Follower,
 				leader::Leader,
-				protocol::{AppendEntries, LogEntry, RequestVoteResponse, Sync, Vote},
+				protocol::{AppendEntries, RequestVoteResponse, Vote},
 				shared::Shared,
 			},
 		},
-		primitives::{Pretty, Short},
+		primitives::Short,
 	},
 	core::{
 		ops::ControlFlow,
@@ -30,7 +31,7 @@ use {
 /// Messages that are common to all roles (e.g., stepping down on higher term,
 /// voting for candidates, etc.) are handled at the `Role` level, and messages
 /// that are specific to each role are forwarded to the role-specific message
-#[derive(Debug, Display, From)]
+#[derive(Display, From)]
 #[allow(clippy::large_enum_variant)]
 pub enum Role<M: StateMachine> {
 	/// Passive state: responds to messages from candidates and leaders.
@@ -96,7 +97,7 @@ impl<M: StateMachine> Role<M> {
 	/// receiving messages with higher terms.
 	pub fn receive_protocol_message<S: Storage<M::Command>>(
 		&mut self,
-		message: Message<M::Command>,
+		message: Message<M>,
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
 	) {
@@ -116,6 +117,14 @@ impl<M: StateMachine> Role<M> {
 			return;
 		}
 
+		// Handle state sync messages that are intended for the state
+		// sync provider.
+		let Err(message) = Self::maybe_state_sync(message, sender, shared) else {
+			// not a state sync or not handled at the provider level, forward to
+			// role-specific handlers.
+			return;
+		};
+
 		// Any message with a higher term should trigger an immediate step down to
 		// follower state with the new term.
 		self.maybe_step_down(&message, shared);
@@ -128,14 +137,6 @@ impl<M: StateMachine> Role<M> {
 			// if the message was a `RequestVote` and we handled it by casting a
 			// vote, then we don't need to forward it to the role-specific message
 			// handlers.
-			return;
-		}
-
-		// Handle some catch-up at the role level
-		if Self::maybe_catchup_request(&message, sender, shared) {
-			// if the message was a `Sync::*Request` message and we handled it by
-			// processing the catch-up request, then we don't need to forward it to
-			// the role-specific message handlers.
 			return;
 		}
 
@@ -189,7 +190,11 @@ impl<M: StateMachine> Role<M> {
 
 				// process the incoming `AppendEntries` message as a follower after
 				// stepping down.
-				self.receive_protocol_message(request.into(), sender, shared);
+				self.receive_protocol_message(
+					Message::AppendEntries(request),
+					sender,
+					shared,
+				);
 			}
 			Err(RoleHandlerError::RivalLeader(request)) => {
 				// this happens when a leader receives an `AppendEntries` message from
@@ -218,7 +223,7 @@ impl<M: StateMachine> Role<M> {
 	/// otherwise `false`.
 	fn maybe_step_down<S: Storage<M::Command>>(
 		&mut self,
-		message: &Message<M::Command>,
+		message: &Message<M>,
 		shared: &Shared<S, M>,
 	) {
 		let Some(message_term) = message.term() else {
@@ -274,7 +279,7 @@ impl<M: StateMachine> Role<M> {
 	/// the message will be forwarded to the role-specific message handler.
 	fn maybe_cast_vote<S: Storage<M::Command>>(
 		&mut self,
-		message: &Message<M::Command>,
+		message: &Message<M>,
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
 	) -> bool {
@@ -301,7 +306,7 @@ impl<M: StateMachine> Role<M> {
 		let bonds = shared.group.bonds.clone();
 		let vote_with = |vote: Vote| {
 			bonds.send_raft_to::<M>(
-				Message::RequestVoteResponse(RequestVoteResponse {
+				&Message::RequestVoteResponse(RequestVoteResponse {
 					vote,
 					term: request.term,
 				}),
@@ -388,68 +393,21 @@ impl<M: StateMachine> Role<M> {
 		true
 	}
 
-	/// Handles incoming `Sync` request messages that are part of the follower
-	/// catch-up process.
-	///
-	/// Returns `true` if the message was handled at this level and should not be
-	/// forwarded to the role-specific message handlers. This method only handles
-	/// `DiscoveryRequest` and `FetchEntriesRequest` messages, the `*Response`
-	/// variants are forwarded to the follower.
-	fn maybe_catchup_request<S: Storage<M::Command>>(
-		message: &Message<M::Command>,
+	/// Handles incoming state sync messages that are part of the follower
+	/// catch-up process. If the message is consumed at the state sync provider
+	/// level, it will not be forwarded to the role-specific message handlers.
+	fn maybe_state_sync<S: Storage<M::Command>>(
+		message: Message<M>,
 		sender: PeerId,
-		shared: &Shared<S, M>,
-	) -> bool {
-		let Message::Sync(message) = message else {
-			return false;
+		shared: &mut Shared<S, M>,
+	) -> Result<(), Message<M>> {
+		let Message::StateSync(message) = message else {
+			return Err(message);
 		};
 
-		match message {
-			Sync::DiscoveryRequest => {
-				// we only offer committed log entries to followers that are catching up
-				let available = shared.log.available();
-				let committed = shared.log.committed();
-				let available = *available.start()..=committed.min(*available.end());
-
-				tracing::trace!(
-					peer = %Short(sender),
-					range = %Pretty(&available),
-					group = %shared.group_id(),
-					network = %shared.network_id(),
-					"logs availability confirmed for"
-				);
-
-				let response = Message::Sync(Sync::DiscoveryResponse { available });
-				shared.bonds().send_raft_to::<M>(response, sender);
-
-				true
-			}
-			Sync::FetchEntriesRequest { range } => {
-				tracing::trace!(
-					peer = %Short(sender),
-					range = %Pretty(range),
-					group = %shared.group_id(),
-					network = %shared.network_id(),
-					"sending log entries for"
-				);
-
-				let entries = shared.log.get_range(range.clone());
-				let response = Message::Sync(Sync::FetchEntriesResponse {
-					range: range.clone(),
-					entries: entries
-						.map(|(term, _, command)| LogEntry { term, command })
-						.collect(),
-				});
-				shared.bonds().send_raft_to::<M>(response, sender);
-
-				true
-			}
-			Sync::DiscoveryResponse { .. } | Sync::FetchEntriesResponse { .. } => {
-				// these messages are handled by the follower role, so we return false
-				// to forward them to the role-specific message handlers.
-				false
-			}
-		}
+		shared
+			.sync_provider_receive(message, sender)
+			.map_err(Message::StateSync)
 	}
 }
 
@@ -466,7 +424,7 @@ impl<M: StateMachine> Role<M> {
 /// Errors that occur when role-specific message handler can't handle a message
 pub(super) enum RoleHandlerError<M: StateMachine> {
 	/// Received a message that is not expected in the current role
-	Unexpected(Message<M::Command>),
+	Unexpected(Message<M>),
 
 	/// Received a message that made the current role step down to follower state,
 	/// e.g. when a candidate receives an `AppendEntries` message from a leader

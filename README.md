@@ -6,7 +6,7 @@
   <p align="center">
     <a href="https://github.com/flashbots/mosaik/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
     <a href="https://crates.io/crates/mosaik"><img alt="Status" src="https://img.shields.io/crates/v/mosaik.svg?color=blue"></a>
-    <a href="https://github.com/flashbots/mosaik"><img alt="Rust" src="https://img.shields.io/badge/rust-1.87%2B-blue.svg"></a>
+    <a href="https://github.com/flashbots/mosaik"><img alt="Rust" src="https://img.shields.io/badge/rust-1.89%2B-blue.svg"></a>
     <a href="https://github.com/flashbots/mosaik"><img alt="Status" src="https://img.shields.io/badge/status-experimental-orange.svg"></a>
   </p>
 </p>
@@ -35,6 +35,27 @@ Gossip-based peer discovery and catalog synchronization. Nodes announce their pr
 
 - **Announcements** — real-time broadcast of peer presence and metadata changes via `iroh-gossip`, with signed entries and periodic re-announcements
 - **Catalog Sync** — full bidirectional catalog exchange for initial catch-up and on-demand synchronization
+
+Discovery is largely transparent and ships with sensible defaults. To spin up a node on a given network, just provide a `NetworkId`:
+
+```rust
+use mosaik::*;
+
+let network_id = NetworkId::random()
+let node = Network::new(network_id).await?;
+```
+
+For finer control, use `NetworkBuilder` to customize discovery settings such as tags or bootstrap peers:
+
+```rust
+let n0 = Network::builder(network_id)
+  .with_discovery(
+    discovery::Config::builder()
+      .with_tags("tag1")
+      .with_tags(["tag2", "tag3"])
+      .with_bootstrap([peer_id1, peer_id2])
+  ).build().await?;
+```
 
 ### Streams
 
@@ -115,9 +136,9 @@ Key features:
 - **Consistency levels** — `Weak` (local, possibly stale) vs `Strong` (forwarded to leader)
 - **Reactive conditions** — `when().is_leader()`, `when().is_follower()`, `when().leader_changed()`, `when().is_online()`
 
-### Store *(work in progress)*
+### Collections *(work in progress)*
 
-Synchronized data store protocol for replaying stream data to late-joining consumers. Enables state accumulation (folding stream deltas into materialized views) and producer-driven catch-up.
+Replicated data structures.
 
 ## Architecture
 
@@ -135,26 +156,26 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 │  │ Sync      │  │Status   │  │  RSM      │  │
 │  └───────────┘  └─────────┘  └───────────┘  │
 │                                             │
-│  ┌─────────┐  ┌──────────────────────────┐  │
-│  │  Store  │  │     Transport (iroh)     │  │
-│  │  (WIP)  │  │  QUIC · Relay · mDNS     │  │
-│  └─────────┘  └──────────────────────────┘  │
+│  ┌─────────────┐  ┌──────────────────────┐  │
+│  │ Collections │  │    Transport (iroh)  │  │
+│  │    (WIP)    │  │  QUIC · Relay · mDNS │  │
+│  └─────────────┘  └──────────────────────┘  │
 └─────────────────────────────────────────────┘
 ```
 
 ## Repository Layout
 
-| Path              | Description                                                           |
-| ----------------- | --------------------------------------------------------------------- |
-| `src/`            | Core library — all shared primitives, protocols, and APIs             |
-| `src/discovery/`  | Peer discovery, announcement, and catalog synchronization             |
-| `src/streams/`    | Typed pub/sub: producers, consumers, status conditions, criteria      |
-| `src/groups/`     | Availability groups: bonds, Raft consensus, replicated state machines |
-| `src/store/`      | Synchronized data store protocol (WIP)                                |
-| `src/network/`    | Transport layer, connection management, typed links                   |
-| `src/primitives/` | Identifiers (`Digest`), formatting helpers, async work queues         |
-| `src/builtin/`    | Built-in implementations (`NoOp` state machine, `InMemory` storage)   |
-| `tests/`          | Integration tests organized by subsystem                              |
+| Path               | Description                                                           |
+| ------------------ | --------------------------------------------------------------------- |
+| `src/`             | Core library — all shared primitives, protocols, and APIs             |
+| `src/discovery/`   | Peer discovery, announcement, and catalog synchronization             |
+| `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria      |
+| `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines |
+| `src/collections/` | Replicated data structures (WIP).                                     |
+| `src/network/`     | Transport layer, connection management, typed links                   |
+| `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues         |
+| `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)   |
+| `tests/`           | Integration tests organized by subsystem                              |
 
 ## Getting Started
 

@@ -1,4 +1,7 @@
-use crate::{groups::StateMachine, primitives::UniqueId, unique_id};
+use crate::{
+	groups::{StateMachine, replay::LogReplaySync},
+	primitives::UniqueId,
+};
 
 /// A no-op state machine that does nothing and can be used for testing or
 /// agreeing on who's the leader without any application-level logic.
@@ -9,14 +12,18 @@ impl StateMachine for NoOp {
 	type Command = ();
 	type Query = ();
 	type QueryResult = ();
+	type StateSync = LogReplaySync<Self>;
 
-	const ID: UniqueId = unique_id!(
-		"0000000000000000000000000000000000000000000000000000000000000001"
-	);
-
-	fn reset(&mut self) {}
+	fn signature(&self) -> UniqueId {
+		// noop has no configs so we can use a constant signature.
+		UniqueId::from("mosaik_noop_state_machine")
+	}
 
 	fn apply(&mut self, (): Self::Command) {}
 
 	fn query(&self, (): Self::Query) -> Self::QueryResult {}
+
+	fn state_sync(&self) -> Self::StateSync {
+		LogReplaySync::default()
+	}
 }

@@ -1,12 +1,12 @@
 use {
 	crate::{
-		Groups,
 		PeerId,
 		discovery::{Catalog, PeerEntryVersion, SignedPeerEntry},
 		groups::{
 			Bond,
 			Bonds,
 			Error,
+			Groups,
 			StateMachine,
 			Storage,
 			When,
@@ -282,11 +282,11 @@ where
 	/// propagate connectivity information about peers in the group faster than
 	/// waiting for discovery updates to propagate through the network.
 	fn on_bond_formed(&self, peer_id: PeerId) {
-		let bond = self
-			.state
-			.bonds
-			.get(&peer_id)
-			.expect("bond should exist for connected peer");
+		let Some(bond) = self.state.bonds.get(&peer_id) else {
+			// bond should exist for connected peer, peer dropped before we could
+			// process the event
+			return;
+		};
 
 		tracing::debug!(
 			id = %Short(bond.id()),
@@ -316,7 +316,7 @@ where
 		match command {
 			// Begins the process of accepting an incoming connection for this
 			WorkerBondCommand::Accept(link, peer, handshake, result_tx) => {
-				self.accept_bond(link, peer, handshake, result_tx);
+				self.accept_bond(*link, peer, handshake, result_tx);
 			}
 			// Attempts to create a new bond connection to the specified peer.
 			WorkerBondCommand::Connect(peer_entry) => {
@@ -335,13 +335,6 @@ where
 	/// Handles incoming commands for the raft consensus protocol.
 	fn on_raft_command(&mut self, command: WorkerRaftCommand<M>) {
 		match command {
-			WorkerRaftCommand::Execute(cmd, result_tx) => {
-				let cmd_fut = self.raft.execute(cmd);
-				self.work_queue.enqueue(async move {
-					let result = cmd_fut.await;
-					let _ = result_tx.send(result);
-				});
-			}
 			WorkerRaftCommand::Feed(cmd, result_tx) => {
 				let cmd_fut = self.raft.feed(cmd);
 				self.work_queue.enqueue(async move {
@@ -412,7 +405,7 @@ where
 				}
 				Err(reason) => {
 					if !matches!(reason, Error::AlreadyBonded(_)) {
-						tracing::debug!(
+						tracing::trace!(
 							error = %reason,
 							network = %state.local.network_id(),
 							peer = %Short(peer_id),

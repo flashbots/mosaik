@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 
+mod collections;
 mod discovery;
 mod groups;
 mod streams;

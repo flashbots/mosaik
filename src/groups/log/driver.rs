@@ -1,12 +1,4 @@
-use {
-	crate::groups::{
-		Cursor,
-		Index,
-		Term,
-		log::{rsm::StateMachine, storage::Storage},
-	},
-	core::ops::RangeInclusive,
-};
+use crate::groups::{Cursor, Index, StateMachine, Term, log::storage::Storage};
 
 pub struct Driver<S, M>
 where
@@ -59,27 +51,6 @@ where
 		self.committed
 	}
 
-	/// Returns the range of available log indices in the store.
-	pub fn available(&self) -> RangeInclusive<Index> {
-		self.storage.available()
-	}
-
-	/// Retrieves the entry at the given index.
-	pub fn get(&self, index: Index) -> Option<(M::Command, Term)> {
-		self.storage.get(index)
-	}
-
-	/// Retrieves a range of log entries from the log, starting from `start`
-	/// and ending at `end` (inclusive). Returns an iterator over the entries in
-	/// the specified range. If any index in the range is out of bounds, it is
-	/// skipped and not included in the returned iterator.
-	pub fn get_range(
-		&self,
-		range: RangeInclusive<Index>,
-	) -> impl Iterator<Item = (Term, Index, M::Command)> + '_ {
-		self.storage.get_range(range)
-	}
-
 	/// Returns the term of the entry at the given index, or None if no entry
 	/// exists at that index. Log entries are indexed starting from 1, so
 	/// `term_at(0)` always returns `Some(0)`.
@@ -96,6 +67,23 @@ where
 		self.storage.truncate(at);
 	}
 
+	/// Prunes log entries up to the given index (inclusive) from the beginning
+	/// of the log. This should only be called when the state sync provider has
+	/// determined that those entries are no longer needed for state
+	/// synchronization of lagging followers.
+	///
+	/// The given index must not exceed the committed index, as uncommitted
+	/// entries must never be pruned.
+	pub fn prune_prefix(&mut self, up_to: Index) {
+		debug_assert!(
+			up_to <= self.committed,
+			"cannot prune uncommitted entries (up_to: {up_to}, committed: {})",
+			self.committed,
+		);
+		let up_to = up_to.min(self.committed);
+		self.storage.prune_prefix(up_to);
+	}
+
 	/// Appends a new entry.
 	pub fn append(&mut self, command: M::Command, term: Term) -> Index {
 		self.storage.append(command, term)
@@ -109,19 +97,16 @@ where
 	/// Returns the index of the latest committed entry after this operation,
 	/// which may be less than the given index goes beyond the end of the log.
 	pub fn commit_up_to(&mut self, index: Index) -> Index {
-		let index: u64 = index.into();
-		let committed: u64 = self.committed.into();
-		let range = committed + 1..=index;
+		let committed = self.committed;
+		let range = committed.next()..=index;
+		let commands = self.storage.get_range(&range);
+		let commands_count = commands.len() as u64;
 
-		for i in range {
-			let i = i.into();
-			if let Some((command, _)) = self.storage.get(i) {
-				self.machine.apply(command);
-				self.committed = i;
-			} else {
-				break;
-			}
-		}
+		self
+			.machine
+			.apply_batch(commands.into_iter().map(|(_, _, cmd)| cmd));
+		self.committed = committed + commands_count;
+
 		self.committed
 	}
 
@@ -130,7 +115,18 @@ where
 		&self.machine
 	}
 
+	/// Returns a mutable reference to the state machine.
 	pub const fn machine_mut(&mut self) -> &mut M {
 		&mut self.machine
+	}
+
+	/// Returns a reference to the raw log storage.
+	pub const fn storage(&self) -> &S {
+		&self.storage
+	}
+
+	/// Returns a mutable reference to the raw log storage.
+	pub const fn storage_mut(&mut self) -> &mut S {
+		&mut self.storage
 	}
 }

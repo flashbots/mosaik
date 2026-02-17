@@ -3,7 +3,7 @@ use {
 		groups::{Counter, CounterCommand, leaders_converged},
 		utils::{discover_all, timeout_after, timeout_s},
 	},
-	mosaik::{primitives::Short, *},
+	mosaik::{groups::IndexRange, primitives::Short, *},
 };
 
 /// This test verifies that a leader is elected when there are no other known
@@ -22,14 +22,13 @@ async fn is_elected() -> anyhow::Result<()> {
 	// The node should be a follower with no known leader.
 	assert_eq!(g0.leader(), None);
 	assert!(!g0.is_leader());
-	assert!(g0.is_follower());
 
 	// Wait for longer than the bootstrap delay and election timeout to allow
 	// leader election.
 	let timeout = 2
-		* (g0.config().intervals().bootstrap_delay
-			+ g0.config().intervals().election_timeout
-			+ g0.config().intervals().election_timeout_jitter);
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
 	let new_leader = timeout_after(timeout, g0.when().leader_elected()).await?;
 	tracing::debug!("New leader elected: {}", Short(new_leader));
 
@@ -53,7 +52,6 @@ async fn is_elected() -> anyhow::Result<()> {
 	assert_eq!(new_leader, n0.local().id());
 
 	assert!(!g1.is_leader());
-	assert!(g1.is_follower());
 	assert_eq!(g1.leader(), Some(n0.local().id()));
 	tracing::info!("n1 recognizes n0 ({}) as leader", Short(n0.local().id()));
 
@@ -69,7 +67,6 @@ async fn is_elected() -> anyhow::Result<()> {
 	assert_eq!(new_leader, n0.local().id());
 
 	assert!(!g2.is_leader());
-	assert!(g2.is_follower());
 	assert_eq!(g2.leader(), Some(n0.local().id()));
 	tracing::info!("n2 recognizes n0 ({}) as leader", Short(n0.local().id()));
 
@@ -88,7 +85,6 @@ async fn is_elected() -> anyhow::Result<()> {
 
 	assert_eq!(g1_leader, g2_leader);
 	assert!(g1.is_leader() ^ g2.is_leader());
-	assert!(g1.is_follower() ^ g2.is_follower());
 	tracing::info!("New leader elected after n0 shutdown: {}", Short(g1_leader));
 
 	// start a third node and have it join the group. It should recognize the
@@ -101,7 +97,6 @@ async fn is_elected() -> anyhow::Result<()> {
 	let g3_leader = timeout_after(timeout, g3.when().leader_elected()).await?;
 	assert_eq!(g3_leader, g1_leader);
 	assert!(!g3.is_leader());
-	assert!(g3.is_follower());
 	assert_eq!(g3.leader(), Some(g1_leader));
 	tracing::info!("n3 recognizes new leader {}", Short(g1_leader));
 
@@ -125,9 +120,9 @@ async fn rivals_with_same_log_pos() -> anyhow::Result<()> {
 	let g0 = n0.groups().with_key(group_key).join();
 
 	let timeout = 2
-		* (g0.config().intervals().bootstrap_delay
-			+ g0.config().intervals().election_timeout
-			+ g0.config().intervals().election_timeout_jitter);
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
 
 	// no other members in the group, n0 should eventually self-elect itself as
 	// the leader of the group.
@@ -198,9 +193,9 @@ async fn rivals_with_different_log_pos() -> anyhow::Result<()> {
 		.join();
 
 	let timeout = 2
-		* (g0.config().intervals().bootstrap_delay
-			+ g0.config().intervals().election_timeout
-			+ g0.config().intervals().election_timeout_jitter);
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
 
 	// no other members in the group, n0 should eventually self-elect itself as
 	// the leader of the group.
@@ -217,7 +212,8 @@ async fn rivals_with_different_log_pos() -> anyhow::Result<()> {
 			CounterCommand::Increment(1),
 		])
 		.await?;
-	assert_eq!(index, 3);
+	assert_eq!(index.end(), 3);
+	assert_eq!(index, IndexRange::new(1.into(), 3.into()));
 
 	// wait for the commands to be committed
 	timeout_s(2, g0.when().committed().reaches(index)).await?;

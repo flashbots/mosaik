@@ -1,7 +1,7 @@
 use {
 	crate::{
 		PeerId,
-		groups::{Cursor, Index},
+		groups::{Cursor, Index, IndexRange},
 	},
 	tokio::sync::watch,
 };
@@ -72,10 +72,10 @@ impl When {
 				}
 
 				let value = *leader.borrow_and_update();
-				if let Some(new_leader) = value {
-					if Some(new_leader) != current_leader {
-						return new_leader;
-					}
+				if let Some(new_leader) = value
+					&& Some(new_leader) != current_leader
+				{
+					return new_leader;
 				}
 			}
 		}
@@ -268,9 +268,9 @@ impl<T: PartialOrd<Index> + Ord + Copy + Send + Sync + 'static>
 	/// least the given index.
 	pub fn reaches(
 		&self,
-		index: impl Into<Index>,
+		index: impl IndexOrRange,
 	) -> impl Future<Output = T> + Send + Sync + 'static {
-		let index = index.into();
+		let index = index.ends_at();
 		let mut value = self.value.clone();
 
 		async move {
@@ -367,5 +367,22 @@ impl When {
 	/// node.
 	pub(super) fn current_log_pos(&self) -> Cursor {
 		*self.log_pos.borrow()
+	}
+}
+
+#[doc(hidden)]
+pub trait IndexOrRange {
+	fn ends_at(self) -> Index;
+}
+
+impl<T: Into<Index>> IndexOrRange for T {
+	fn ends_at(self) -> Index {
+		self.into()
+	}
+}
+
+impl IndexOrRange for IndexRange {
+	fn ends_at(self) -> Index {
+		*self.end()
 	}
 }

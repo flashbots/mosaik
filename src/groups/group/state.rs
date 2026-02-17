@@ -1,17 +1,18 @@
 use {
 	crate::{
 		Consistency,
-		Groups,
 		NetworkId,
 		PeerId,
 		discovery::{Discovery, SignedPeerEntry},
 		groups::{
 			Bonds,
 			CommandError,
+			CommittedQueryResult,
 			Config,
 			Group,
 			GroupId,
-			Index,
+			Groups,
+			IndexRange,
 			QueryError,
 			StateMachine,
 			When,
@@ -35,7 +36,7 @@ use {
 #[derive(Debug)]
 pub struct WorkerState {
 	/// Configuration settings for this group, such as the group key and the
-	/// intervals configuration. Those values must be identical across all
+	/// consensus configuration. Those values must be identical across all
 	/// members of the group, any difference will render a different group id and
 	/// will prevent the members from forming a bond connection with each other.
 	pub config: GroupConfig,
@@ -112,12 +113,6 @@ impl WorkerState {
 		self.types.0
 	}
 
-	/// Returns the type id of the storage implementation used by this group.
-	#[expect(dead_code)]
-	pub const fn storage_type(&self) -> TypeId {
-		self.types.1
-	}
-
 	/// Generates a proof of knowledge of the group secret key for the given link.
 	///
 	/// This is used during the bond establishment process to prove to the remote
@@ -177,7 +172,8 @@ impl WorkerState {
 		handshake: HandshakeStart,
 	) -> Result<(), AcceptError> {
 		let (result_tx, result_rx) = oneshot::channel();
-		let command = WorkerBondCommand::Accept(link, peer, handshake, result_tx);
+		let command =
+			WorkerBondCommand::Accept(link.into(), peer, handshake, result_tx);
 
 		// handoff the accept process to the background worker loop
 		self
@@ -191,13 +187,12 @@ impl WorkerState {
 }
 
 /// Bond-related commands sent to the group worker loop.
-#[expect(clippy::large_enum_variant)]
 pub enum WorkerBondCommand {
 	/// Accepts an incoming connection for this group.
 	/// Connections that are routed here have already passed preliminary
 	/// validation such as network id and group id checks.
 	Accept(
-		Link<Groups>,
+		Box<Link<Groups>>,
 		SignedPeerEntry,
 		HandshakeStart,
 		oneshot::Sender<Result<(), AcceptError>>,
@@ -220,17 +215,12 @@ pub enum WorkerBondCommand {
 pub(super) enum WorkerRaftCommand<M: StateMachine> {
 	Feed(
 		Vec<M::Command>,
-		oneshot::Sender<Result<(), CommandError<M>>>,
-	),
-
-	Execute(
-		Vec<M::Command>,
-		oneshot::Sender<Result<Index, CommandError<M>>>,
+		oneshot::Sender<Result<IndexRange, CommandError<M>>>,
 	),
 
 	Query(
 		M::Query,
 		Consistency,
-		oneshot::Sender<Result<M::QueryResult, QueryError<M>>>,
+		oneshot::Sender<Result<CommittedQueryResult<M>, QueryError<M>>>,
 	),
 }

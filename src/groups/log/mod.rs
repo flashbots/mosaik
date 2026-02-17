@@ -1,12 +1,10 @@
 mod cursor;
 mod driver;
-mod rsm;
 mod storage;
 
 // Public API exports
 pub use {
-	cursor::{Cursor, Index, Term},
+	cursor::{Cursor, Index, IndexRange, Term},
 	driver::Driver,
-	rsm::{Command, Query, QueryResult, StateMachine},
-	storage::Storage,
+	storage::{InMemoryLogStore, Storage},
 };

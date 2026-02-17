@@ -2,7 +2,7 @@ use {
 	super::Counter,
 	crate::utils::discover_all,
 	mosaik::{
-		builtin::groups::{InMemory, NoOp},
+		groups::{InMemoryLogStore, NoOp},
 		*,
 	},
 };
@@ -29,7 +29,7 @@ async fn group_id_derived_from_config() -> anyhow::Result<()> {
 		.groups()
 		.with_key(group_key1)
 		.with_state_machine(Counter::default())
-		.with_storage(InMemory::default())
+		.with_log_storage(InMemoryLogStore::default())
 		.join();
 
 	tracing::debug!("g0_0: {g0_0}");

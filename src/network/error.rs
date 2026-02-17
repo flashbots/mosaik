@@ -1,4 +1,4 @@
-use crate::{discovery, groups, store, streams};
+use crate::{discovery, groups, streams};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -19,9 +19,6 @@ pub enum Error {
 
 	#[error("Groups config error: {0}")]
 	GroupsConfig(#[from] groups::ConfigBuilderError),
-
-	#[error("Stores config error: {0}")]
-	StoreConfig(#[from] store::ConfigBuilderError),
 }
 
 pub trait CloseReason:

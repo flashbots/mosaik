@@ -6,6 +6,7 @@ use {
 			Cursor,
 			GroupId,
 			Index,
+			IndexRange,
 			StateMachine,
 			When,
 			config::GroupConfig,
@@ -15,6 +16,8 @@ use {
 		primitives::Short,
 	},
 	core::{fmt, marker::PhantomData},
+	derive_more::Deref,
+	serde::{Deserialize, Serialize},
 	state::WorkerState,
 	std::sync::Arc,
 	tokio::sync::{
@@ -43,6 +46,21 @@ pub enum Consistency {
 	Strong,
 }
 
+/// Carries the result of executing a query against the group's state machine,
+/// along with the position of the state machine at which the query was
+/// executed.
+#[derive(Debug, Clone, Deref, Serialize, Deserialize)]
+pub struct CommittedQueryResult<M: StateMachine> {
+	/// The result of executing the query against the state machine.
+	#[deref]
+	pub result: M::QueryResult,
+
+	/// The index of the latest committed command in the log at the time the
+	/// query was processed. This can be used by clients to determine how up to
+	/// date the query result is with respect to the current state of the group.
+	pub at_position: Index,
+}
+
 /// Public API for interacting with a joined group.
 ///
 /// This is the main interface that allows users to issue commands to the group
@@ -68,13 +86,6 @@ impl<M: StateMachine> Group<M> {
 	/// Returns `true` if the local node is currently the leader of this group.
 	pub fn is_leader(&self) -> bool {
 		self.state.when.current_leader() == Some(self.state.local_id())
-	}
-
-	/// Returns `true` if the local node is currently a follower in this group.
-	pub fn is_follower(&self) -> bool {
-		// todo | this is not entirely accurate, as the local node could be a
-		// todo | candidate during an election, revisit this asap.
-		!self.is_leader()
 	}
 
 	/// Returns the `PeerId` of the current leader of this group, or `None` if no
@@ -142,7 +153,10 @@ impl<M: StateMachine> Group<M> {
 		&self,
 		command: M::Command,
 	) -> Result<Index, CommandError<M>> {
-		self.execute_many(vec![command]).await
+		self
+			.execute_many([command])
+			.await
+			.map(|range| *range.start())
 	}
 
 	/// Issues a series of commands to the group, which will be replicated to all
@@ -166,49 +180,33 @@ impl<M: StateMachine> Group<M> {
 	pub async fn execute_many(
 		&self,
 		commands: impl IntoIterator<Item = M::Command>,
-	) -> Result<Index, CommandError<M>> {
-		let Some(sender) = self
-			.state
-			.raft_cmd_tx
-			.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
-		else {
-			unreachable!("invalid raft_tx type. this is a bug.");
-		};
-
-		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Execute(_, _))) = sender.send(
-			WorkerRaftCommand::Execute(commands.into_iter().collect(), result_tx),
-		) {
-			return Err(CommandError::GroupTerminated);
-		}
-
-		match result_rx.await {
-			Ok(Ok(index)) => Ok(index),
-			Ok(Err(e)) => Err(e), // command processing error (e.g. not leader)
-			Err(_) => Err(CommandError::GroupTerminated), // oneshot RecvError
-		}
+	) -> Result<IndexRange, CommandError<M>> {
+		let assigned_ix = self.feed_many(commands).await?;
+		self.when().committed().reaches(assigned_ix.clone()).await;
+		Ok(assigned_ix)
 	}
 
 	/// Sends a command to the group leader without waiting for it to be committed
 	/// to the state machine. The returned future will resolve once the command
-	/// has been sent to the leader.
-	///
-	/// Consecutive calls to this method are not guaranteed to be processed in the
-	/// order they were issued, as the
-	pub async fn feed(&self, command: M::Command) -> Result<(), CommandError<M>> {
-		self.feed_many(vec![command]).await
+	/// has been sent to the leader and the leader has acknowledged receipt of the
+	/// command and assigned it an index, but it does not guarantee that the
+	/// command has been committed to the state.
+	pub async fn feed(
+		&self,
+		command: M::Command,
+	) -> Result<Index, CommandError<M>> {
+		self.feed_many([command]).await.map(|range| *range.start())
 	}
 
 	/// Sends a series of commands to the group leader without waiting for them to
 	/// be committed to the state machine. The returned future will resolve once
-	/// the commands have been sent to the leader.
-	///
-	/// Consecutive calls to this method are not guaranteed to be processed in the
-	/// order they were issued, as the
+	/// the commands have been sent to the leader and the leader has acknowledged
+	/// receipt of the commands and assigned them indices but does not guarantee
+	/// that the commands have been committed to the state.
 	pub async fn feed_many(
 		&self,
 		commands: impl IntoIterator<Item = M::Command>,
-	) -> Result<(), CommandError<M>> {
+	) -> Result<IndexRange, CommandError<M>> {
 		let Some(sender) = self
 			.state
 			.raft_cmd_tx
@@ -217,15 +215,21 @@ impl<M: StateMachine> Group<M> {
 			unreachable!("invalid raft_tx type. this is a bug.");
 		};
 
+		let commands: Vec<_> = commands.into_iter().collect();
+
+		if commands.is_empty() {
+			return Err(CommandError::NoCommands);
+		}
+
 		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Feed(_, _))) = sender.send(
-			WorkerRaftCommand::Feed(commands.into_iter().collect(), result_tx),
-		) {
+		if let Err(SendError(WorkerRaftCommand::Feed(_, _))) =
+			sender.send(WorkerRaftCommand::Feed(commands, result_tx))
+		{
 			return Err(CommandError::GroupTerminated);
 		}
 
 		match result_rx.await {
-			Ok(Ok(())) => Ok(()),
+			Ok(Ok(index_range)) => Ok(index_range),
 			Ok(Err(e)) => Err(e), // command processing error (e.g. not leader)
 			Err(_) => Err(CommandError::GroupTerminated), // oneshot RecvError
 		}
@@ -247,7 +251,7 @@ impl<M: StateMachine> Group<M> {
 		&self,
 		query: M::Query,
 		consistency: Consistency,
-	) -> Result<M::QueryResult, QueryError<M>> {
+	) -> Result<CommittedQueryResult<M>, QueryError<M>> {
 		let Some(sender) = self
 			.state
 			.raft_cmd_tx
@@ -268,6 +272,42 @@ impl<M: StateMachine> Group<M> {
 			Ok(Err(e)) => Err(e), // query processing error
 			Err(_) => Err(QueryError::GroupTerminated), // oneshot RecvError
 		}
+	}
+}
+
+impl<M: StateMachine> CommittedQueryResult<M> {
+	/// Consumes the `CommittedQueryResult` and returns the inner query result.
+	pub fn into(self) -> M::QueryResult {
+		self.result
+	}
+
+	/// Returns a reference to the query result.
+	pub const fn result(&self) -> &M::QueryResult {
+		&self.result
+	}
+
+	/// Returns the index of the committed command at which the query was
+	/// processed.
+	pub const fn state_position(&self) -> Index {
+		self.at_position
+	}
+}
+
+impl<M: StateMachine> PartialEq<M::QueryResult> for CommittedQueryResult<M>
+where
+	M::QueryResult: PartialEq,
+{
+	fn eq(&self, other: &M::QueryResult) -> bool {
+		&self.result == other
+	}
+}
+
+impl<M: StateMachine> core::fmt::Display for CommittedQueryResult<M>
+where
+	M::QueryResult: core::fmt::Display,
+{
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		write!(f, "{}", &self.result)
 	}
 }
 

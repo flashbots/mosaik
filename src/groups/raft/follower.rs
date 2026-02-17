@@ -3,13 +3,18 @@ use {
 		PeerId,
 		groups::{
 			CommandError,
+			CommittedQueryResult,
 			Index,
-			log::{StateMachine, Storage, Term},
+			IndexRange,
+			QueryError,
+			StateMachine,
+			StateSync,
+			StateSyncSession,
+			log::{Storage, Term},
 			raft::{
 				Message,
 				candidate::Candidate,
-				catchup::Catchup,
-				protocol::{AppendEntries, AppendEntriesResponse, Forward, Sync, Vote},
+				protocol::{AppendEntries, AppendEntriesResponse, Forward, Vote},
 				role::{Role, RoleHandlerError},
 				shared::Shared,
 			},
@@ -34,7 +39,6 @@ use {
 /// candidates and leaders. If the election timeout elapses without receiving
 /// `AppendEntries` from the current leader, the follower transitions to
 /// leader candidate state and starts a new election.
-#[derive(Debug)]
 pub struct Follower<M: StateMachine> {
 	/// The current term for this node.
 	term: Term,
@@ -52,18 +56,25 @@ pub struct Follower<M: StateMachine> {
 	/// Tracks the pending forwarded commands from this follower to the leader
 	/// that are awaiting acknowledgment with the assigned log index from the
 	/// leader's `ForwardCommandResponse`.
-	forwarded_commands: HashMap<u64, oneshot::Sender<Index>>,
+	pending_commands: HashMap<u64, oneshot::Sender<IndexRange>>,
+
+	/// Tracks the pending forwarded queries from this follower to the leader.
+	pending_queries: HashMap<u64, oneshot::Sender<CommittedQueryResult<M>>>,
 
 	/// Channel for tracking forwarded commands that have expired without
 	/// receiving a response from the leader within the forward timeout duration.
 	expired_commands: UnboundedChannel<u64>,
+
+	/// Channel for tracking forwarded queries that have expired without
+	/// receiving a response from the leader within the forward timeout duration.
+	expired_queries: UnboundedChannel<u64>,
 
 	/// Optional state for the catch-up process when a follower is lagging behind
 	/// the leader and needs to fetch missing log entries from peers before it
 	/// can be in sync with the leader and transition to online status. This is
 	/// set when we receive an `AppendEntries` message from the leader that is
 	/// inconsistent with our local log state.
-	catchup: Option<Catchup<M>>,
+	catchup: Option<<M::StateSync as StateSync>::Session>,
 
 	#[doc(hidden)]
 	_marker: PhantomData<M>,
@@ -76,13 +87,13 @@ impl<M: StateMachine> Follower<M> {
 		leader: Option<PeerId>,
 		shared: &Shared<S, M>,
 	) -> Self {
-		let mut election_timeout = shared.config().intervals().election_timeout();
+		let mut election_timeout = shared.config().consensus().election_timeout();
 
 		if term.is_zero() {
 			// for the initial term, we introduce an additional bootstrap delay to
 			// give all nodes enough time to start up and discover each other before
 			// triggering the first election.
-			election_timeout += shared.config().intervals().bootstrap_delay;
+			election_timeout += shared.config().consensus().bootstrap_delay;
 		}
 
 		if let Some(leader) = leader {
@@ -99,8 +110,10 @@ impl<M: StateMachine> Follower<M> {
 			term,
 			leader,
 			catchup: None,
-			forwarded_commands: HashMap::default(),
+			pending_commands: HashMap::default(),
+			pending_queries: HashMap::default(),
 			expired_commands: UnboundedChannel::default(),
+			expired_queries: UnboundedChannel::default(),
 			election_timeout: Box::pin(sleep(election_timeout)),
 			_marker: PhantomData,
 		}
@@ -144,15 +157,24 @@ impl<M: StateMachine> Follower<M> {
 			// let other in-sync nodes trigger elections if the leader is
 			// unavailable.
 			match catchup.poll_next_tick(cx, shared) {
-				Poll::Ready(ControlFlow::Break(())) => {
+				Poll::Ready(cursor) => {
+					assert_eq!(cursor, shared.log.last());
+
 					// we're caught up and in sync with the leader, turn off catch-up
 					// mode and start watching the election timeout again for any
 					// potential leader failures.
 					self.catchup = None;
-				}
-				// we're still catching up
-				Poll::Ready(ControlFlow::Continue(())) => {
-					return Poll::Ready(ControlFlow::Continue(()));
+
+					tracing::info!(
+						log_at = %cursor,
+						term = %self.term(),
+						group = %Short(shared.group_id()),
+						network = %Short(shared.network_id()),
+						"state sync complete, back online"
+					);
+
+					// signal updated log position to public api observers.
+					shared.update_log_pos(cursor);
 				}
 				// we're still catching up
 				Poll::Pending => return Poll::Pending,
@@ -177,7 +199,7 @@ impl<M: StateMachine> Follower<M> {
 	/// In follower mode we care about the following message:
 	/// - `AppendEntries` from the leader
 	/// - `Forward::ExecuteAck` from the leader.
-	/// - `Sync::DiscoveryResponse` when in catch-up mode.
+	/// - `Sync::AvailabilityResponse` when in catch-up mode.
 	/// - `Sync::FetchEntriesResponse` when in catch-up mode.
 	///
 	/// All other messages (e.g. `RequestVote` from candidates) are handled in the
@@ -185,7 +207,7 @@ impl<M: StateMachine> Follower<M> {
 	/// if they are unexpected for this role.
 	pub fn receive_protocol_message<S: Storage<M::Command>>(
 		&mut self,
-		message: Message<M::Command>,
+		message: Message<M>,
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
 	) -> Result<(), RoleHandlerError<M>> {
@@ -193,26 +215,27 @@ impl<M: StateMachine> Follower<M> {
 			Message::AppendEntries(request) => {
 				self.on_append_entries(request, sender, shared);
 			}
-			Message::Forward(Forward::ExecuteAck {
+			Message::Forward(Forward::CommandAck {
 				request_id,
-				log_index,
+				assigned: assigned_indices,
 			}) => {
-				self.on_forward_command_response(request_id, log_index);
+				self.on_forward_command_response(request_id, assigned_indices);
+			}
+			Message::Forward(Forward::QueryResponse {
+				request_id,
+				result,
+				position,
+			}) => {
+				self.on_forward_query_response(request_id, result, position);
 			}
 
-			// Peers response to our `DiscoveryRequest` messages during the catch-up.
-			Message::Sync(Sync::DiscoveryResponse { available }) => {
+			// state-sync related messages
+			Message::StateSync(message) => {
 				if let Some(catchup) = self.catchup.as_mut() {
-					catchup.receive_availability(available, sender);
+					catchup.receive(message, sender, shared);
 				}
 			}
 
-			// Peers response to our `FetchEntriesRequest` messages during catch-up
-			Message::Sync(Sync::FetchEntriesResponse { range, entries }) => {
-				if let Some(catchup) = self.catchup.as_mut() {
-					catchup.receive_entries(sender, range, entries);
-				}
-			}
 			message => {
 				return Err(RoleHandlerError::<M>::Unexpected(message));
 			}
@@ -234,7 +257,7 @@ impl<M: StateMachine> Follower<M> {
 		shared: &Shared<S, M>,
 	) {
 		let next_election_timeout =
-			Instant::now() + shared.intervals().election_timeout();
+			Instant::now() + shared.consensus().election_timeout();
 
 		self
 			.election_timeout
@@ -249,7 +272,7 @@ impl<M: StateMachine> Follower<M> {
 		&mut self,
 		commands: Vec<M::Command>,
 		shared: &Shared<S, M>,
-	) -> BoxPinFut<Result<Index, CommandError<M>>> {
+	) -> BoxPinFut<Result<IndexRange, CommandError<M>>> {
 		let Some(leader) = self.leader() else {
 			// if the follower does not know who's the current leader (e.g. because
 			// elections are in progress or because it is still in the initial offline
@@ -261,31 +284,78 @@ impl<M: StateMachine> Follower<M> {
 		// generate a random request id
 		let request_id: u64 = loop {
 			let id = rand::random();
-			if self.forwarded_commands.contains_key(&id) {
+			if self.pending_commands.contains_key(&id) {
 				continue;
 			}
 			break id;
 		};
 
 		// send the command to the current leader
-		let message = Message::Forward(Forward::Execute {
-			commands: commands.clone(),
+		let message = Message::Forward(Forward::Command {
+			commands: commands.clone(), // todo: avoid cloning!
 			request_id: Some(request_id),
 		});
 
 		let (forward_ack_tx, forward_ack_rx) = oneshot::channel();
-		self.forwarded_commands.insert(request_id, forward_ack_tx);
-		shared.bonds().send_raft_to::<M>(message, leader);
+		self.pending_commands.insert(request_id, forward_ack_tx);
+		shared.bonds().send_raft_to::<M>(&message, leader);
 
 		let expired_sender = self.expired_commands.sender().clone();
-		let forward_timeout = shared.intervals().forward_timeout;
+		let forward_timeout = shared.consensus().forward_timeout;
 
 		async move {
-			if let Ok(Ok(index)) = timeout(forward_timeout, forward_ack_rx).await {
-				Ok(index)
+			if let Ok(Ok(assigned)) = timeout(forward_timeout, forward_ack_rx).await {
+				Ok(assigned)
 			} else {
 				expired_sender.send(request_id).ok();
 				Err(CommandError::Offline(commands))
+			}
+		}
+		.pin()
+	}
+
+	/// Forwards a query with strong consistency requirement to the current leader
+	/// and returns the query result from leader's state machine and the
+	/// committed log position at which the query was executed.
+	pub fn forward_query<S: Storage<M::Command>>(
+		&mut self,
+		query: M::Query,
+		shared: &Shared<S, M>,
+	) -> BoxPinFut<Result<CommittedQueryResult<M>, QueryError<M>>> {
+		let Some(leader) = self.leader() else {
+			// if the follower does not know who's the current leader, return an error
+			// with the query.
+			return ready(Err(QueryError::Offline(query))).pin();
+		};
+
+		// generate a random request id
+		let request_id: u64 = loop {
+			let id = rand::random();
+			if self.pending_queries.contains_key(&id) {
+				continue;
+			}
+			break id;
+		};
+
+		// send the query to the current leader
+		let message = Message::Forward(Forward::Query {
+			query: query.clone(), // todo: avoid cloning!
+			request_id,
+		});
+
+		let (response_tx, response_rx) = oneshot::channel();
+		self.pending_queries.insert(request_id, response_tx);
+		shared.bonds().send_raft_to::<M>(&message, leader);
+
+		let expired_sender = self.expired_queries.sender().clone();
+		let query_timeout = shared.consensus().query_timeout;
+
+		async move {
+			if let Ok(Ok(response)) = timeout(query_timeout, response_rx).await {
+				Ok(response)
+			} else {
+				expired_sender.send(request_id).ok();
+				Err(QueryError::Offline(query))
 			}
 		}
 		.pin()
@@ -319,10 +389,10 @@ impl<M: StateMachine> Follower<M> {
 			Some(local_term) if local_term == request.prev_log_position.term() => {
 				if let Some(first) = request.entries.first() {
 					let next_index = request.prev_log_position.index().next();
-					if let Some(existing_term) = shared.log.term_at(next_index) {
-						if existing_term != first.term {
-							shared.log.truncate(next_index);
-						}
+					if let Some(existing_term) = shared.log.term_at(next_index)
+						&& existing_term != first.term
+					{
+						shared.log.truncate(next_index);
 					}
 				}
 				true
@@ -353,10 +423,27 @@ impl<M: StateMachine> Follower<M> {
 
 			// buffer the leader's inflight entries while we're catching up on the
 			// log.
+			let entries = request
+				.entries
+				.into_iter()
+				.map(|entry| (entry.command, entry.term))
+				.collect();
 			if let Some(catchup) = self.catchup.as_mut() {
-				catchup.buffer(request);
+				catchup.buffer(request.prev_log_position, entries, shared);
 			} else {
-				self.catchup = Some(Catchup::new(request, shared));
+				tracing::info!(
+					leader_pos = %request.prev_log_position,
+					local_pos = %shared.log.last(),
+					term = %self.term(),
+					group = %Short(shared.group_id()),
+					network = %Short(shared.network_id()),
+					"starting state sync"
+				);
+
+				self.catchup = Some(shared.create_sync_session(
+					request.prev_log_position, //
+					entries,
+				));
 			}
 		}
 	}
@@ -364,14 +451,36 @@ impl<M: StateMachine> Follower<M> {
 	/// Handles an incoming `Forward::ExecuteAck` message from the leader in
 	/// response to a command that this follower forwarded to the leader. Signals
 	/// the assignment of a log index to the forwarded command.
-	fn on_forward_command_response(&mut self, request_id: u64, log_index: Index) {
-		if let Some(ack) = self.forwarded_commands.remove(&request_id) {
-			let _ = ack.send(log_index);
+	fn on_forward_command_response(
+		&mut self,
+		request_id: u64,
+		assigned: IndexRange,
+	) {
+		if let Some(ack) = self.pending_commands.remove(&request_id) {
+			let _ = ack.send(assigned);
 		}
 	}
 
-	/// Periodically cleans up any pending forwarded commands that have expired
-	/// without receiving a response from the leader within the forward timeout.
+	/// Handles an incoming `Forward::QueryResponse` message from the leader in
+	/// response to a query with strong consistency requirement that this follower
+	/// sent to the leader.
+	fn on_forward_query_response(
+		&mut self,
+		request_id: u64,
+		result: M::QueryResult,
+		at_position: Index,
+	) {
+		if let Some(response) = self.pending_queries.remove(&request_id) {
+			let _ = response.send(CommittedQueryResult {
+				result,
+				at_position,
+			});
+		}
+	}
+
+	/// Periodically cleans up any pending forwarded commands and queries that
+	/// have expired without receiving a response from the leader within the
+	/// forward timeout.
 	fn clean_expired_forwarded_commands(&mut self, cx: &mut Context<'_>) {
 		if !self.expired_commands.is_empty() {
 			let count = self.expired_commands.len();
@@ -383,7 +492,22 @@ impl<M: StateMachine> Follower<M> {
 				.is_ready()
 			{
 				for id in ids {
-					self.forwarded_commands.remove(&id);
+					self.pending_commands.remove(&id);
+				}
+			}
+		}
+
+		if !self.expired_queries.is_empty() {
+			let count = self.expired_queries.len();
+			let mut ids = Vec::with_capacity(count);
+
+			if self
+				.expired_queries
+				.poll_recv_many(cx, &mut ids, count)
+				.is_ready()
+			{
+				for id in ids {
+					self.pending_queries.remove(&id);
 				}
 			}
 		}
@@ -405,7 +529,7 @@ impl<M: StateMachine> Follower<M> {
 			// redelivery).
 			let start_index = request.prev_log_position.index().next();
 			for (i, entry) in request.entries.into_iter().enumerate() {
-				let index = start_index + i.into();
+				let index = start_index + i;
 				if shared.log.term_at(index) == Some(entry.term) {
 					// already have this entry (and we verified no conflicts above), so
 					// skip it.
@@ -420,7 +544,7 @@ impl<M: StateMachine> Follower<M> {
 			// index of our last log entry
 			let local_position = shared.log.last();
 			shared.bonds().send_raft_to::<M>(
-				Message::AppendEntriesResponse(AppendEntriesResponse {
+				&Message::AppendEntriesResponse(AppendEntriesResponse {
 					term: self.term(),
 					vote: Vote::Granted,
 					last_log_index: local_position.index(),
@@ -442,6 +566,7 @@ impl<M: StateMachine> Follower<M> {
 			if prev_committed < new_committed {
 				// Signal to public api observers that the committed index has advanced
 				shared.when().update_committed(new_committed);
+				shared.prune_safe_prefix();
 			}
 		}
 

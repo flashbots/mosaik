@@ -4,8 +4,10 @@ use {
 		PeerId,
 		groups::{
 			CommandError,
-			Index,
+			CommittedQueryResult,
+			IndexRange,
 			QueryError,
+			StateMachine,
 			log,
 			raft::{role::Role, shared::Shared},
 			state::WorkerState,
@@ -18,12 +20,11 @@ use {
 		pin::Pin,
 		task::{Context, Poll},
 	},
-	futures::{FutureExt, Stream},
+	futures::Stream,
 	std::sync::Arc,
 };
 
 mod candidate;
-mod catchup;
 mod follower;
 mod leader;
 mod protocol;
@@ -64,7 +65,7 @@ pub(super) use protocol::Message;
 pub struct Raft<S, M>
 where
 	S: log::Storage<M::Command>,
-	M: log::StateMachine,
+	M: StateMachine,
 {
 	/// The current role of this node in the Raft consensus algorithm and its
 	/// role-specific state.
@@ -77,7 +78,7 @@ where
 impl<S, M> Raft<S, M>
 where
 	S: log::Storage<M::Command>,
-	M: log::StateMachine,
+	M: StateMachine,
 {
 	/// Creates a new consensus instance with the given storage and state machine
 	/// implementations. This is called when initializing the Worker task for a
@@ -107,63 +108,30 @@ where
 			.receive_protocol_message(message, from, &mut self.shared);
 	}
 
-	/// Appends the command to the current leader's log and returns a future that
-	/// resolves when the command is replicated and committed to the state.
-	pub fn execute(
+	/// Sends the command to the current leader without waiting for it to be
+	/// committed to the state machine. The returned future will resolve once the
+	/// command has been assigned an index by the leader, but it does not
+	/// guarantee that the command has been committed to the state.
+	pub fn feed(
 		&mut self,
 		commands: Vec<M::Command>,
-	) -> BoxPinFut<Result<Index, CommandError<M>>> {
+	) -> BoxPinFut<Result<IndexRange, CommandError<M>>> {
 		match &mut self.role {
 			Role::Leader(leader) => {
-				// add the command to the leader's log
-				let expected_index = leader.enqueue_commands(commands, &self.shared);
-
-				// return a future that resolves when the command is committed
-				let fut = self.shared.when().committed().reaches(expected_index);
-				fut.map(move |_| Ok(expected_index)).pin()
+				// add the command to the leader's log and return immediately with the
+				// assigned index, without waiting for it to be committed
+				ready(Ok(leader.enqueue_commands(commands, &self.shared))).pin()
 			}
 
 			// followers forward the command to the current leader and return a future
-			// that resolves when the command is replicated and committed to the state
-			// machine by the leader.
+			// that resolves when the command is acknowledged and assigned an index.
 			Role::Follower(follower) => {
-				let ack_fut = follower.forward_commands(commands, &self.shared);
-				let when = self.shared.when().clone();
-
-				async move {
-					// resolves when the leader acks the command an assigns it an index
-					let index = ack_fut.await?;
-
-					// resolves when the leader committed index moves up to the assigned
-					// index
-					when.committed().reaches(index).await;
-
-					// return the index at which the command was committed
-					Ok(index)
-				}
-				.pin()
+				follower.forward_commands(commands, &self.shared).pin()
 			}
-
-			// nodes in candidate state cannot accept or forward commands
-			Role::Candidate(_) => ready(Err(CommandError::Offline(commands))).pin(),
-		}
-	}
-
-	/// Sends the command to the current leader without waiting for it to be
-	/// committed to the state machine. The returned future will resolve once the
-	/// command has been sent to the leader.
-	pub fn feed(
-		&mut self,
-		command: Vec<M::Command>,
-	) -> impl Future<Output = Result<(), CommandError<M>>> + Send + Sync + 'static
-	{
-		match &mut self.role {
-			Role::Leader(leader) => {
-				leader.enqueue_commands(command, &self.shared);
-				ready(Ok(()))
+			Role::Candidate(_) => {
+				// nodes in candidate state cannot accept or forward commands
+				ready(Err(CommandError::Offline(commands))).pin()
 			}
-			Role::Follower(_follower) => todo!("feed as follower"),
-			Role::Candidate(_) => ready(Err(CommandError::Offline(command))),
 		}
 	}
 
@@ -176,25 +144,40 @@ where
 	/// to the current leader and wait for a response that reflects the latest
 	/// committed state of the state machine.
 	pub fn query(
-		&self,
+		&mut self,
 		query: M::Query,
 		consistency: Consistency,
-	) -> BoxPinFut<Result<M::QueryResult, QueryError<M>>> {
-		match &self.role {
+	) -> BoxPinFut<Result<CommittedQueryResult<M>, QueryError<M>>> {
+		match &mut self.role {
 			Role::Leader(_) => {
 				// if the local node is the leader, it can process the query directly
 				// against the state machine, which is always up to date with the latest
 				// committed state of the group.
-				ready(Ok(self.shared.log.query(query))).pin()
+				ready(Ok(CommittedQueryResult {
+					result: self.shared.log.query(query),
+					at_position: self.shared.log.committed(),
+				}))
+				.pin()
 			}
 
-			Role::Follower(_) => match consistency {
+			Role::Follower(follower) => match consistency {
 				Consistency::Weak => {
 					// with weak consistency, the follower can process the query against
-					// its local state machine up to the last known committed state.
-					ready(Ok(self.shared.log.query(query))).pin()
+					// its local state machine up to the last locally known committed
+					// state.
+					ready(Ok(CommittedQueryResult {
+						result: self.shared.log.query(query),
+						at_position: self.shared.log.committed(),
+					}))
+					.pin()
 				}
-				Consistency::Strong => todo!("strong query as follower"),
+				Consistency::Strong => {
+					// With strong consistency, only the leader can guarantee that the
+					// query was processed against the latest committed state of the
+					// group, so the follower must forward the query to the leader and
+					// wait for a response.
+					follower.forward_query(query, &self.shared)
+				}
 			},
 
 			Role::Candidate(_) => {
@@ -215,7 +198,7 @@ where
 impl<S, M> Stream for Raft<S, M>
 where
 	S: log::Storage<M::Command>,
-	M: log::StateMachine,
+	M: StateMachine,
 {
 	type Item = ();
 

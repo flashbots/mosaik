@@ -1,10 +1,10 @@
 use {
 	super::protocol::BondMessage,
 	crate::{
-		Groups,
 		discovery::SignedPeerEntry,
 		groups::{
 			Bond,
+			Groups,
 			bond::{BondEvent, BondEvents, BondId, heartbeat::Heartbeat},
 			error::Timeout,
 			state::WorkerState,
@@ -111,7 +111,7 @@ impl BondWorker {
 		let mut link = link;
 		let (peer, peer_rx) = watch::channel(peer);
 		let cancel = group.cancel.child_token();
-		let heartbeat = Heartbeat::new(group.config.intervals());
+		let heartbeat = Heartbeat::new(group.config.consensus());
 		let commands = UnboundedChannel::default();
 		let commands_tx = commands.sender().clone();
 		let (events_tx, events_rx) = unbounded_channel();

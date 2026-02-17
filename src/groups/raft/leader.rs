@@ -3,7 +3,10 @@ use {
 		PeerId,
 		groups::{
 			Index,
-			log::{StateMachine, Storage, Term},
+			IndexRange,
+			StateMachine,
+			StateSyncContext,
+			log::{Storage, Term},
 			raft::{
 				Message,
 				protocol::{AppendEntries, Forward, LogEntry, Vote},
@@ -77,7 +80,7 @@ impl<M: StateMachine> Leader<M> {
 		// us in the election.
 		let committee = Committee::new(voted_by, shared);
 
-		let heartbeat_interval = shared.config().intervals().heartbeat_interval;
+		let heartbeat_interval = shared.config().consensus().heartbeat_interval;
 		let heartbeat_timeout = Box::pin(sleep(heartbeat_interval));
 
 		// Notify the group that we are the new leader. This will cause followers to
@@ -142,7 +145,7 @@ impl<M: StateMachine> Leader<M> {
 	/// if the message was unexpected and was not handled by this role.
 	pub fn receive_protocol_message<S: Storage<M::Command>>(
 		&mut self,
-		message: Message<M::Command>,
+		message: Message<M>,
 		sender: PeerId,
 		shared: &mut Shared<S, M>,
 	) -> Result<(), RoleHandlerError<M>> {
@@ -178,23 +181,40 @@ impl<M: StateMachine> Leader<M> {
 			}
 
 			// sent by followers that are forwarding client commands to the leader.
-			Message::Forward(Forward::Execute {
+			Message::Forward(Forward::Command {
 				commands,
 				request_id,
 			}) => {
-				let log_index = self.enqueue_commands(commands, shared);
+				if !commands.is_empty() {
+					let assigned = self.enqueue_commands(commands, shared);
 
-				if let Some(request_id) = request_id {
-					// the follower is interested in knowing the log index assigned to
-					// this command asap.
-					shared.bonds().send_raft_to::<M>(
-						Message::Forward(Forward::ExecuteAck {
-							request_id,
-							log_index,
-						}),
-						sender,
-					);
+					if let Some(request_id) = request_id {
+						// the follower is interested in knowing the log index assigned to
+						// this command asap.
+						shared.bonds().send_raft_to::<M>(
+							&Message::Forward(Forward::CommandAck {
+								request_id,
+								assigned,
+							}),
+							sender,
+						);
+					}
 				}
+			}
+
+			// sent by followers that are forwarding client queries to the leader.
+			// todo: run queries in parallel.
+			Message::Forward(Forward::Query { query, request_id }) => {
+				let result = shared.machine().query(query);
+				let position = shared.log.committed();
+				shared.bonds().send_raft_to::<M>(
+					&Message::Forward(Forward::QueryResponse {
+						request_id,
+						result,
+						position,
+					}),
+					sender,
+				);
 			}
 
 			// all other message types are unexpected in the leader state. ignore.
@@ -213,27 +233,40 @@ impl<M: StateMachine> Leader<M> {
 	/// This will wake up any pending wakers that are waiting on the next leader
 	/// tick.
 	///
-	/// Returns the index of the log entry that will be assigned to this command
-	/// once it is appended to the log. This allows the caller to track the
-	/// progress of their command and know when it has been committed and applied
-	/// to the state machine.
+	/// Returns the index of the log entry that will be assigned to the last
+	/// command in the batch once it is appended to the log. This allows the
+	/// caller to track the progress of their command and know when it has been
+	/// committed and applied to the state machine.
+	///
+	/// If the batch of commands is empty it returns [0,0].
 	pub fn enqueue_commands<S: Storage<M::Command>>(
 		&mut self,
-		commands: Vec<M::Command>,
+		commands: impl IntoIterator<Item = M::Command>,
 		shared: &Shared<S, M>,
-	) -> Index {
+	) -> IndexRange {
 		let last_index = shared.log.last().index();
+		let pending_commands_count = self.client_commands.len();
+		let last_index = last_index + pending_commands_count;
+
 		for command in commands {
 			self.client_commands.send(command);
 		}
 
-		let expected_index = last_index + self.client_commands.len().into();
+		let new_commands_count = self
+			.client_commands
+			.len()
+			.saturating_sub(pending_commands_count);
 
-		for waker in self.wakers.drain(..) {
-			waker.wake();
+		if new_commands_count != 0 {
+			let new_position = last_index + new_commands_count;
+			let assigned_range = last_index.next()..=new_position;
+			for waker in self.wakers.drain(..) {
+				waker.wake();
+			}
+			return assigned_range;
 		}
 
-		expected_index
+		IndexRange::new(Index::zero(), Index::zero())
 	}
 
 	/// Records a positive vote from a follower that has acknowledged our
@@ -264,6 +297,10 @@ impl<M: StateMachine> Leader<M> {
 				);
 
 				shared.update_committed(new_committed);
+
+				// check with the state sync provider if we can prune any log entries up
+				// to the new committed index after advancing the commit index.
+				shared.prune_safe_prefix();
 			}
 		}
 	}
@@ -307,6 +344,10 @@ impl<M: StateMachine> Leader<M> {
 				);
 
 				shared.update_committed(new_committed);
+
+				// check with the state sync provider if we can prune any log entries up
+				// to the new committed index after advancing the commit index.
+				shared.prune_safe_prefix();
 			}
 		}
 	}
@@ -352,11 +393,7 @@ impl<M: StateMachine> Leader<M> {
 		// always vote for our own `AppendEntries` messages. If we are the
 		// only voter in the committee, this will immediately commit the new log
 		// entries.
-		self.record_vote(
-			shared.local_id(),
-			prev_pos.index() + count.into(),
-			shared,
-		);
+		self.record_vote(shared.local_id(), prev_pos.index() + count, shared);
 
 		let message = Message::AppendEntries(AppendEntries {
 			term: self.term,
@@ -373,10 +410,10 @@ impl<M: StateMachine> Leader<M> {
 		});
 
 		// broadcast the new log entries to all followers.
-		let followers = shared.bonds().broadcast_raft::<M>(message);
+		let followers = shared.bonds().broadcast_raft::<M>(&message);
 
 		if !followers.is_empty() {
-			let range = prev_pos.index().next()..=prev_pos.index() + count.into();
+			let range = prev_pos.index().next()..=prev_pos.index() + count;
 
 			tracing::trace!(
 				followers = %FmtIter::<Short<_>, _>::new(followers),
@@ -413,7 +450,7 @@ impl<M: StateMachine> Leader<M> {
 
 		shared
 			.bonds()
-			.broadcast_raft::<M>(Message::AppendEntries(heartbeat));
+			.broadcast_raft::<M>(&Message::AppendEntries(heartbeat));
 
 		self.reset_heartbeat_timeout();
 		Poll::Ready(())
@@ -467,7 +504,7 @@ impl Committee {
 		Self {
 			voters,
 			non_voters: HashMap::new(),
-			max_committee_size: 5,
+			max_committee_size: 5, // todo: move to config
 		}
 	}
 

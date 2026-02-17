@@ -2,6 +2,7 @@ use {
 	core::{
 		cmp::Ordering,
 		fmt::{self},
+		ops::RangeInclusive,
 	},
 	derive_more::{Add, Display, From, Into, Sub},
 	serde::{Deserialize, Serialize},
@@ -25,11 +26,39 @@ macro_rules! impl_pos_type {
 			pub fn as_usize(&self) -> usize {
 				usize::try_from(self.0).expect(concat!(stringify!($name), " value overflowed usize"))
 			}
+			#[must_use]
+			pub fn distance(&self, other: &Self) -> u64 {
+				if self > other {
+					self.0 - other.0
+				} else {
+					other.0 - self.0
+				}
+			}
 		}
 
 		impl From<usize> for $name {
 			fn from(value: usize) -> Self {
 				Self(value as u64)
+			}
+		}
+
+		impl From<&usize> for $name {
+			fn from(value: &usize) -> Self {
+				Self(*value as u64)
+			}
+		}
+
+		impl core::ops::Add<usize> for $name {
+			type Output = Self;
+			fn add(self, rhs: usize) -> Self {
+				Self(self.0 + rhs as u64)
+			}
+		}
+
+		impl core::ops::Sub<usize> for $name {
+			type Output = Self;
+			fn sub(self, rhs: usize) -> Self {
+				Self(self.0.saturating_sub(rhs as u64))
 			}
 		}
 
@@ -40,9 +69,16 @@ macro_rules! impl_pos_type {
 			}
 		}
 
+		impl From<&$name> for usize {
+			fn from(value: &$name) -> Self {
+				usize::try_from(value.0)
+					.expect(concat!(stringify!($name), " value overflowed usize"))
+			}
+		}
+
 		impl core::fmt::Display for $crate::primitives::Pretty<'_, core::ops::RangeInclusive<$name>> {
 			fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-				write!(f, "[{}..={}]", self.start(), self.end())
+				write!(f, "[{}..{}]", self.start(), self.end())
 			}
 		}
 
@@ -61,9 +97,54 @@ macro_rules! impl_pos_type {
 				}
 
 				#[automatically_derived]
+				impl From<&$t> for $name {
+					fn from(value: &$t) -> Self {
+						Self(u64::from(*value))
+					}
+				}
+
+				#[automatically_derived]
 				impl PartialEq<$t> for $name {
 					fn eq(&self, other: &$t) -> bool {
 						self.0 == u64::from(*other)
+					}
+				}
+
+				#[automatically_derived]
+				impl PartialEq<$t> for &$name {
+					fn eq(&self, other: &$t) -> bool {
+						self.0 == u64::from(*other)
+					}
+				}
+
+				#[automatically_derived]
+				impl core::ops::Add<$t> for $name {
+					type Output = Self;
+					fn add(self, rhs: $t) -> $name {
+						$name(self.0 + u64::from(rhs))
+					}
+				}
+
+				#[automatically_derived]
+				impl core::ops::Sub<$t> for $name {
+					type Output = Self;
+					fn sub(self, rhs: $t) -> $name {
+						$name(self.0.saturating_sub(u64::from(rhs)))
+					}
+				}
+
+				#[automatically_derived]
+				impl core::ops::Add<&$t> for $name {
+					type Output = Self;
+					fn add(self, rhs: &$t) -> $name {
+						$name(self.0 + u64::from(*rhs))
+					}
+				}
+
+				#[automatically_derived]
+				impl PartialEq<&$t> for $name {
+					fn eq(&self, other: &&$t) -> bool {
+						self.0 == u64::from(**other)
 					}
 				}
 
@@ -73,6 +154,20 @@ macro_rules! impl_pos_type {
 						self.0.partial_cmp(&u64::from(*other))
 					}
 				}
+
+				#[automatically_derived]
+				impl PartialOrd<$t> for &$name {
+					fn partial_cmp(&self, other: &$t) -> Option<Ordering> {
+						self.0.partial_cmp(&u64::from(*other))
+					}
+				}
+
+				#[automatically_derived]
+				impl PartialOrd<&$t> for $name {
+					fn partial_cmp(&self, other: &&$t) -> Option<Ordering> {
+						self.0.partial_cmp(&u64::from(**other))
+					}
+				}
 			};
 		)+
     };
@@ -80,13 +175,21 @@ macro_rules! impl_pos_type {
     (@signed $name:ident: $($t:ty),+) => {
 			$(
 				const _: () = {
-
 					#[automatically_derived]
 					#[allow(clippy::cast_sign_loss)]
 					impl From<$t> for $name {
 						fn from(value: $t) -> Self {
 							if value < 0 { Self(0) }
 							else { Self(value as u64) }
+						}
+					}
+
+					#[automatically_derived]
+					#[allow(clippy::cast_sign_loss)]
+					impl From<&$t> for $name {
+						fn from(value: &$t) -> Self {
+							if *value < 0 { Self(0) }
+							else { Self(*value as u64) }
 						}
 					}
 
@@ -101,10 +204,58 @@ macro_rules! impl_pos_type {
 					}
 
 					#[automatically_derived]
+					impl PartialEq<$t> for &$name {
+						#[allow(clippy::cast_sign_loss)]
+						fn eq(&self, other: &$t) -> bool {
+							let other = i64::from(*other);
+							if other < 0 { false}
+							else { self.0 == other as u64 }
+						}
+					}
+
+					#[automatically_derived]
+					impl PartialEq<&$t> for $name {
+						#[allow(clippy::cast_sign_loss)]
+						fn eq(&self, other: &&$t) -> bool {
+							let other = i64::from(**other);
+							if other < 0 { false}
+							else { self.0 == other as u64 }
+						}
+					}
+
+					#[automatically_derived]
 					impl PartialOrd<$t> for $name {
 						#[allow(clippy::cast_sign_loss)]
 						fn partial_cmp(&self, other: &$t) -> Option<Ordering> {
 							let other = i64::from(*other);
+							if other < 0 {
+								// self (u64) is always >= 0, so self > negative
+								Some(Ordering::Greater)
+							} else {
+								self.0.partial_cmp(&(other as u64))
+							}
+						}
+					}
+
+					#[automatically_derived]
+					impl PartialOrd<$t> for &$name {
+						#[allow(clippy::cast_sign_loss)]
+						fn partial_cmp(&self, other: &$t) -> Option<Ordering> {
+							let other = i64::from(*other);
+							if other < 0 {
+								// self (u64) is always >= 0, so self > negative
+								Some(Ordering::Greater)
+							} else {
+								self.0.partial_cmp(&(other as u64))
+							}
+						}
+					}
+
+					#[automatically_derived]
+					impl PartialOrd<&$t> for $name {
+						#[allow(clippy::cast_sign_loss)]
+						fn partial_cmp(&self, other: &&$t) -> Option<Ordering> {
+							let other = i64::from(**other);
 							if other < 0 {
 								// self (u64) is always >= 0, so self > negative
 								Some(Ordering::Greater)
@@ -125,6 +276,11 @@ impl_pos_type!(
 impl_pos_type!(
 	/// Raft log index increases monotonically with every new log entry.
 	Index);
+
+/// Range of log indices.
+///
+/// We always use inclusive ranges for log indices.
+pub type IndexRange = RangeInclusive<Index>;
 
 /// Progress of the log.
 #[derive(

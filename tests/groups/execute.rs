@@ -3,7 +3,12 @@ use {
 		groups::{Counter, CounterCommand, CounterValueQuery},
 		utils::{discover_all, timeout_after, timeout_s},
 	},
-	mosaik::{primitives::Short, *},
+	mosaik::{
+		groups::IndexRange,
+		primitives::{Pretty, Short},
+		*,
+	},
+	std::time::Instant,
 	tokio::join,
 };
 
@@ -23,9 +28,9 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 		.join();
 
 	let timeout = 2
-		* (g0.config().intervals().bootstrap_delay
-			+ g0.config().intervals().election_timeout
-			+ g0.config().intervals().election_timeout_jitter);
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
 
 	// wait for n0 to become online by electing itself as leader and being ready
 	// to accept commands
@@ -144,8 +149,11 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 			CounterCommand::Increment(3),
 		])
 		.await?;
-	assert_eq!(g1_pos, 6);
-	tracing::info!("g1 executed 3 commands committed at index {g1_pos}");
+	assert_eq!(g1_pos.end(), 6);
+	tracing::info!(
+		"g1 executed 3 commands committed at index {}",
+		Pretty(&g1_pos)
+	);
 
 	let g2_pos = g2
 		.execute_many([
@@ -154,8 +162,13 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 			CounterCommand::Decrement(1),
 		])
 		.await?;
-	assert_eq!(g2_pos, 9);
-	tracing::info!("g2 executed 3 commands committed at index {g2_pos}");
+	assert_eq!(g2_pos.end(), 9);
+	assert_eq!(g2_pos, IndexRange::new(7.into(), 9.into()));
+
+	tracing::info!(
+		"g2 executed 3 commands committed at range {}",
+		Pretty(&g2_pos)
+	);
 
 	// wait for both nodes to learn that index 9 is committed
 	timeout_s(2, g1.when().committed().reaches(g2_pos)).await?;
@@ -171,6 +184,124 @@ async fn no_catchup_weak_query() -> anyhow::Result<()> {
 
 	tracing::info!(
 		"query result is correct on g1 and g2: {value_n1}=={value_n2}"
+	);
+
+	Ok(())
+}
+
+/// This test verifies that commands can be executed on leaders and followers,
+/// then the state queried with weak consistency when followers do not need
+/// to catch up with any log entries.
+#[tokio::test]
+async fn no_catchup_strong_query() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let group_key = GroupKey::random();
+
+	let n0 = Network::new(network_id).await?;
+	let g0 = n0
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	let timeout = 2
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
+
+	// wait for n0 to become online by electing itself as leader and being ready
+	// to accept commands
+	timeout_after(timeout, g0.when().online()).await?;
+	assert_eq!(g0.leader(), Some(n0.local().id()));
+	assert_eq!(g0.committed(), 0);
+	tracing::info!("g0 is online");
+
+	// start a new node and have it join the group.
+	// Since there are no log entries to catch up with, this node should be online
+	// immediately after joining the group.
+	let n1 = Network::new(network_id).await?;
+	let n2 = Network::new(network_id).await?;
+	discover_all([&n0, &n1, &n2]).await?;
+
+	let g1 = n1
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	let g2 = n2
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	// make sure that they are in the same group
+	assert_eq!(g0.id(), g1.id());
+	assert_eq!(g0.id(), g2.id());
+
+	// wait for g1 to recognize the existing leader and catch up with the log
+	timeout_after(timeout, g1.when().online()).await?;
+	assert_eq!(g1.leader(), Some(n0.local().id()));
+	assert_eq!(g1.committed(), 0);
+	tracing::info!("g1 is online and is following g0 as leader");
+
+	// wait for g2 to recognize the existing leader and catch up with the log
+	timeout_after(timeout, g2.when().online()).await?;
+	assert_eq!(g2.leader(), Some(n0.local().id()));
+	assert_eq!(g2.committed(), 0);
+	tracing::info!("g2 is online and is following g0 as leader");
+
+	// execute two commands on the leader and wait for them to be committed to the
+	// state machine.
+	timeout_s(2, g0.execute(CounterCommand::Increment(3))).await??;
+	timeout_s(2, g0.execute(CounterCommand::Increment(4))).await??;
+	timeout_s(2, g1.when().committed().reaches(2)).await?;
+
+	let index = g0.committed();
+	tracing::info!("leader committed to index {index}");
+	assert_eq!(index, 2);
+
+	// verify that they have been applied correctly
+	let start = Instant::now();
+	let value = g0.query(CounterValueQuery, Strong).await?;
+	let dur_strong_leader = start.elapsed();
+
+	tracing::info!("counter value on leader: {value}");
+	assert_eq!(value, 7);
+	assert_eq!(value.state_position(), 2);
+
+	let start = Instant::now();
+	let value = g1.query(CounterValueQuery, Weak).await?;
+	let dur_weak_follower = start.elapsed();
+	tracing::info!("counter value on follower g1 (weak): {value}");
+	assert_eq!(value, 7);
+	assert_eq!(value.state_position(), 2);
+
+	let start = Instant::now();
+	let value = g1.query(CounterValueQuery, Strong).await?;
+	let dur_strong_follower = start.elapsed();
+	tracing::info!("counter value on follower g1 (strong): {value}");
+	assert_eq!(value, 7);
+	assert_eq!(value.state_position(), 2);
+
+	// this could be a bit flaky due to timing variations in the test environment,
+	// but in general we should expect the strong query on the follower to take
+	// longer than the strong query on the leader due to the additional forwarding
+	// and waiting for response, and also to take longer than the weak query on
+	// the follower.
+
+	assert!(
+		dur_strong_follower > dur_strong_leader,
+		"strong query on follower should take longer than on leader due to \
+		 forwarding and waiting for response {dur_strong_follower:?} vs \
+		 {dur_strong_leader:?}"
+	);
+
+	assert!(
+		dur_strong_follower > dur_weak_follower,
+		"strong query on follower should take longer than weak query on follower \
+		 due to forwarding and waiting for response {dur_strong_follower:?} vs \
+		 {dur_weak_follower:?}"
 	);
 
 	Ok(())
