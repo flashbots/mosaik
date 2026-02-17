@@ -15,7 +15,12 @@ mod types;
 
 use {
 	futures::{SinkExt, StreamExt},
-	matching::{OrderBook, OrderBookCommand, OrderBookQuery, OrderBookQueryResult},
+	matching::{
+		OrderBook,
+		OrderBookCommand,
+		OrderBookQuery,
+		OrderBookQueryResult,
+	},
 	mosaik::*,
 	types::{Order, Side, TradingPair},
 };
@@ -66,9 +71,7 @@ async fn main() -> anyhow::Result<()> {
 	g1.when().online().await;
 	g2.when().online().await;
 
-	let leader = g0
-		.leader()
-		.expect("leader should be elected after online");
+	let leader = g0.leader().expect("leader should be elected after online");
 	tracing::info!("matching engine online, leader: {leader}");
 
 	// --- Spin up 2 trader nodes that submit orders via streams ---
@@ -76,8 +79,7 @@ async fn main() -> anyhow::Result<()> {
 	let trader_b = Network::new(network_id).await?;
 
 	// Traders discover the matcher network
-	discover_all([&trader_a, &trader_b, &matcher0, &matcher1, &matcher2])
-		.await?;
+	discover_all([&trader_a, &trader_b, &matcher0, &matcher1, &matcher2]).await?;
 
 	// Traders produce Order streams
 	let mut orders_a = trader_a.streams().produce::<Order>();
@@ -171,7 +173,7 @@ async fn main() -> anyhow::Result<()> {
 	// --- Query the state machine for fills ---
 	let result = g0.query(OrderBookQuery::Fills, Consistency::Strong).await?;
 
-	if let OrderBookQueryResult::Fills(fills) = &result {
+	if let OrderBookQueryResult::Fills(fills) = result.result() {
 		tracing::info!("{} fills produced:", fills.len());
 		for fill in fills {
 			tracing::info!("  {fill}");
@@ -192,7 +194,7 @@ async fn main() -> anyhow::Result<()> {
 		)
 		.await?;
 
-	if let OrderBookQueryResult::TopOfBook { bids, asks } = &result {
+	if let OrderBookQueryResult::TopOfBook { bids, asks } = result.result() {
 		tracing::info!("top of book for {pair}:");
 		for (price, qty) in asks.iter().rev() {
 			tracing::info!("  ASK {price} x {qty}");
@@ -208,7 +210,7 @@ async fn main() -> anyhow::Result<()> {
 	let follower_result =
 		g1.query(OrderBookQuery::Fills, Consistency::Weak).await?;
 
-	if let OrderBookQueryResult::Fills(fills) = &follower_result {
+	if let OrderBookQueryResult::Fills(fills) = follower_result.result() {
 		tracing::info!(
 			"follower g1 sees {} fills (consistent with leader)",
 			fills.len()

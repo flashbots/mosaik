@@ -1,5 +1,7 @@
 //! Mosaik Replicated Collections
 
+#![allow(unreachable_code, unused)]
+
 mod depq;
 mod error;
 mod map;

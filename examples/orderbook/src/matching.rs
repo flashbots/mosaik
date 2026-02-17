@@ -1,6 +1,9 @@
 use {
 	crate::types::{Fill, Order, Price, Quantity, Side, TradingPair},
-	mosaik::{groups::StateMachine, primitives::UniqueId, unique_id},
+	mosaik::{
+		groups::{LogReplaySync, StateMachine},
+		primitives::UniqueId,
+	},
 	serde::{Deserialize, Serialize},
 	std::collections::BTreeMap,
 };
@@ -153,9 +156,11 @@ impl OrderBook {
 				Side::Bid => &mut self.bids,
 				Side::Ask => &mut self.asks,
 			};
-			book.entry(order.price)
-				.or_default()
-				.push((order.id, remaining, order.trader));
+			book.entry(order.price).or_default().push((
+				order.id,
+				remaining,
+				order.trader,
+			));
 		}
 	}
 
@@ -170,18 +175,13 @@ impl OrderBook {
 }
 
 impl StateMachine for OrderBook {
-	const ID: UniqueId = unique_id!(
-		"6f72646572626f6f6b2d6578616d706c652d763100000000000000000000dead"
-	);
-
 	type Command = OrderBookCommand;
 	type Query = OrderBookQuery;
 	type QueryResult = OrderBookQueryResult;
+	type StateSync = LogReplaySync<Self>;
 
-	fn reset(&mut self) {
-		self.bids.clear();
-		self.asks.clear();
-		self.fills.clear();
+	fn signature(&self) -> UniqueId {
+		UniqueId::from("orderbook_state_machine")
 	}
 
 	fn apply(&mut self, command: Self::Command) {
@@ -221,9 +221,7 @@ impl StateMachine for OrderBook {
 
 				OrderBookQueryResult::TopOfBook { bids, asks }
 			}
-			OrderBookQuery::Fills => {
-				OrderBookQueryResult::Fills(self.fills.clone())
-			}
+			OrderBookQuery::Fills => OrderBookQueryResult::Fills(self.fills.clone()),
 			OrderBookQuery::OrderCount => {
 				let count: usize = self
 					.bids
@@ -234,5 +232,9 @@ impl StateMachine for OrderBook {
 				OrderBookQueryResult::OrderCount(count)
 			}
 		}
+	}
+
+	fn state_sync(&self) -> Self::StateSync {
+		LogReplaySync::default()
 	}
 }
