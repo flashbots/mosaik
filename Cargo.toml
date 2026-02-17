@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "examples/orderbook"]
+resolver = "2"
+
 [package]
 name = "mosaik"
 description = "A Rust runtime for building self-organizing, leaderless distributed systems."
