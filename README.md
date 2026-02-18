@@ -175,22 +175,27 @@ Replicated ordered, index-addressable sequence.
 ```rust
 let store_id = StoreId::random();
 
-let vec = mosaik::collections::Vec::<u64>::writer(&network, store_id);
-vec.when().online().await;
+let vec_writer = mosaik::collections::Vec::<u64>::writer(&network, store_id);
+vec_writer.when().online().await;
 
-vec.push(42).await?;
-let ver = vec.extend([7, 13, 21]).await?;
-
-assert_eq!(vec.get(0), Some(42));
-assert_eq!(vec.get(2), Some(13));
-assert_eq!(vec.len(), 4);
-
-vec.remove(1).await?; // removes the element at index 1
+// Push to front and back
+vec.push_back(42).await?;
+vec.push_front(10).await?;
+vec.extend([7, 13, 21]).await?;
 
 // On a reader node
-let reader = mosaik::collections::Vec::<u64>::reader(&network, store_id);
-reader.when().reaches(ver).await;
-assert_eq!(reader.len(), 4);
+let vec_reader = mosaik::collections::Vec::<u64>::reader(&network, store_id);
+vec_reader.when().online().await;
+
+assert_eq!(vec_reader.get(0), Some(10));
+assert_eq!(vec_reader.get(1), Some(42));
+assert_eq!(vec_reader.get(2), Some(7));
+assert_eq!(vec_reader.get(3), Some(13));
+
+let pos = vec_writer.clear();
+vec_reader.when().reaches(pos);
+assert!(vec_reader.is_empty());
+
 ```
 
 #### `Set<T>`
