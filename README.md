@@ -136,9 +136,87 @@ Key features:
 - **Consistency levels** — `Weak` (local, possibly stale) vs `Strong` (forwarded to leader)
 - **Reactive conditions** — `when().is_leader()`, `when().is_follower()`, `when().leader_changed()`, `when().is_online()`
 
-### Collections *(work in progress)*
+### Collections
 
-Replicated data structures.
+Replicated, eventually consistent data structures built on top of Groups. Each collection is backed by a Raft-replicated state machine. Every collection has a **writer** (can mutate) and a **reader** (read-only replica that tracks the writer's state).
+
+All mutations return a `Version` that can be awaited on readers via `when().reaches(ver)` to confirm convergence.
+
+#### `Map<K, V>`
+
+Replicated unordered key-value store.
+
+```rust
+let store_id = StoreId::random();
+
+// On the writer node
+let map = mosaik::collections::Map::<String, u64>::writer(&network, store_id);
+map.when().online().await;
+
+map.insert("alice".into(), 100).await?;
+let ver = map.extend(vec![("bob".into(), 200), ("carol".into(), 300)]).await?;
+
+assert_eq!(map.get(&"alice".into()), Some(100));
+assert!(map.contains_key(&"bob".into()));
+assert_eq!(map.len(), 3);
+
+map.remove("carol".into()).await?;
+
+// On a reader node
+let reader = mosaik::collections::Map::<String, u64>::reader(&network, store_id);
+reader.when().reaches(ver).await;
+assert_eq!(reader.get(&"bob".into()), Some(200));
+```
+
+#### `Vec<T>`
+
+Replicated ordered, index-addressable sequence.
+
+```rust
+let store_id = StoreId::random();
+
+let vec = mosaik::collections::Vec::<u64>::writer(&network, store_id);
+vec.when().online().await;
+
+vec.push(42).await?;
+let ver = vec.extend([7, 13, 21]).await?;
+
+assert_eq!(vec.get(0), Some(42));
+assert_eq!(vec.get(2), Some(13));
+assert_eq!(vec.len(), 4);
+
+vec.remove(1).await?; // removes the element at index 1
+
+// On a reader node
+let reader = mosaik::collections::Vec::<u64>::reader(&network, store_id);
+reader.when().reaches(ver).await;
+assert_eq!(reader.len(), 4);
+```
+
+#### `Set<T>`
+
+Replicated unordered collection of unique values.
+
+```rust
+let store_id = StoreId::random();
+
+let set = mosaik::collections::Set::<u64>::writer(&network, store_id);
+set.when().online().await;
+
+set.insert(42).await?;
+let ver = set.extend([7, 13, 21]).await?;
+
+assert!(set.contains(&42));
+assert_eq!(set.len(), 4);
+
+set.insert(42).await?;       // duplicate — len stays 4
+set.remove(7).await?;
+
+// On a reader node
+let reader = mosaik::collections::Set::<u64>::reader(&network, store_id);
+reader.when().reaches(ver).await;
+assert!(reader.contains(&13));
+```
 
 ## Architecture
 
@@ -158,7 +236,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 │                                             │
 │  ┌─────────────┐  ┌──────────────────────┐  │
 │  │ Collections │  │    Transport (iroh)  │  │
-│  │    (WIP)    │  │  QUIC · Relay · mDNS │  │
+│  │ Map Vec Set │  │  QUIC · Relay · mDNS │  │
 │  └─────────────┘  └──────────────────────┘  │
 └─────────────────────────────────────────────┘
 ```
@@ -171,7 +249,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 | `src/discovery/`   | Peer discovery, announcement, and catalog synchronization             |
 | `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria      |
 | `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines |
-| `src/collections/` | Replicated data structures (WIP).                                     |
+| `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`                       |
 | `src/network/`     | Transport layer, connection management, typed links                   |
 | `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues         |
 | `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)   |
