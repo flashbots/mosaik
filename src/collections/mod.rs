@@ -5,16 +5,15 @@
 mod depq;
 mod map;
 mod primitives;
-// mod set;
+mod set;
 mod vec;
 mod when;
 
 pub use {
 	depq::PriorityQueue,
 	map::Map,
-	primitives::StoreId,
-	primitives::Version,
-	// set::Set,
+	primitives::{StoreId, Version},
+	set::Set,
 	vec::Vec,
 	when::When,
 };

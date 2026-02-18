@@ -16,7 +16,7 @@
 > [!WARNING]
 > **Experimental research software.** Mosaik is under active development. APIs and wire protocols may change without notice. Production quality is targeted for `v1.0`.
 
-## Overview
+# Overview
 
 Mosaik provides primitives for automatic peer discovery, typed pub/sub data streams, availability groups with Raft consensus, and synchronized data stores. Nodes deployed on plain VMs self-organize into a functioning topology using only a secret key, a gossip seed, and role tags — **no orchestration, configuration templates, or DevOps glue required.**
 
@@ -27,9 +27,9 @@ Mosaik initially targets trusted, permissioned networks such as L2 chains contro
 > [!TIP]
 > To see mosaik in action, browse the integration tests in the [`tests`](tests/) directory.
 
-## Core Primitives
+# Core Primitives
 
-### Discovery
+## Discovery
 
 Gossip-based peer discovery and catalog synchronization. Nodes announce their presence, capabilities (tags), and available streams/groups/stores. The catalog converges across the network through two complementary protocols:
 
@@ -57,7 +57,7 @@ let n0 = Network::builder(network_id)
   ).build().await?;
 ```
 
-### Streams
+## Streams
 
 Typed async pub/sub data channels connecting producers and consumers across the network. Any serializable type automatically implements `Datum` and can be streamed.
 
@@ -107,42 +107,14 @@ Key features:
 - **Per-subscription stats** — datums count, bytes count, uptime tracking
 - **Backpressure** — slow consumers are disconnected to prevent head-of-line blocking
 
-### Groups
 
-Availability groups — clusters of trusted nodes that coordinate for failover and shared state. Built on a **modified Raft consensus** optimized for trusted environments:
-
-```rust
-let group = network.groups()
-    .with_key(group_key)
-    .with_state_machine(counter)
-    .with_storage(InMemory::default())
-    .join()
-    .await?;
-
-// Wait for leader election
-group.when().leader_elected().await;
-
-// Replicate a command
-group.execute(Increment(5), Consistency::Strong).await?;
-```
-
-Key features:
-
-- **Bonded mesh** — every pair of members maintains a persistent bidirectional connection, authenticated via HMAC-derived proofs of a shared group secret
-- **Non-voting followers** — nodes behind the leader's log abstain from votes, preventing stale nodes from disrupting elections
-- **Dynamic quorum** — abstaining nodes excluded from the quorum denominator
-- **Distributed log catch-up** — lagging followers partition the log range across responders and pull in parallel
-- **Replicated state machines** — implement the `StateMachine` trait with `apply(command)` for mutations and `query(query)` for reads
-- **Consistency levels** — `Weak` (local, possibly stale) vs `Strong` (forwarded to leader)
-- **Reactive conditions** — `when().is_leader()`, `when().is_follower()`, `when().leader_changed()`, `when().is_online()`
-
-### Collections
+## Collections
 
 Replicated, eventually consistent data structures built on top of Groups. Each collection is backed by a Raft-replicated state machine. Every collection has a **writer** (can mutate) and a **reader** (read-only replica that tracks the writer's state).
 
 All mutations return a `Version` that can be awaited on readers via `when().reaches(ver)` to confirm convergence.
 
-#### `Map<K, V>`
+### `Map<K, V>`
 
 Replicated unordered key-value store.
 
@@ -172,7 +144,7 @@ reader.when().reaches(ver).await;
 assert!(reader.is_empty());
 ```
 
-#### `Vec<T>`
+### `Vec<T>`
 
 Replicated ordered, index-addressable sequence.
 
@@ -202,32 +174,59 @@ assert!(vec_reader.is_empty());
 
 ```
 
-#### `Set<T>`
+### `Set<T>`
 
 Replicated unordered collection of unique values.
 
 ```rust
 let store_id = StoreId::random();
 
-let set = mosaik::collections::Set::<u64>::writer(&network, store_id);
+let set = mosaik::collections::Set::<u64>::new(&network, store_id);
 set.when().online().await;
 
 set.insert(42).await?;
-let ver = set.extend([7, 13, 21]).await?;
-
-assert!(set.contains(&42));
-assert_eq!(set.len(), 4);
-
+set.extend([7, 13, 21]).await?;
 set.insert(42).await?;       // duplicate — len stays 4
 set.remove(7).await?;
 
 // On a reader node
 let reader = mosaik::collections::Set::<u64>::reader(&network, store_id);
-reader.when().reaches(ver).await;
+reader.when().online().await;
 assert!(reader.contains(&13));
+assert!(!reader.contains(&7));
+assert_eq!(reader.len(), 3);
 ```
 
-## Architecture
+## Groups
+
+Availability groups — clusters of trusted nodes that coordinate for failover and shared state. Built on a **modified Raft consensus** optimized for trusted environments:
+
+```rust
+let group = network.groups()
+    .with_key(group_key)
+    .with_state_machine(counter)
+    .with_storage(InMemory::default())
+    .join()
+    .await?;
+
+// Wait for leader election
+group.when().leader_elected().await;
+
+// Replicate a command
+group.execute(Increment(5), Consistency::Strong).await?;
+```
+
+Key features:
+
+- **Bonded mesh** — every pair of members maintains a persistent bidirectional connection, authenticated via HMAC-derived proofs of a shared group secret
+- **Non-voting followers** — nodes behind the leader's log abstain from votes, preventing stale nodes from disrupting elections
+- **Dynamic quorum** — abstaining nodes excluded from the quorum denominator
+- **Distributed log catch-up** — lagging followers partition the log range across responders and pull in parallel
+- **Replicated state machines** — implement the `StateMachine` trait with `apply(command)` for mutations and `query(query)` for reads
+- **Consistency levels** — `Weak` (local, possibly stale) vs `Strong` (forwarded to leader)
+- **Reactive conditions** — `when().is_leader()`, `when().is_follower()`, `when().leader_changed()`, `when().is_online()`
+
+# Architecture
 
 Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based peer-to-peer networking with relay support.
 
@@ -250,7 +249,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 └─────────────────────────────────────────────┘
 ```
 
-## Repository Layout
+# Repository Layout
 
 | Path               | Description                                                           |
 | ------------------ | --------------------------------------------------------------------- |
@@ -264,13 +263,13 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 | `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)   |
 | `tests/`           | Integration tests organized by subsystem                              |
 
-## Getting Started
+# Getting Started
 
-### Prerequisites
+## Prerequisites
 
 - Rust toolchain **≥ 1.87** — install with `rustup toolchain install 1.87`
 
-### Usage
+## Usage
 
 ```bash
 cargo add mosaik
@@ -283,7 +282,7 @@ or in `Cargo.toml`
 mosaik = "0.2.1"
 ```
 
-### Scenario Tests
+## Scenario Tests
 
 Read through the scenario tests in the [`tests/`](tests/) directory for practical examples of mosaik capabilities.
 
@@ -305,15 +304,16 @@ If tests are running on a slow network, the timeouts can be extended by setting 
 TIME_FACTOR=3 TEST_TRACE=on cargo test --test basic groups::leader::is_elected
 ```
 
-## Roadmap
+# Roadmap
 
-### Stage 1: Primitives *(current)*
+## Stage 1: Primitives *(current)*
 
 Core primitives for building self-organized distributed systems in trusted, permissioned networks.
 
 - [x] **Discovery** — gossip announcements, catalog sync, tags
 - [x] **Streams** — producers, consumers, predicates, limits, online conditions, stats
 - [x] **Groups** — membership, shared state, failover, load balancing
+- [x] **Collections** - Replicated, eventually consistent data structures
 - [ ] **Preferences** — ranking producers by latency, geo-proximity
 - [ ] **Diagnostics** — network inspection, automatic metrics, developer debug tools
 
