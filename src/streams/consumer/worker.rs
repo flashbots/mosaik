@@ -155,6 +155,7 @@ impl<D: Datum> ConsumerWorker<D> {
 				tracing::trace!(
 					stream_id = %Short(self.config.stream_id),
 					producer = %Short(producer),
+					network = %producer.network_id(),
 					"discovered new stream producer"
 				);
 
@@ -162,6 +163,7 @@ impl<D: Datum> ConsumerWorker<D> {
 					tracing::debug!(
 						stream_id = %Short(self.config.stream_id),
 						producer_id = %Short(producer),
+						network = %producer.network_id(),
 						"skipping producer that does not satisfy eligibility criteria"
 					);
 					continue;
@@ -226,7 +228,8 @@ impl<D: Datum> ConsumerWorker<D> {
 			if let Some(cancel) = self.receiver_cancels.remove(&sub_id) {
 				cancel.cancel();
 			}
-			self.active
+			self
+				.active
 				.send_if_modified(|active| active.remove(&sub_id).is_some());
 		}
 	}

@@ -1,16 +1,25 @@
 use {
-	super::{InsertError, InsertManyError, RemoveError, StoreId, Version, When},
+	super::{
+		InsertError,
+		InsertManyError,
+		RemoveError,
+		StoreId,
+		Value,
+		Version,
+		When,
+	},
 	crate::{
 		Group,
 		Network,
 		UniqueId,
 		groups::{CommandError, ConsensusConfig, LogReplaySync, StateMachine},
 	},
-	core::{any::type_name, hash::Hash},
+	core::any::type_name,
 	serde::{Deserialize, Serialize},
 	tokio::sync::watch,
 };
 
+/// Replicated, unordered, eventually consistent map.
 pub struct Map<K: Key, V: Value> {
 	when: When,
 	group: Group<MapStateMachine<K, V>>,
@@ -34,18 +43,7 @@ impl<K: Key, V: Value> Map<K, V> {
 	}
 
 	pub fn reader(network: &Network, store_id: StoreId) -> MapReader<K, V> {
-		let (state_machine, snapshot) = MapStateMachine::new(store_id, true);
-		let group = network
-			.groups()
-			.with_key(store_id.into())
-			.with_state_machine(state_machine)
-			.join();
-
-		MapReader {
-			when: When::new(group.when().clone()),
-			group,
-			snapshot,
-		}
+		MapReader::new(network, store_id)
 	}
 
 	pub async fn insert(
@@ -128,6 +126,14 @@ impl<K: Key, V: Value> Map<K, V> {
 			})
 	}
 
+	pub fn is_empty(&self) -> bool {
+		self.snapshot.borrow().is_empty()
+	}
+
+	pub fn len(&self) -> usize {
+		self.snapshot.borrow().len()
+	}
+
 	pub fn get(&self, key: &K) -> Option<V> {
 		self.snapshot.borrow().get(key).cloned()
 	}
@@ -152,6 +158,31 @@ pub struct MapReader<K: Key, V: Value> {
 }
 
 impl<K: Key, V: Value> MapReader<K, V> {
+	pub fn new(network: &Network, store_id: StoreId) -> Self {
+		let (state_machine, snapshot) = MapStateMachine::new(store_id, true);
+		let group = network
+			.groups()
+			.with_key(store_id.into())
+			.with_state_machine(state_machine)
+			.join();
+
+		Self {
+			when: When::new(group.when().clone()),
+			group,
+			snapshot,
+		}
+	}
+}
+
+impl<K: Key, V: Value> MapReader<K, V> {
+	pub fn is_empty(&self) -> bool {
+		self.snapshot.borrow().is_empty()
+	}
+
+	pub fn len(&self) -> usize {
+		self.snapshot.borrow().len()
+	}
+
 	pub fn get(&self, key: &K) -> Option<V> {
 		self.snapshot.borrow().get(key).cloned()
 	}
@@ -222,8 +253,7 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 
 	fn query(&self, query: Self::Query) -> Self::QueryResult {
 		match query {
-			MapQuery::IsEmpty => MapQueryResult::IsEmpty(self.map.is_empty()),
-			MapQuery::Len => MapQueryResult::Len(self.map.len()),
+			MapQuery::GetLen => MapQueryResult::Len(self.map.len()),
 			MapQuery::ContainsKey(key) => {
 				MapQueryResult::ContainsKey(self.map.contains_key(&key))
 			}
@@ -257,8 +287,7 @@ enum MapCommand<K, V> {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound = "K: Key")]
 enum MapQuery<K> {
-	IsEmpty,
-	Len,
+	GetLen,
 	ContainsKey(K),
 	Get(K),
 }
@@ -266,7 +295,6 @@ enum MapQuery<K> {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound = "V: Value")]
 enum MapQueryResult<V> {
-	IsEmpty(bool),
 	Len(usize),
 	ContainsKey(bool),
 	Get(Option<V>),
@@ -276,7 +304,7 @@ pub trait Key:
 	Clone
 	+ serde::Serialize
 	+ serde::de::DeserializeOwned
-	+ Hash
+	+ core::hash::Hash
 	+ PartialEq
 	+ Eq
 	+ Send
@@ -290,35 +318,7 @@ impl<T> Key for T where
 	T: Clone
 		+ serde::Serialize
 		+ serde::de::DeserializeOwned
-		+ Hash
-		+ PartialEq
-		+ Eq
-		+ Send
-		+ Sync
-		+ Unpin
-		+ 'static
-{
-}
-
-pub trait Value:
-	Clone
-	+ serde::Serialize
-	+ serde::de::DeserializeOwned
-	+ Hash
-	+ PartialEq
-	+ Eq
-	+ Send
-	+ Sync
-	+ Unpin
-	+ 'static
-{
-}
-
-impl<T> Value for T where
-	T: Clone
-		+ serde::Serialize
-		+ serde::de::DeserializeOwned
-		+ Hash
+		+ core::hash::Hash
 		+ PartialEq
 		+ Eq
 		+ Send

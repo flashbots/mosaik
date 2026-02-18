@@ -78,6 +78,15 @@ pub struct LogReplaySync<M: StateMachine> {
 	_marker: PhantomData<M>,
 }
 
+impl<M: StateMachine> Default for LogReplaySync<M> {
+	fn default() -> Self {
+		Self {
+			config: Config::default(),
+			_marker: PhantomData,
+		}
+	}
+}
+
 impl<M: StateMachine> core::fmt::Debug for LogReplaySync<M> {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		f.debug_struct("LogReplaySync")
@@ -110,15 +119,6 @@ impl<M: StateMachine> StateSync for LogReplaySync<M> {
 		entries: Vec<(M::Command, Term)>,
 	) -> Self::Session {
 		LogReplaySession::new(&self.config, cx, position, entries)
-	}
-}
-
-impl<M: StateMachine> Default for LogReplaySync<M> {
-	fn default() -> Self {
-		Self {
-			config: Config::default(),
-			_marker: PhantomData,
-		}
 	}
 }
 

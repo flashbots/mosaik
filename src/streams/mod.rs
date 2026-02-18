@@ -25,13 +25,13 @@ use {
 	accept::Acceptor,
 	iroh::protocol::RouterBuilder,
 	producer::Sinks,
+	serde::{Serialize, de::DeserializeOwned},
 	std::sync::Arc,
 };
 
 mod accept;
 mod config;
 mod criteria;
-mod datum;
 
 // Streams submodules
 pub mod consumer;
@@ -42,7 +42,6 @@ pub use {
 	config::{Config, ConfigBuilder, ConfigBuilderError, backoff},
 	consumer::Consumer,
 	criteria::Criteria,
-	datum::Datum,
 	producer::Producer,
 };
 
@@ -135,6 +134,26 @@ impl ProtocolProvider for Streams {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
 		protocols.accept(Self::ALPN, Acceptor::new(self))
 	}
+}
+
+/// Implemented by all data types that are published as streams.
+///
+/// This type gives us zero-friction default implementations for
+/// any serializable rust type.
+pub trait Datum:
+	Serialize + DeserializeOwned + Send + Sync + Unpin + 'static
+{
+	/// Returns the default stream id derived from the datum type name.
+	/// This is the stream id used if no custom stream id is provided when
+	/// building producers or consumers for this datum type.
+	fn derived_stream_id() -> StreamId {
+		core::any::type_name::<Self>().into()
+	}
+}
+
+impl<T> Datum for T where
+	T: Serialize + DeserializeOwned + Send + Sync + Unpin + 'static
+{
 }
 
 impl link::Protocol for Streams {

@@ -478,20 +478,23 @@ impl<M: StateMachine> LogReplaySession<M> {
 	fn finalize_sync(&mut self, cx: &mut dyn StateSyncContext<LogReplaySync<M>>) {
 		let mut pos = self.gap.end().next();
 
-		tracing::trace!(
-			pos = %pos,
-			count = self.buffered.len(),
-			group = %Short(cx.group_id()),
-			network = %Short(cx.network_id()),
-			"applying buffered state"
-		);
+		if !self.buffered.is_empty() {
+			tracing::trace!(
+				pos = %pos,
+				count = self.buffered.len(),
+				group = %Short(cx.group_id()),
+				network = %Short(cx.network_id()),
+				"applying buffered state"
+			);
 
-		for (index, term, command) in self.buffered.drain(..) {
-			// buffered entries are guaranteed to be contiguous and immediately after
-			// the last fetched entry, so we can just append them directly.
-			assert_eq!(index, pos);
-			cx.log_mut().append(command, term);
-			pos = pos.next();
+			for (index, term, command) in self.buffered.drain(..) {
+				// buffered entries are guaranteed to be contiguous and immediately
+				// after the last fetched entry, so we can just append them
+				// directly.
+				assert_eq!(index, pos);
+				cx.log_mut().append(command, term);
+				pos = pos.next();
+			}
 		}
 	}
 }

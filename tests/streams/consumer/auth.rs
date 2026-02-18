@@ -1,7 +1,7 @@
 use {
 	super::*,
 	crate::utils::{discover_all, timeout_s},
-	mosaik::{discovery::PeerEntry, primitives::Short, *},
+	mosaik::{primitives::Short, *},
 };
 
 /// This test verifies that consumers can authenticate producers based on tags
@@ -133,34 +133,22 @@ async fn dynamic_tag_reevaluation() -> anyhow::Result<()> {
 	// Simulate n1 losing the "leader" tag by feeding an updated entry
 	// into n0's catalog. Get n1's current signed entry, convert to unsigned,
 	// remove the tag, re-sign, and feed.
-	let n1_entry = n0
-		.discovery()
-		.catalog()
-		.get_signed(&n1.local().id())
-		.expect("n1 should be in catalog")
-		.clone();
-	let updated: PeerEntry = n1_entry.into();
-	let updated = updated.remove_tags("leader");
-	let updated = updated.sign(n1.local().secret_key())?;
-	n0.discovery().feed(updated);
+	n1.discovery().remove_tags("leader");
+	n0.discovery().feed(n1.discovery().me());
 
 	// Consumer should disconnect from n1 since it no longer has the tag
 	timeout_s(3, consumer.when().unsubscribed()).await?;
 	let subs = consumer.producers().collect::<Vec<_>>();
-	assert_eq!(subs.len(), 0, "should have no subscriptions after tag removal");
+	assert_eq!(
+		subs.len(),
+		0,
+		"should have no subscriptions after tag removal"
+	);
 	drop(subs);
 
 	// Simulate n2 gaining the "leader" tag
-	let n2_entry = n0
-		.discovery()
-		.catalog()
-		.get_signed(&n2.local().id())
-		.expect("n2 should be in catalog")
-		.clone();
-	let updated: PeerEntry = n2_entry.into();
-	let updated = updated.remove_tags("follower").add_tags("leader");
-	let updated = updated.sign(n2.local().secret_key())?;
-	n0.discovery().feed(updated);
+	n2.discovery().add_tags("leader");
+	n0.discovery().feed(n2.discovery().me());
 
 	// Consumer should now connect to n2
 	timeout_s(3, consumer.when().subscribed()).await?;

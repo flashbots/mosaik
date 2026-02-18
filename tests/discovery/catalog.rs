@@ -1,5 +1,5 @@
 use {
-	crate::utils::discover_all,
+	crate::utils::{discover_all, timeout_s},
 	core::time::Duration,
 	futures::{StreamExt, stream::SelectAll},
 	mosaik::*,
@@ -142,7 +142,7 @@ async fn different_networks_are_isolated() -> anyhow::Result<()> {
 	let n4 = Network::new(netid2).await?;
 
 	// perform full mesh syncs within each network
-	discover_all([&n0, &n1, &n2, &n3, &n4]).await?;
+	timeout_s(15, discover_all([&n0, &n1, &n2, &n3, &n4])).await??;
 	tracing::info!("full discovery sync completed");
 
 	// ensure that peers on the same network have each other in their catalogs,
