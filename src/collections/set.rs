@@ -47,7 +47,7 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 	///
 	/// Time: O(log n)
 	pub fn contains(&self, value: &T) -> bool {
-		self.snapshot.borrow().contains(value)
+		self.snapshot.borrow().clone().contains(value)
 	}
 
 	/// Test whether this set is a subset of another set.
@@ -57,6 +57,7 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 		self
 			.snapshot
 			.borrow()
+			.clone()
 			.is_subset(other.snapshot.borrow().clone())
 	}
 

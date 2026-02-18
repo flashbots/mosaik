@@ -86,3 +86,6 @@ impl<T> Key for T where
 		+ 'static
 {
 }
+
+pub trait OrderedKey: Key + Ord {}
+impl<T: Key + Ord> OrderedKey for T {}

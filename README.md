@@ -197,9 +197,47 @@ assert!(!reader.contains(&7));
 assert_eq!(reader.len(), 3);
 ```
 
+### `PriorityQueue<P, K, V>`
+
+Replicated double-ended priority queue. Each entry has a priority, a unique key, and a value. Supports efficient min/max access, key-based lookups, priority updates, and range removals.
+
+```rust
+let store_id = StoreId::random();
+
+let pq = mosaik::collections::PriorityQueue::<u64, String, String>::new(&network, store_id);
+pq.when().online().await;
+
+// Insert entries with (priority, key, value)
+pq.insert(10, "alice".into(), "payload_a".into()).await?;
+pq.insert(30, "bob".into(), "payload_b".into()).await?;
+pq.insert(20, "carol".into(), "payload_c".into()).await?;
+
+assert_eq!(pq.get_min(), Some((10, "alice".into(), "payload_a".into())));
+assert_eq!(pq.get_max(), Some((30, "bob".into(), "payload_b".into())));
+assert_eq!(pq.get_priority(&"carol".into()), Some(20));
+
+// Update priority without changing value
+pq.update_priority(&"alice".into(), 50).await?;
+assert_eq!(pq.max_priority(), Some(50));
+
+// Range removal — all standard range syntaxes work
+pq.remove_range(..25).await?;   // remove priorities below 25
+pq.remove_range(40..).await?;   // remove priorities >= 40
+pq.remove_range(10..=30).await?; // remove priorities in [10, 30]
+
+// On a reader node
+let reader = mosaik::collections::PriorityQueue::<u64, String, String>::reader(&network, store_id);
+reader.when().online().await;
+
+// Iterate in priority order
+for (priority, key, value) in reader.iter_asc() {
+    println!("{priority}: {key} => {value}");
+}
+```
+
 ## Groups
 
-Availability groups — clusters of trusted nodes that coordinate for failover and shared state. Built on a **modified Raft consensus** optimized for trusted environments:
+Clusters of trusted nodes that coordinate for failover and shared state. Built on a **Raft consensus** optimized for trusted environments:
 
 ```rust
 let group = network.groups()
@@ -214,6 +252,64 @@ group.when().leader_elected().await;
 
 // Replicate a command
 group.execute(Increment(5), Consistency::Strong).await?;
+```
+
+To build your own replicated state machine, implement the `StateMachine` trait. Here's a minimal distributed counter:
+
+```rust
+use mosaik::{groups::*, UniqueId};
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum CounterCommand {
+    Increment(u64),
+    Decrement(u64),
+    Reset,
+}
+
+#[derive(Default)]
+struct Counter {
+    value: u64,
+}
+
+impl StateMachine for Counter {
+    type Command = CounterCommand;
+    type Query = ();
+    type QueryResult = u64;
+    type StateSync = LogReplaySync<Self>;
+
+    fn signature(&self) -> UniqueId {
+        UniqueId::from("my_counter")
+    }
+
+    fn apply(&mut self, command: Self::Command) {
+        match command {
+            CounterCommand::Increment(n) => self.value += n,
+            CounterCommand::Decrement(n) => self.value = self.value.saturating_sub(n),
+            CounterCommand::Reset => self.value = 0,
+        }
+    }
+
+    fn query(&self, (): Self::Query) -> Self::QueryResult {
+        self.value
+    }
+
+    fn state_sync(&self) -> Self::StateSync {
+        LogReplaySync::default()
+    }
+}
+```
+
+Then join a group with your state machine and replicate commands across the network:
+
+```rust
+let group = network.groups()
+    .with_key(group_key)
+    .with_state_machine(Counter::default())
+    .join();
+
+group.when().online().await;
+group.execute(CounterCommand::Increment(5)).await?;
 ```
 
 Key features:
@@ -231,22 +327,24 @@ Key features:
 Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based peer-to-peer networking with relay support.
 
 ```text
-┌─────────────────────────────────────────────┐
-│                  Network                    │
-│                                             │
-│  ┌───────────┐  ┌─────────┐  ┌───────────┐  │
-│  │ Discovery │  │ Streams │  │  Groups   │  │
-│  │           │  │         │  │           │  │
-│  │ Announce  │  │Producer │  │  Bonds    │  │
-│  │ Catalog   │  │Consumer │  │  Raft     │  │
-│  │ Sync      │  │Status   │  │  RSM      │  │
-│  └───────────┘  └─────────┘  └───────────┘  │
-│                                             │
-│  ┌─────────────┐  ┌──────────────────────┐  │
-│  │ Collections │  │    Transport (iroh)  │  │
-│  │ Map Vec Set │  │  QUIC · Relay · mDNS │  │
-│  └─────────────┘  └──────────────────────┘  │
-└─────────────────────────────────────────────┘
+┌────────────────────────────────────────────────┐
+│                    Network                     │
+│                                                │
+│  ┌────────────┐  ┌───────────┐  ┌───────────┐  │
+│  │ Discovery  │  │ Streams   │  │  Groups   │  │
+│  │            │  │           │  │           │  │
+│  │ Announce   │  │ Producer  │  │  Bonds    │  │
+│  │ Catalog    │  │ Consumer  │  │  Raft     │  │
+│  │ Sync       │  │ Status    │  │  RSM      │  │
+│  └────────────┘  └───────────┘  └───────────┘  │
+│                                                │
+│  ┌─────────────────┐  ┌─────────────────────┐  │
+│  │   Collections   │  │   Transport (iroh)  │  │
+│  │                 │  │                     │  │
+│  │ Map · Vec · Set │  │ QUIC · Relay · mDNS │  │
+│  │ PriorityQ       │  │                     │  │
+│  └─────────────────┘  └─────────────────────┘  │
+└────────────────────────────────────────────────┘
 ```
 
 # Repository Layout
@@ -257,7 +355,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 | `src/discovery/`   | Peer discovery, announcement, and catalog synchronization             |
 | `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria      |
 | `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines |
-| `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`                       |
+| `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `PriorityQueue`      |
 | `src/network/`     | Transport layer, connection management, typed links                   |
 | `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues         |
 | `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)   |
@@ -267,7 +365,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 
 ## Prerequisites
 
-- Rust toolchain **≥ 1.87** — install with `rustup toolchain install 1.87`
+- Rust toolchain **≥ 1.89** — install with `rustup toolchain install 1.89`
 
 ## Usage
 
@@ -279,7 +377,7 @@ or in `Cargo.toml`
 
 ```toml
 [dependencies]
-mosaik = "0.2.1"
+mosaik = "0.2"
 ```
 
 ## Scenario Tests
