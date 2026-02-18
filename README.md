@@ -342,7 +342,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 │  │   Collections   │  │   Transport (iroh)  │  │
 │  │                 │  │                     │  │
 │  │ Map · Vec · Set │  │ QUIC · Relay · mDNS │  │
-│  │ PriorityQ       │  │                     │  │
+│  │ PriorityQueue   │  │                     │  │
 │  └─────────────────┘  └─────────────────────┘  │
 └────────────────────────────────────────────────┘
 ```
