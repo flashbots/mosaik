@@ -150,11 +150,11 @@ Replicated unordered key-value store.
 let store_id = StoreId::random();
 
 // On the writer node
-let map = mosaik::collections::Map::<String, u64>::writer(&network, store_id);
+let map = mosaik::collections::Map::<String, u64>::new(&network, store_id);
 map.when().online().await;
 
 map.insert("alice".into(), 100).await?;
-let ver = map.extend(vec![("bob".into(), 200), ("carol".into(), 300)]).await?;
+map.extend(vec![("bob".into(), 200), ("carol".into(), 300)]).await?;
 
 assert_eq!(map.get(&"alice".into()), Some(100));
 assert!(map.contains_key(&"bob".into()));
@@ -164,8 +164,12 @@ map.remove("carol".into()).await?;
 
 // On a reader node
 let reader = mosaik::collections::Map::<String, u64>::reader(&network, store_id);
-reader.when().reaches(ver).await;
+reader.when().online.await;
 assert_eq!(reader.get(&"bob".into()), Some(200));
+
+let ver = map.clear().await?;
+reader.when().reaches(ver).await;
+assert!(reader.is_empty());
 ```
 
 #### `Vec<T>`
@@ -192,8 +196,8 @@ assert_eq!(vec_reader.get(1), Some(42));
 assert_eq!(vec_reader.get(2), Some(7));
 assert_eq!(vec_reader.get(3), Some(13));
 
-let pos = vec_writer.clear();
-vec_reader.when().reaches(pos);
+let ver = vec_writer.clear().await?;
+vec_reader.when().reaches(ver).await;
 assert!(vec_reader.is_empty());
 
 ```
@@ -286,6 +290,9 @@ Read through the scenario tests in the [`tests/`](tests/) directory for practica
 ```bash
 # Run all integration tests
 TEST_TRACE=on cargo test --test basic -- --test-threads=1
+
+# Run some integration tests
+TEST_TRACE=on cargo test --release --test basic collections::map -- --test-threads=1
 
 # Verbose test output with tracing
 TEST_TRACE=on cargo test --test basic groups::leader::is_elected

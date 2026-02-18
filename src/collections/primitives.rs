@@ -7,9 +7,11 @@ use {
 
 pub type StoreId = UniqueId;
 
-/// Version of the state of a collection, which is monotonically increasing and
-/// can be used to track the progress of the collection's state and synchronize
-/// operations with the committed state of the collection's group.
+/// Version of the committed state of a collection.
+///
+/// Monotonically increasing and can be used to track the progress of the
+/// collection's state and synchronize operations with the committed state of
+/// the collection's group.
 ///
 /// All mutable operations on all mosaik collections return the version of the
 /// state when the mutation is expected to be applied and committed to the group
