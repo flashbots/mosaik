@@ -1,5 +1,11 @@
 use {
-	super::*,
+	super::{
+		Error,
+		READER,
+		WRITER,
+		When,
+		primitives::{Key, StoreId, Value, Version},
+	},
 	crate::{
 		Group,
 		Network,
@@ -119,12 +125,16 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 		iter_clone.into_iter()
 	}
 
+	/// Returns an observer of the vector's state, which can be used to wait for
+	/// the vector to reach a certain state version before performing an action
+	/// or knowing when it is online or offline.
 	pub const fn when(&self) -> &When {
 		&self.when
 	}
 }
 
-impl<T: Value> Vec<T, WRITER> {
+// Mutable operations, only available to writers
+impl<T: Value> VecWriter<T> {
 	/// Discard all elements from the vector.
 	///
 	/// This leaves you with an empty vector, and all elements that
@@ -272,6 +282,11 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 		}
 	}
 
+	/// Create a new vector in writer mode.
+	pub fn new(network: &Network, store_id: StoreId) -> VecWriter<T> {
+		VecWriter::<T>::writer(network, store_id)
+	}
+
 	/// Create a new vector in reader mode.
 	///
 	/// The returned reader provides read-only access to the vector's contents.
@@ -401,15 +416,18 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 		self.latest.send_replace(self.data.clone());
 	}
 
+	/// The group-key for a vector is derived from the store ID and the type of
+	/// the vector's elements. This ensures that different vectors (with different
+	/// store IDs or element types) will be in different
 	fn signature(&self) -> crate::UniqueId {
 		UniqueId::from("mosaik_collections_vec")
 			.derive(self.store_id)
 			.derive(type_name::<T>())
 	}
 
-	/// This state machine doesn't support queries, so we ignore the query input
-	/// and always return `()`. All data is exposed through the shared snapshot,
-	/// so there's no need for queries.
+	/// This state machine doesn't support external queries, because all of its
+	/// state is observable through the `latest` watch channel. Therefore, the
+	/// query method is a no-op.
 	fn query(&self, (): Self::Query) {}
 
 	fn state_sync(&self) -> Self::StateSync {

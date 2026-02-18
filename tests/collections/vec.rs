@@ -13,7 +13,7 @@ async fn smoke_no_catchup() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Vec::<u64>::writer(&n0, store_id);
+	let w = mosaik::collections::Vec::<u64>::new(&n0, store_id);
 	let r = mosaik::collections::Vec::<u64>::reader(&n1, store_id);
 
 	timeout_s(10, w.when().online()).await?;
