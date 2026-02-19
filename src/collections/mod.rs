@@ -15,6 +15,7 @@ pub use {
 	map::Map,
 	primitives::{StoreId, Version},
 	set::Set,
+	sync::Config as SyncConfig,
 	vec::Vec,
 	when::When,
 };

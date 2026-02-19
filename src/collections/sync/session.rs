@@ -1,26 +1,31 @@
 use {
-	super::{SnapshotStateMachine, SnapshotSync},
-	crate::{
-		PeerId,
-		collections::sync::SnapshotSyncMessage,
-		groups::{
-			Command,
-			Cursor,
-			Message,
-			StateMachine,
-			StateSync,
-			StateSyncContext,
-			StateSyncProvider,
-			StateSyncSession,
-			Term,
-		},
-	},
+	super::{Config, SnapshotStateMachine, SnapshotSync},
+	crate::{PeerId, collections::sync::SnapshotSyncMessage, groups::*},
 	core::task::{Context, Poll},
 };
 
 pub struct SnapshotSyncSession<M: SnapshotStateMachine> {
-	#[doc(hidden)]
-	_marker: core::marker::PhantomData<M>,
+	config: Config,
+	buffered: Vec<(Index, Term, M::Command)>,
+}
+
+impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
+	pub(super) fn new(
+		config: &Config,
+		cx: &dyn StateSyncContext<SnapshotSync<M>>,
+		position: Cursor,
+		leader_commit: Index,
+		entries: Vec<(M::Command, Term)>,
+	) -> Self {
+		Self {
+			config: config.clone(),
+			buffered: entries
+				.into_iter()
+				.enumerate()
+				.map(|(i, (cmd, term))| (position.index() + i as u64, term, cmd))
+				.collect(),
+		}
+	}
 }
 
 impl<M: SnapshotStateMachine> StateSyncSession for SnapshotSyncSession<M> {
@@ -49,6 +54,12 @@ impl<M: SnapshotStateMachine> StateSyncSession for SnapshotSyncSession<M> {
 		entries: Vec<(M::Command, Term)>,
 		cx: &mut dyn StateSyncContext<Self::Owner>,
 	) {
-		todo!()
+		let pos = position.index().next();
+		self.buffered.extend(
+			entries
+				.into_iter()
+				.enumerate()
+				.map(|(i, (cmd, term))| (pos + i as u64, term, cmd)),
+		);
 	}
 }

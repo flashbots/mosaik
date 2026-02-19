@@ -2,15 +2,25 @@ use {
 	super::{
 		Error,
 		READER,
+		SyncConfig,
 		WRITER,
 		When,
 		primitives::{Key, StoreId, Value, Version},
+		sync::{Snapshot, SnapshotStateMachine, SnapshotSync},
 	},
 	crate::{
 		Group,
 		Network,
 		UniqueId,
-		groups::{CommandError, ConsensusConfig, LogReplaySync, StateMachine},
+		groups::{
+			CommandError,
+			ConsensusConfig,
+			Index,
+			IndexRange,
+			StateMachine,
+			StateSyncContext,
+			Term,
+		},
 	},
 	core::{any::type_name, cmp::Ordering},
 	serde::{Deserialize, Serialize},
@@ -130,6 +140,12 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	/// or knowing when it is online or offline.
 	pub const fn when(&self) -> &When {
 		&self.when
+	}
+
+	/// The current version of the vector's state, which is the version of the
+	/// latest committed state.
+	pub fn version(&self) -> Version {
+		Version(self.group.committed())
 	}
 }
 
@@ -264,11 +280,43 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	/// read access to the vector's contents. Writers can be used by multiple
 	/// nodes concurrently, and all changes made by any writer will be replicated
 	/// to all other writers and readers.
+	///
+	/// This create a new vector with the default sync configuration. If you want
+	/// to specify a custom sync configuration, use the `writer_with_sync_config`
+	/// method instead.
+	///
+	/// Note that different sync configurations will create different groups ids
+	/// and the resulting vectors will not be able to see each other.
 	pub fn writer(
 		network: &crate::network::Network,
 		store_id: crate::UniqueId,
 	) -> VecWriter<T> {
-		let (machine, snapshot) = VecStateMachine::new(store_id, true);
+		Self::writer_with_sync_config(network, store_id, SyncConfig::default())
+	}
+
+	/// Create a new vector in writer mode.
+	///
+	/// The returned writer can be used to modify the vector, and it also provides
+	/// read access to the vector's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This create a new vector with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `writer` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different groups ids
+	/// and the resulting vectors will not be able to see each other.
+	pub fn writer_with_sync_config(
+		network: &crate::network::Network,
+		store_id: crate::UniqueId,
+		sync_config: SyncConfig,
+	) -> VecWriter<T> {
+		let (machine, snapshot) = VecStateMachine::new(
+			store_id, //
+			WRITER,
+			sync_config,
+		);
 		let group = network
 			.groups()
 			.with_key(store_id.into())
@@ -283,8 +331,21 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	}
 
 	/// Create a new vector in writer mode.
+	///
+	/// This is an alias for the `writer` method.
 	pub fn new(network: &Network, store_id: StoreId) -> VecWriter<T> {
 		VecWriter::<T>::writer(network, store_id)
+	}
+
+	/// Create a new vector in writer mode with the specified sync configuration.
+	///
+	/// This is an alias for the `writer_with_sync_config` method.
+	pub fn new_with_sync_config(
+		network: &Network,
+		store_id: StoreId,
+		sync_config: SyncConfig,
+	) -> VecWriter<T> {
+		VecWriter::<T>::writer_with_sync_config(network, store_id, sync_config)
 	}
 
 	/// Create a new vector in reader mode.
@@ -295,8 +356,43 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	/// they will not be able to make any changes themselves. Readers have longer
 	/// election timeouts to reduce the likelihood of them being elected as
 	/// group leaders, which reduces latency for read operations.
+	///
+	/// This creates a new vector with the default sync configuration. If you want
+	/// to specify a custom sync configuration, use the `reader_with_sync_config`
+	/// method instead.
 	pub fn reader(network: &Network, store_id: StoreId) -> VecReader<T> {
-		let (machine, snapshot) = VecStateMachine::new(store_id, false);
+		Self::reader_with_sync_config(network, store_id, SyncConfig::default())
+	}
+
+	/// Create a new vector in reader mode.
+	///
+	/// The returned reader provides read-only access to the vector's contents.
+	/// Readers can be used by multiple nodes concurrently, and they will see all
+	/// changes made by any writer. However, readers cannot modify the vector, and
+	/// they will not be able to make any changes themselves. Readers have longer
+	/// election timeouts to reduce the likelihood of them being elected as
+	/// group leaders, which reduces latency for read operations.
+	///
+	/// This creates a new vector with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `reader` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different groups ids
+	/// and the resulting vectors will not be able to see each other. Make sure
+	/// that the sync configuration used for readers is compatible with the sync
+	/// configuration used for writers, otherwise the readers will not see any of
+	/// the writers' changes.
+	pub fn reader_with_sync_config(
+		network: &Network,
+		store_id: StoreId,
+		sync_config: SyncConfig,
+	) -> VecReader<T> {
+		let (machine, snapshot) = VecStateMachine::new(
+			store_id, //
+			READER,
+			sync_config,
+		);
+
 		let group = network
 			.groups()
 			.with_key(store_id.into())
@@ -339,12 +435,14 @@ struct VecStateMachine<T: Value> {
 	latest: watch::Sender<im::Vector<T>>,
 	store_id: StoreId,
 	is_writer: bool,
+	sync_config: SyncConfig,
 }
 
 impl<T: Value> VecStateMachine<T> {
 	pub fn new(
 		store_id: StoreId,
 		is_writer: bool,
+		sync_config: SyncConfig,
 	) -> (Self, watch::Receiver<im::Vector<T>>) {
 		let data = im::Vector::new();
 		let (latest, snapshot) = watch::channel(data.clone());
@@ -354,6 +452,7 @@ impl<T: Value> VecStateMachine<T> {
 				latest,
 				store_id,
 				is_writer,
+				sync_config,
 			},
 			snapshot,
 		)
@@ -364,7 +463,7 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 	type Command = VecCommand<T>;
 	type Query = ();
 	type QueryResult = ();
-	type StateSync = LogReplaySync<Self>;
+	type StateSync = SnapshotSync<Self>;
 
 	fn apply(&mut self, command: Self::Command) {
 		self.apply_batch([command]);
@@ -430,8 +529,9 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 	/// query method is a no-op.
 	fn query(&self, (): Self::Query) {}
 
+	/// This state machine uses the `SnapshotSync` state sync strategy.
 	fn state_sync(&self) -> Self::StateSync {
-		LogReplaySync::default()
+		SnapshotSync::new(self.sync_config.clone())
 	}
 
 	fn consensus_config(&self) -> Option<ConsensusConfig> {
@@ -448,6 +548,20 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 	}
 }
 
+impl<T: Value> SnapshotStateMachine for VecStateMachine<T> {
+	type Snapshot = VecSnapshot<T>;
+
+	fn snapshot(
+		&self,
+		cx: &dyn StateSyncContext<SnapshotSync<Self>>,
+	) -> Self::Snapshot {
+		VecSnapshot {
+			position: cx.committed(),
+			data: self.data.clone(),
+		}
+	}
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "T: Value")]
 enum VecCommand<T> {
@@ -461,4 +575,36 @@ enum VecCommand<T> {
 	Remove { index: u64 },
 	Truncate { len: u64 },
 	Extend { entries: std::vec::Vec<T> },
+}
+
+#[derive(Debug, Clone)]
+pub struct VecSnapshot<T: Value> {
+	position: Index,
+	data: im::Vector<T>,
+}
+
+impl<T: Value> Snapshot for VecSnapshot<T> {
+	type Item = T;
+
+	fn position(&self) -> Index {
+		self.position
+	}
+
+	fn items_count(&self) -> u64 {
+		self.data.len() as u64
+	}
+
+	fn items(
+		&self,
+		range: IndexRange,
+	) -> Option<impl Iterator<Item = Self::Item>> {
+		let skip = range.start().as_usize();
+		let take = (*range.end() - *range.start()).as_usize() + 1;
+
+		if skip + take >= self.data.len() {
+			return None;
+		}
+
+		Some(self.data.iter().skip(skip).take(take).cloned())
+	}
 }

@@ -11,6 +11,7 @@ pub mod streams;
 
 pub use {
 	bytes::{Bytes, BytesMut},
+	collections::StoreId,
 	futures,
 	groups::{
 		Consistency,

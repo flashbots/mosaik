@@ -73,6 +73,12 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 	pub const fn when(&self) -> &When {
 		&self.when
 	}
+
+	/// The current version of the vector's state, which is the version of the
+	/// latest committed state.
+	pub fn version(&self) -> Version {
+		Version(self.group.committed())
+	}
 }
 
 // Mutable operations, only available to writers

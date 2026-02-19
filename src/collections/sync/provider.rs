@@ -1,20 +1,6 @@
 use {
 	super::{Config, SnapshotStateMachine, SnapshotSync, SnapshotSyncMessage},
-	crate::{
-		PeerId,
-		groups::{
-			Command,
-			Cursor,
-			Index,
-			Message,
-			StateMachine,
-			StateSync,
-			StateSyncContext,
-			StateSyncProvider,
-			StateSyncSession,
-			Term,
-		},
-	},
+	crate::{PeerId, groups::*},
 	core::{
 		marker::PhantomData,
 		task::{Context, Poll},
@@ -24,18 +10,18 @@ use {
 
 pub struct SnapshotSyncProvider<M: SnapshotStateMachine> {
 	config: Config,
-	snapshots: VecDeque<(Index, M::Snapshot)>,
+	snapshots: VecDeque<M::Snapshot>,
 }
 
 impl<M: SnapshotStateMachine> SnapshotSyncProvider<M> {
-	pub(super) const fn new(
+	pub(super) fn new(
 		config: Config,
-		_cx: &dyn StateSyncContext<SnapshotSync<M>>,
+		cx: &dyn StateSyncContext<<Self as StateSyncProvider>::Owner>,
 	) -> Self {
-		Self {
-			config,
-			snapshots: VecDeque::new(),
-		}
+		let mut snapshots = VecDeque::new();
+		snapshots.push_back(cx.machine().snapshot(cx));
+
+		Self { config, snapshots }
 	}
 }
 
@@ -47,21 +33,21 @@ impl<M: SnapshotStateMachine> StateSyncProvider for SnapshotSyncProvider<M> {
 		message: SnapshotSyncMessage,
 		sender: PeerId,
 		cx: &mut dyn StateSyncContext<Self::Owner>,
-	) -> Result<(), Message<Self::Owner>> {
-		todo!()
+	) -> Result<(), SnapshotSyncMessage> {
+		todo!("handle incoming snapshot sync message")
 	}
 
+	/// Invoked when a the committed log index of the group changes.
 	fn committed(
 		&mut self,
 		index: Index,
 		cx: &mut dyn StateSyncContext<Self::Owner>,
 	) {
-		if index.0.is_multiple_of(self.config.snapshot_interval) {
-			let snapshot = cx.machine().snapshot();
-			self.snapshots.push_back((index, snapshot));
+		if index.0.is_multiple_of(self.config.interval) {
+			self.snapshots.push_back(cx.machine().snapshot(cx));
 		}
 
-		if self.snapshots.len() > self.config.window_size {
+		if self.snapshots.len() > self.config.retention_window as usize {
 			self.snapshots.pop_front();
 		}
 	}
