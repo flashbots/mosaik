@@ -6,6 +6,7 @@ mod depq;
 mod map;
 mod primitives;
 mod set;
+mod sync;
 mod vec;
 mod when;
 

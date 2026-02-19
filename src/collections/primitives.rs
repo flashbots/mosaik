@@ -37,7 +37,6 @@ pub trait Value:
 	+ Eq
 	+ Send
 	+ Sync
-	+ Unpin
 	+ 'static
 {
 }
@@ -52,7 +51,6 @@ impl<T> Value for T where
 		+ Eq
 		+ Send
 		+ Sync
-		+ Unpin
 		+ 'static
 {
 }
@@ -68,7 +66,6 @@ pub trait Key:
 	+ Eq
 	+ Send
 	+ Sync
-	+ Unpin
 	+ 'static
 {
 }
@@ -82,7 +79,6 @@ impl<T> Key for T where
 		+ Eq
 		+ Send
 		+ Sync
-		+ Unpin
 		+ 'static
 {
 }

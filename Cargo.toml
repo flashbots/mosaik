@@ -39,6 +39,7 @@ similar_names = "allow"
 cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 unused_async = "warn"
+future_not_send = "allow"
 
 [package]
 name = "mosaik"

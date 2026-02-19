@@ -22,7 +22,7 @@ pub use sync::*;
 /// This trait defines the replicated state machine (RSM) that is used by the
 /// Raft log. Each group has a state machine that represents the
 /// application-specific logic of the group.
-pub trait StateMachine: Sized + Send + Sync + Unpin + 'static {
+pub trait StateMachine: Sized + Send + 'static {
 	/// The type of commands that are applied to the state machine and replicated
 	/// in the log. Commands represent state transitions and mutate the state
 	/// machine. They are sent to the leader by clients and replicated to
@@ -112,12 +112,12 @@ pub trait StateMachine: Sized + Send + Sync + Unpin + 'static {
 }
 
 pub trait StateMachineMessage:
-	Clone + Send + Sync + Unpin + Serialize + DeserializeOwned + 'static
+	Clone + Send + Serialize + DeserializeOwned + 'static
 {
 }
 
 impl<T> StateMachineMessage for T where
-	T: Clone + Send + Sync + Unpin + Serialize + DeserializeOwned + 'static
+	T: Clone + Send + Serialize + DeserializeOwned + 'static
 {
 }
 

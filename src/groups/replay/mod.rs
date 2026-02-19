@@ -116,6 +116,7 @@ impl<M: StateMachine> StateSync for LogReplaySync<M> {
 		&self,
 		cx: &mut dyn StateSyncContext<Self>,
 		position: Cursor,
+		_leader_committed: Index,
 		entries: Vec<(M::Command, Term)>,
 	) -> Self::Session {
 		LogReplaySession::new(&self.config, cx, position, entries)

@@ -12,7 +12,6 @@ use {
 			StateSync,
 			StateSyncContext,
 			StateSyncProvider,
-			When,
 			config::GroupConfig,
 			log::{self, Term},
 			raft::Message,
@@ -96,13 +95,6 @@ where
 		&self.group.bonds
 	}
 
-	/// Returns the `When` event emitter for this consensus group, which can be
-	/// used to await changes to the group's state, such as leadership changes or
-	/// log commitment.
-	pub fn when(&self) -> &When {
-		&self.group.when
-	}
-
 	/// Returns the local ID of this node in the consensus group.
 	pub fn local_id(&self) -> PeerId {
 		self.group.local_id()
@@ -144,6 +136,7 @@ where
 	pub fn create_sync_session(
 		&mut self,
 		position: Cursor,
+		leader_commit: Index,
 		entries: Vec<(M::Command, Term)>,
 	) -> <M::StateSync as StateSync>::Session {
 		let ptr: *mut M::StateSync = &raw mut self.sync;
@@ -151,7 +144,7 @@ where
 		// SAFETY: There is no public API on `StateSyncContext` that allows the
 		// mutation of the `sync` field of `Shared`.
 		let sync = unsafe { &mut *ptr };
-		sync.create_session(self, position, entries)
+		sync.create_session(self, position, leader_commit, entries)
 	}
 
 	/// Queries the state sync provider for the log index up to which it is safe
@@ -197,8 +190,20 @@ where
 
 	/// Updates the committed index in the group public api observers. This should
 	/// be called whenever the committed index of the log advances.
-	pub fn update_committed(&self, committed: Index) {
+	pub fn update_committed(&mut self, committed: Index) {
 		self.group.when.update_committed(committed);
+
+		// SAFETY: The `sync_provider` field is initialized in the constructor of
+		// `Shared` and is never mutated after that, so it is safe to assume that
+		// it is always initialized when accessed through this method.
+		let provider: *mut _ = unsafe { self.sync_provider.assume_init_mut() };
+
+		// SAFETY: There is no public API on `StateSyncContext` that allows the
+		// mutation of the `sync_provider` field of `Shared`.
+		let provider = unsafe { &mut *provider };
+
+		// Notify the state sync provider that the committed index has advanced.
+		provider.committed(committed, self);
 	}
 
 	/// Updates the log position in the group public api observers. This should be

@@ -68,7 +68,7 @@ impl<M: StateMachine> Role<M> {
 		&mut self,
 		cx: &mut Context<'_>,
 		shared: &mut Shared<S, M>,
-	) -> Poll<Option<()>> {
+	) -> Poll<()> {
 		let next_step = match self {
 			Self::Follower(follower) => follower.poll_next_tick(cx, shared),
 			Self::Candidate(candidate) => candidate.poll_next_tick(cx, shared),
@@ -83,7 +83,7 @@ impl<M: StateMachine> Role<M> {
 					// etc.)
 					*self = next_role;
 				}
-				Poll::Ready(Some(()))
+				Poll::Ready(())
 			}
 			Poll::Pending => {
 				shared.add_waker(cx.waker().clone());

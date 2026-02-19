@@ -19,7 +19,7 @@ use {
 		network::{Cancelled, link::Link},
 		primitives::{AsyncWorkQueue, Short},
 	},
-	core::{any::TypeId, pin::Pin},
+	core::{any::TypeId, future::poll_fn, pin::Pin},
 	futures::{Stream, StreamExt, stream::SelectAll},
 	im::ordmap::Entry,
 	iroh::protocol::AcceptError,
@@ -152,7 +152,7 @@ where
 				_ = self.work_queue.next() => { }
 
 				// polls the consensus protocol and drives its execution
-				_ = self.raft.next() => { }
+				() = poll_fn(|cx| self.raft.poll_next_tick(cx)) => { }
 
 				// Triggered when there are changes to the discovery catalog
 				_ = catalog.changed() => {

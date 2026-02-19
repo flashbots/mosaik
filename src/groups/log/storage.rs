@@ -15,7 +15,7 @@ use {
 /// follower falls behind and needs to discard old entries).
 ///
 /// Entries in the log are indexed starting from 1.
-pub trait Storage<C: Command>: Send + Sync + Unpin + 'static {
+pub trait Storage<C: Command>: Send + 'static {
 	/// Appends a new log entry to the end of the log and returns the index of
 	/// the newly appended entry.
 	fn append(&mut self, command: C, term: Term) -> Index;

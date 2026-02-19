@@ -8,10 +8,7 @@ use {
 		groups::{Bonds, Cursor, GroupId, Index, StateMachine, Storage, Term},
 		primitives::{UniqueId, sealed::Sealed},
 	},
-	core::{
-		fmt::Debug,
-		task::{Context, Poll},
-	},
+	core::task::{Context, Poll},
 	serde::{Serialize, de::DeserializeOwned},
 };
 
@@ -64,7 +61,7 @@ pub trait StateSyncContext<S: StateSync>: Sealed {
 
 /// Implements the state synchronization (catch-up) process for followers that
 /// are not up-to-date with the current state of the group.
-pub trait StateSync: core::fmt::Debug + Send + Unpin + 'static {
+pub trait StateSync: Send + 'static {
 	/// The state machine type for which this state synchronization implementation
 	/// is designed.
 	type Machine: StateMachine;
@@ -114,15 +111,19 @@ pub trait StateSync: core::fmt::Debug + Send + Unpin + 'static {
 	/// log entries that triggered the catch-up process, which should be buffered
 	/// by the session and applied to the state machine once the follower has
 	/// caught up with the leader.
+	///
+	/// The `leader_commit` parameter indicates the latest committed log index
+	/// at the leader, at the moment the sync session is created.
 	fn create_session(
 		&self,
 		cx: &mut dyn StateSyncContext<Self>,
 		position: Cursor,
+		leader_commit: Index,
 		entries: Vec<(Command<Self>, Term)>,
 	) -> Self::Session;
 }
 
-pub trait StateSyncProvider: Send + Unpin + 'static {
+pub trait StateSyncProvider: Send + 'static {
 	type Owner: StateSync;
 
 	/// Receives a message from a remote peer.
@@ -145,6 +146,12 @@ pub trait StateSyncProvider: Send + Unpin + 'static {
 	) -> Option<Index> {
 		None
 	}
+
+	/// Notifies the provider that the committed index has advanced to a new
+	/// position. This can be used by the provider to update its internal state,
+	/// create snapshots, etc.
+	fn committed(&mut self, _: Index, _: &mut dyn StateSyncContext<Self::Owner>) {
+	}
 }
 
 /// Represents one active state synchronization process for a specific follower
@@ -153,7 +160,7 @@ pub trait StateSyncProvider: Send + Unpin + 'static {
 /// Instances of this type are created by the lagging follower for the duration
 /// of the catch-up process and terminated once the follower is fully
 /// synchronized with the current state of the group.
-pub trait StateSyncSession: Debug + Send + Unpin + 'static {
+pub trait StateSyncSession: Send + 'static {
 	type Owner: StateSync;
 
 	/// Drives the state synchronization process forward by polling for the next
@@ -188,12 +195,12 @@ pub trait StateSyncSession: Debug + Send + Unpin + 'static {
 }
 
 pub trait StateSyncMessage:
-	Clone + Serialize + DeserializeOwned + Send + Sync + 'static
+	Clone + Serialize + DeserializeOwned + Send + 'static
 {
 }
 
 impl<T> StateSyncMessage for T where
-	T: Clone + Serialize + DeserializeOwned + Send + Sync + 'static
+	T: Clone + Serialize + DeserializeOwned + Send + 'static
 {
 }
 

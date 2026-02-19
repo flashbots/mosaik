@@ -17,10 +17,8 @@ use {
 	bytes::Bytes,
 	core::{
 		future::ready,
-		pin::Pin,
 		task::{Context, Poll},
 	},
-	futures::Stream,
 	std::sync::Arc,
 };
 
@@ -188,26 +186,13 @@ where
 			}
 		}
 	}
-}
 
-/// This stream is polled by the group worker loop and is responsible for
-/// driving the raft consensus protocol. Depending on the currently assumed role
-/// of the local node in the consensus algorithm, it will trigger different
-/// periodic actions, such as starting new elections when the node is a follower
-/// or sending heartbeats when the node is a leader.
-impl<S, M> Stream for Raft<S, M>
-where
-	S: log::Storage<M::Command>,
-	M: StateMachine,
-{
-	type Item = ();
-
-	fn poll_next(
-		self: Pin<&mut Self>,
-		cx: &mut Context<'_>,
-	) -> Poll<Option<Self::Item>> {
-		let this = self.get_mut();
-		let shared = &mut this.shared;
-		this.role.poll_next_tick(cx, shared)
+	/// Polled by the group worker loop and is responsible for driving the raft
+	/// consensus protocol. Depending on the currently assumed role of the local
+	/// node  in the consensus algorithm, it will trigger different periodic
+	/// actions, such as starting new elections when the node is a follower or
+	/// sending heartbeats when the node is a leader.
+	pub fn poll_next_tick(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+		self.role.poll_next_tick(cx, &mut self.shared)
 	}
 }

@@ -442,6 +442,7 @@ impl<M: StateMachine> Follower<M> {
 
 				self.catchup = Some(shared.create_sync_session(
 					request.prev_log_position, //
+					request.leader_commit,
 					entries,
 				));
 			}
@@ -565,7 +566,7 @@ impl<M: StateMachine> Follower<M> {
 			new_committed = shared.log.commit_up_to(leader_committed);
 			if prev_committed < new_committed {
 				// Signal to public api observers that the committed index has advanced
-				shared.when().update_committed(new_committed);
+				shared.update_committed(new_committed);
 				shared.prune_safe_prefix();
 			}
 		}

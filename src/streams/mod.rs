@@ -136,13 +136,16 @@ impl ProtocolProvider for Streams {
 	}
 }
 
+impl link::Protocol for Streams {
+	/// ALPN identifier for the streams protocol.
+	const ALPN: &'static [u8] = b"/mosaik/streams/1.0";
+}
+
 /// Implemented by all data types that are published as streams.
 ///
 /// This type gives us zero-friction default implementations for
 /// any serializable rust type.
-pub trait Datum:
-	Serialize + DeserializeOwned + Send + Sync + Unpin + 'static
-{
+pub trait Datum: Serialize + DeserializeOwned + Send + 'static {
 	/// Returns the default stream id derived from the datum type name.
 	/// This is the stream id used if no custom stream id is provided when
 	/// building producers or consumers for this datum type.
@@ -151,15 +154,7 @@ pub trait Datum:
 	}
 }
 
-impl<T> Datum for T where
-	T: Serialize + DeserializeOwned + Send + Sync + Unpin + 'static
-{
-}
-
-impl link::Protocol for Streams {
-	/// ALPN identifier for the streams protocol.
-	const ALPN: &'static [u8] = b"/mosaik/streams/1.0";
-}
+impl<T> Datum for T where T: Serialize + DeserializeOwned + Send + 'static {}
 
 network::error::make_close_reason!(
 	/// The requested stream was not found on the producer node.
