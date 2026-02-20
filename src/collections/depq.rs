@@ -10,7 +10,13 @@ use {
 		Group,
 		Network,
 		UniqueId,
-		groups::{CommandError, ConsensusConfig, LogReplaySync, StateMachine},
+		groups::{
+			ApplyContext,
+			CommandError,
+			ConsensusConfig,
+			LogReplaySync,
+			StateMachine,
+		},
 	},
 	core::{any::type_name, ops::RangeBounds},
 	serde::{Deserialize, Serialize},
@@ -510,11 +516,15 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 	type QueryResult = ();
 	type StateSync = LogReplaySync<Self>;
 
-	fn apply(&mut self, command: Self::Command) {
-		self.apply_batch([command]);
+	fn apply(&mut self, command: Self::Command, ctx: &dyn ApplyContext) {
+		self.apply_batch([command], ctx);
 	}
 
-	fn apply_batch(&mut self, commands: impl IntoIterator<Item = Self::Command>) {
+	fn apply_batch(
+		&mut self,
+		commands: impl IntoIterator<Item = Self::Command>,
+		ctx: &dyn ApplyContext,
+	) {
 		for command in commands {
 			match command {
 				DepqCommand::Clear => {
@@ -582,22 +592,16 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 	/// query method is a no-op.
 	fn query(&self, (): Self::Query) {}
 
+	/// The state sync mechanism for out of sync followers.
 	fn state_sync(&self) -> Self::StateSync {
 		LogReplaySync::default()
 	}
 
+	/// Readers have longer election timeouts to reduce the likelihood of them
+	/// being elected as group leaders.
 	fn consensus_config(&self) -> Option<ConsensusConfig> {
-		let mut config = ConsensusConfig::default();
-
-		if !self.is_writer {
-			// Readers have longer election timeouts to reduce the likelihood of
-			// them being elected as leaders. This is an optimization to reduce
-			// latency.
-			config.election_timeout *= 3;
-			config.bootstrap_delay *= 3;
-		}
-
-		Some(config)
+		(!self.is_writer)
+			.then(|| ConsensusConfig::default().deprioritize_leadership())
 	}
 }
 

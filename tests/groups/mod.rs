@@ -3,7 +3,7 @@ use {
 	futures::{StreamExt, stream::FuturesUnordered},
 	mosaik::{
 		PeerId,
-		groups::{LogReplaySync, StateMachine},
+		groups::{ApplyContext, LogReplaySync, StateMachine},
 		primitives::UniqueId,
 	},
 	serde::{Deserialize, Serialize},
@@ -48,7 +48,7 @@ impl StateMachine for Counter {
 		UniqueId::from_u8(2)
 	}
 
-	fn apply(&mut self, command: Self::Command) {
+	fn apply(&mut self, command: Self::Command, _: &dyn ApplyContext) {
 		match command {
 			CounterCommand::Increment(n) => {
 				self.value = self.value.wrapping_add(i64::from(n));

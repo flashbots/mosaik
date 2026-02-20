@@ -8,7 +8,8 @@ use {
 			IndexRange,
 			QueryError,
 			StateMachine,
-			log,
+			StateSyncContext,
+			Storage,
 			raft::{role::Role, shared::Shared},
 			state::WorkerState,
 		},
@@ -62,7 +63,7 @@ pub(super) use protocol::Message;
 ///   task that is associated with the group.
 pub struct Raft<S, M>
 where
-	S: log::Storage<M::Command>,
+	S: Storage<M::Command>,
 	M: StateMachine,
 {
 	/// The current role of this node in the Raft consensus algorithm and its
@@ -75,7 +76,7 @@ where
 
 impl<S, M> Raft<S, M>
 where
-	S: log::Storage<M::Command>,
+	S: Storage<M::Command>,
 	M: StateMachine,
 {
 	/// Creates a new consensus instance with the given storage and state machine
@@ -152,8 +153,8 @@ where
 				// against the state machine, which is always up to date with the latest
 				// committed state of the group.
 				ready(Ok(CommittedQueryResult {
-					result: self.shared.log.query(query),
-					at_position: self.shared.log.committed(),
+					result: self.shared.machine().query(query),
+					at_position: self.shared.committed(),
 				}))
 				.pin()
 			}
@@ -164,8 +165,8 @@ where
 					// its local state machine up to the last locally known committed
 					// state.
 					ready(Ok(CommittedQueryResult {
-						result: self.shared.log.query(query),
-						at_position: self.shared.log.committed(),
+						result: self.shared.machine().query(query),
+						at_position: self.shared.committed(),
 					}))
 					.pin()
 				}

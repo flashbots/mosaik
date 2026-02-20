@@ -10,7 +10,8 @@ use {
 			StateMachine,
 			StateSync,
 			StateSyncSession,
-			log::{Storage, Term},
+			Storage,
+			Term,
 			raft::{
 				Message,
 				candidate::Candidate,
@@ -158,7 +159,7 @@ impl<M: StateMachine> Follower<M> {
 			// unavailable.
 			match catchup.poll_next_tick(cx, shared) {
 				Poll::Ready(cursor) => {
-					assert_eq!(cursor, shared.log.last());
+					assert_eq!(cursor, shared.storage.last());
 
 					// we're caught up and in sync with the leader, turn off catch-up
 					// mode and start watching the election timeout again for any
@@ -380,36 +381,36 @@ impl<M: StateMachine> Follower<M> {
 		// check the consistency of the incoming `AppendEntries` message with our
 		// local log state and if we need to catch up before we can confirm this
 		// message and update our log to match the leader's log.
-		let consistent = match shared.log.term_at(request.prev_log_position.index())
-		{
-			// The entry at `prev_log_index` matches the leader's term.
-			// If we have entries beyond this point, check whether the
-			// first new entry conflicts with what we already have.
-			// The leader's log always wins — truncate from the conflict.
-			Some(local_term) if local_term == request.prev_log_position.term() => {
-				if let Some(first) = request.entries.first() {
-					let next_index = request.prev_log_position.index().next();
-					if let Some(existing_term) = shared.log.term_at(next_index)
-						&& existing_term != first.term
-					{
-						shared.log.truncate(next_index);
+		let consistent =
+			match shared.storage.term_at(request.prev_log_position.index()) {
+				// The entry at `prev_log_index` matches the leader's term.
+				// If we have entries beyond this point, check whether the
+				// first new entry conflicts with what we already have.
+				// The leader's log always wins — truncate from the conflict.
+				Some(local_term) if local_term == request.prev_log_position.term() => {
+					if let Some(first) = request.entries.first() {
+						let next_index = request.prev_log_position.index().next();
+						if let Some(existing_term) = shared.storage.term_at(next_index)
+							&& existing_term != first.term
+						{
+							shared.storage.truncate(next_index);
+						}
 					}
+					true
 				}
-				true
-			}
 
-			// Term conflict at `prev_log_index` - this entry came from a deposed
-			// leader. Truncate it and everything after it. This creates a gap, so we
-			// will need to catch up before we can append and confirm.
-			Some(_) => {
-				shared.log.truncate(request.prev_log_position.index());
-				false
-			}
+				// Term conflict at `prev_log_index` - this entry came from a deposed
+				// leader. Truncate it and everything after it. This creates a gap, so
+				// we will need to catch up before we can append and confirm.
+				Some(_) => {
+					shared.storage.truncate(request.prev_log_position.index());
+					false
+				}
 
-			// No entry at `prev_log_index` means our log is behind the leader's log.
-			// Need to catch up before we can append and confirm.
-			None => false,
-		};
+				// No entry at `prev_log_index` means our log is behind the leader's
+				// log. Need to catch up before we can append and confirm.
+				None => false,
+			};
 
 		if consistent {
 			// we're in sync, append to local store, commit up to the leader's commit
@@ -433,7 +434,7 @@ impl<M: StateMachine> Follower<M> {
 			} else {
 				tracing::info!(
 					leader_pos = %request.prev_log_position,
-					local_pos = %shared.log.last(),
+					local_pos = %shared.storage.last(),
 					term = %self.term(),
 					group = %Short(shared.group_id()),
 					network = %Short(shared.network_id()),
@@ -531,19 +532,19 @@ impl<M: StateMachine> Follower<M> {
 			let start_index = request.prev_log_position.index().next();
 			for (i, entry) in request.entries.into_iter().enumerate() {
 				let index = start_index + i;
-				if shared.log.term_at(index) == Some(entry.term) {
+				if shared.storage.term_at(index) == Some(entry.term) {
 					// already have this entry (and we verified no conflicts above), so
 					// skip it.
 					continue;
 				}
 
-				shared.log.append(entry.command, entry.term);
+				shared.storage.append(entry.command, entry.term);
 				appended_count += 1;
 			}
 
 			// confirm to the leader that we have appended the entries and report the
 			// index of our last log entry
-			let local_position = shared.log.last();
+			let local_position = shared.storage.last();
 			shared.bonds().send_raft_to::<M>(
 				&Message::AppendEntriesResponse(AppendEntriesResponse {
 					term: self.term(),
@@ -557,13 +558,13 @@ impl<M: StateMachine> Follower<M> {
 		// advance local commit index to the minimum of the leader's commit index
 		// and the index of our last log entry, which ensures we only commit
 		// entries that are both replicated to a majority
-		let local_log_pos = shared.log.last();
-		let prev_committed = shared.log.committed();
+		let local_log_pos = shared.storage.last();
+		let prev_committed = shared.committed();
 		let leader_committed = request.leader_commit.min(local_log_pos.index());
 		let mut new_committed = prev_committed;
 
 		if prev_committed < leader_committed {
-			new_committed = shared.log.commit_up_to(leader_committed);
+			new_committed = shared.commit_up_to(leader_committed);
 			if prev_committed < new_committed {
 				// Signal to public api observers that the committed index has advanced
 				shared.update_committed(new_committed);
@@ -575,7 +576,7 @@ impl<M: StateMachine> Follower<M> {
 			tracing::trace!(
 				committed_ix = %new_committed,
 				new_entries = appended_count,
-				local_log = %shared.log.last(),
+				local_log = %shared.storage.last(),
 				term = %self.term(),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),

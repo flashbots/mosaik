@@ -79,13 +79,14 @@ use {
 mod bond;
 mod builder;
 mod config;
+mod cursor;
 mod error;
 mod group;
 mod key;
-mod log;
 mod machine;
 mod raft;
 mod replay;
+mod storage;
 mod when;
 
 pub use {
@@ -97,12 +98,13 @@ pub use {
 		GroupBuilder,
 	},
 	config::{Config, ConfigBuilder, ConfigBuilderError},
+	cursor::{Cursor, Index, IndexRange, Term},
 	error::{CommandError, Error, QueryError},
 	group::*,
 	key::GroupKey,
-	log::{Cursor, InMemoryLogStore, Index, IndexRange, Storage, Term},
 	machine::*,
 	replay::*,
+	storage::{InMemoryLogStore, Storage},
 	when::When,
 };
 

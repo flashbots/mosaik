@@ -5,7 +5,7 @@ use {
 			Command,
 			Cursor,
 			StateMachine, StateSync,
-			log::{Index, IndexRange, Term},
+			Index, IndexRange, Term,
 		},
 		primitives::Short,
 	},

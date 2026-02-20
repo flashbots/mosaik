@@ -11,8 +11,11 @@ use {
 	crate::{
 		Group,
 		Network,
+		PeerId,
 		UniqueId,
+		collections::sync::SessionId,
 		groups::{
+			ApplyContext,
 			CommandError,
 			ConsensusConfig,
 			Index,
@@ -24,7 +27,7 @@ use {
 	},
 	core::{any::type_name, cmp::Ordering},
 	serde::{Deserialize, Serialize},
-	tokio::sync::watch,
+	tokio::sync::{broadcast, mpsc::UnboundedSender, watch},
 };
 
 pub type VecWriter<T> = Vec<T, WRITER>;
@@ -436,6 +439,7 @@ struct VecStateMachine<T: Value> {
 	store_id: StoreId,
 	is_writer: bool,
 	sync_config: SyncConfig,
+	snapshot_tx: broadcast::Sender<(SessionId, VecSnapshot<T>)>,
 }
 
 impl<T: Value> VecStateMachine<T> {
@@ -453,6 +457,7 @@ impl<T: Value> VecStateMachine<T> {
 				store_id,
 				is_writer,
 				sync_config,
+				snapshot_tx: broadcast::Sender::new(16),
 			},
 			snapshot,
 		)
@@ -465,11 +470,16 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 	type QueryResult = ();
 	type StateSync = SnapshotSync<Self>;
 
-	fn apply(&mut self, command: Self::Command) {
-		self.apply_batch([command]);
+	fn apply(&mut self, command: Self::Command, ctx: &dyn ApplyContext) {
+		self.apply_batch([command], ctx);
 	}
 
-	fn apply_batch(&mut self, commands: impl IntoIterator<Item = Self::Command>) {
+	fn apply_batch(
+		&mut self,
+		commands: impl IntoIterator<Item = Self::Command>,
+		ctx: &dyn ApplyContext,
+	) {
+		let mut batch_size = 0;
 		for command in commands {
 			match command {
 				VecCommand::Clear => {
@@ -510,8 +520,15 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 				VecCommand::Extend { entries } => {
 					self.data.extend(entries);
 				}
+				VecCommand::TakeSnapshot {
+					request_id,
+					requested_by,
+				} => {
+					todo!("take snapshot")
+				}
 			}
 		}
+
 		self.latest.send_replace(self.data.clone());
 	}
 
@@ -534,17 +551,11 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 		SnapshotSync::new(self.sync_config.clone())
 	}
 
+	/// Readers have longer election timeouts to reduce the likelihood of them
+	/// being elected as group leaders.
 	fn consensus_config(&self) -> Option<ConsensusConfig> {
-		let mut config = ConsensusConfig::default();
-
-		if !self.is_writer {
-			// Readers have longer election timeouts to reduce the likelihood of them
-			// being elected as leaders. This is an optimization to reduce latency.
-			config.election_timeout *= 3;
-			config.bootstrap_delay *= 3;
-		}
-
-		Some(config)
+		(!self.is_writer)
+			.then(|| ConsensusConfig::default().deprioritize_leadership())
 	}
 }
 
@@ -566,15 +577,35 @@ impl<T: Value> SnapshotStateMachine for VecStateMachine<T> {
 #[serde(bound = "T: Value")]
 enum VecCommand<T> {
 	Clear,
-	Swap { i: u64, j: u64 },
-	Insert { index: u64, value: T },
-	PushBack { value: T },
-	PushFront { value: T },
+	Swap {
+		i: u64,
+		j: u64,
+	},
+	Insert {
+		index: u64,
+		value: T,
+	},
+	PushBack {
+		value: T,
+	},
+	PushFront {
+		value: T,
+	},
 	PopBack,
 	PopFront,
-	Remove { index: u64 },
-	Truncate { len: u64 },
-	Extend { entries: std::vec::Vec<T> },
+	Remove {
+		index: u64,
+	},
+	Truncate {
+		len: u64,
+	},
+	Extend {
+		entries: std::vec::Vec<T>,
+	},
+	TakeSnapshot {
+		request_id: u64,
+		requested_by: PeerId,
+	},
 }
 
 #[derive(Debug, Clone)]
@@ -590,11 +621,11 @@ impl<T: Value> Snapshot for VecSnapshot<T> {
 		self.position
 	}
 
-	fn items_count(&self) -> u64 {
+	fn len(&self) -> u64 {
 		self.data.len() as u64
 	}
 
-	fn items(
+	fn iter_range(
 		&self,
 		range: IndexRange,
 	) -> Option<impl Iterator<Item = Self::Item>> {

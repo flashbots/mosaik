@@ -17,6 +17,10 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 		leader_commit: Index,
 		entries: Vec<(M::Command, Term)>,
 	) -> Self {
+		todo!(
+			"new snapshot sync session, pos: {position}, leader_commit: \
+			 {leader_commit}"
+		);
 		Self {
 			config: config.clone(),
 			buffered: entries

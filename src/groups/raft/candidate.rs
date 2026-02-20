@@ -4,7 +4,8 @@ use {
 		PeerId,
 		groups::{
 			StateMachine,
-			log::{Storage, Term},
+			Storage,
+			Term,
 			raft::{
 				Message,
 				leader::Leader,
@@ -89,7 +90,7 @@ impl<M: StateMachine> Candidate<M> {
 		let election_timeout = Box::pin(sleep(election_timeout));
 
 		let candidate = shared.local_id();
-		let log_position = shared.log.last();
+		let log_position = shared.storage.last();
 
 		let request = RequestVote {
 			term,

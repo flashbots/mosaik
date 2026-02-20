@@ -328,6 +328,11 @@ impl When {
 		});
 	}
 
+	/// Returns true if the local node is currently considered online.
+	pub(super) fn get_online_status(&self) -> bool {
+		*self.online.borrow()
+	}
+
 	/// Called by [`Raft`] when the committed index of the group's log
 	/// advances.
 	pub(super) fn update_committed(&self, index: Index) {

@@ -3,6 +3,7 @@ use {
 		NetworkId,
 		PeerId,
 		groups::{
+			ApplyContext,
 			Bonds,
 			ConsensusConfig,
 			Cursor,
@@ -12,8 +13,9 @@ use {
 			StateSync,
 			StateSyncContext,
 			StateSyncProvider,
+			Storage,
+			Term,
 			config::GroupConfig,
-			log::{self, Term},
 			raft::Message,
 			state::WorkerState,
 		},
@@ -25,16 +27,19 @@ use {
 /// State that is shared across all raft roles.
 pub struct Shared<S, M>
 where
-	S: log::Storage<M::Command>,
+	S: Storage<M::Command>,
 	M: StateMachine,
 {
 	/// The group state that is shared between the long-running group worker and
 	/// the external world.
 	pub group: Arc<WorkerState>,
 
-	/// The persistent log for this group that tracks all changes to the group's
-	/// replicated state machine through raft.
-	pub log: log::Driver<S, M>,
+	/// The underlying storage for the log entries of this group state machine.
+	pub storage: S,
+
+	/// The instance of the state machine of this group that applies committed
+	/// log entries and responds to queries.
+	pub state_machine: M,
 
 	/// The last vote casted by the local node in leader elections.
 	pub last_vote: Option<(Term, PeerId)>,
@@ -47,17 +52,21 @@ where
 	///
 	/// This is used to create new state sync sessions for followers and one
 	/// state sync provider per group instance for all roles.
-	sync: M::StateSync,
+	pub sync: M::StateSync,
 
 	/// State machine-specific state sync provider.
 	///
 	/// Applicable to all roles.
-	sync_provider: MaybeUninit<<M::StateSync as StateSync>::Provider>,
+	pub sync_provider: MaybeUninit<<M::StateSync as StateSync>::Provider>,
+
+	/// The index of the latest replicated and committed log entry that has been
+	/// applied to the state machine.
+	committed: Index,
 }
 
 impl<S, M> Shared<S, M>
 where
-	S: log::Storage<M::Command>,
+	S: Storage<M::Command>,
 	M: StateMachine,
 {
 	pub(super) fn new(
@@ -68,10 +77,12 @@ where
 		let mut instance = Self {
 			group,
 			last_vote: None,
+			storage,
 			sync: state_machine.state_sync(),
-			log: log::Driver::new(storage, state_machine),
 			wakers: Vec::new(),
 			sync_provider: MaybeUninit::uninit(),
+			state_machine,
+			committed: Index::default(),
 		};
 
 		let provider = instance.sync.create_provider(&instance);
@@ -108,6 +119,12 @@ where
 	/// Returns the network ID of this consensus group.
 	pub fn network_id(&self) -> &NetworkId {
 		self.group.network_id()
+	}
+
+	/// Returns the index of the last committed log entry that has been replicated
+	/// to a quorum and applied to the state machine.
+	pub const fn committed(&self) -> Index {
+		self.committed
 	}
 
 	/// Optionally handles an incoming state sync message at the handler level
@@ -165,7 +182,7 @@ where
 		let provider = unsafe { &mut *provider };
 
 		if let Some(up_to) = provider.safe_to_prune_prefix(self) {
-			self.log.prune_prefix(up_to);
+			self.storage.prune_prefix(up_to);
 		}
 	}
 
@@ -238,6 +255,36 @@ where
 		false
 	}
 
+	/// Commits log entries up to the given index and applies them to the state
+	/// machine. This should only be called with an index that has been replicated
+	/// to a majority of followers, which is guaranteed by the Raft leader before
+	/// calling this method.
+	///
+	/// Returns the index of the latest committed entry after this operation,
+	/// which may be less than the given index goes beyond the end of the log.
+	pub fn commit_up_to(&mut self, index: Index) -> Index {
+		let committed = self.committed();
+		let range = committed.next()..=index;
+		let commands = self.storage.get_range(&range);
+		let commands_count = commands.len() as u64;
+		let ctx = LocalApplyContext {
+			prev_committed: committed,
+			prev_log_index: self.storage.last().index(),
+			is_online: self.group.when.get_online_status(),
+		};
+		tracing::info!(
+			">--> commit up to {ctx:?}, applying {} commands",
+			commands.len()
+		);
+
+		self
+			.state_machine
+			.apply_batch(commands.into_iter().map(|(_, _, cmd)| cmd), &ctx);
+		self.committed = committed + commands_count;
+
+		self.committed
+	}
+
 	/// Records the fact that we casted a vote for the given candidate in this
 	/// term. This is used to prevent us from voting for multiple candidates in
 	/// the same term.
@@ -258,34 +305,34 @@ where
 
 impl<S, M> crate::primitives::sealed::Sealed for Shared<S, M>
 where
-	S: log::Storage<M::Command>,
+	S: Storage<M::Command>,
 	M: StateMachine,
 {
 }
 
 impl<S, M> StateSyncContext<M::StateSync> for Shared<S, M>
 where
-	S: log::Storage<M::Command>,
+	S: Storage<M::Command>,
 	M: StateMachine,
 {
 	fn machine(&self) -> &<M::StateSync as StateSync>::Machine {
-		self.log.machine()
+		&self.state_machine
 	}
 
 	fn machine_mut(&mut self) -> &mut <M::StateSync as StateSync>::Machine {
-		self.log.machine_mut()
+		&mut self.state_machine
 	}
 
-	fn log(&self) -> &dyn log::Storage<M::Command> {
-		self.log.storage()
+	fn log(&self) -> &dyn Storage<M::Command> {
+		&self.storage
 	}
 
-	fn log_mut(&mut self) -> &mut dyn log::Storage<M::Command> {
-		self.log.storage_mut()
+	fn log_mut(&mut self) -> &mut dyn Storage<M::Command> {
+		&mut self.storage
 	}
 
 	fn committed(&self) -> Index {
-		self.log.committed()
+		self.committed
 	}
 
 	fn local_id(&self) -> PeerId {
@@ -324,5 +371,26 @@ where
 
 	fn bonds(&self) -> Bonds {
 		self.group.bonds.clone()
+	}
+}
+
+#[derive(Debug)]
+struct LocalApplyContext {
+	prev_committed: Index,
+	prev_log_index: Index,
+	is_online: bool,
+}
+
+impl ApplyContext for LocalApplyContext {
+	fn prev_committed(&self) -> Index {
+		self.prev_committed
+	}
+
+	fn prev_log_index(&self) -> Index {
+		self.prev_log_index
+	}
+
+	fn is_online(&self) -> bool {
+		self.is_online
 	}
 }

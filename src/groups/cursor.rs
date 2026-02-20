@@ -290,13 +290,21 @@ pub struct Cursor(pub Term, pub Index);
 
 impl Default for Cursor {
 	fn default() -> Self {
-		Self::new(Term::default(), Index::default())
+		Self::zero()
 	}
 }
 
 impl Cursor {
 	pub const fn new(term: Term, index: Index) -> Self {
 		Self(term, index)
+	}
+
+	pub const fn zero() -> Self {
+		Self(Term::zero(), Index::zero())
+	}
+
+	pub const fn is_zero(&self) -> bool {
+		self.term().is_zero() && self.index().is_zero()
 	}
 
 	pub const fn term(&self) -> Term {

@@ -5,11 +5,11 @@ use {
 		groups::{
 			Group,
 			Groups,
+			InMemoryLogStore,
 			NoOp,
 			StateMachine,
 			Storage,
 			config::GroupConfig,
-			log::InMemoryLogStore,
 			worker::Worker,
 		},
 	},
@@ -283,6 +283,25 @@ impl ConsensusConfig {
 		let range_start = base;
 		let range_end = base + jitter;
 		rand::random_range(range_start..range_end)
+	}
+
+	/// Used when a state machine prefers to be a follower and wants to reduce the
+	/// chance of being elected as a leader by setting longer election timeouts.
+	///
+	/// By default the election timeout is multiplied by 3 in this mode, but the
+	/// factor can be customized by using [`deprioritize_leadership_by`] method.
+	#[must_use]
+	pub fn deprioritize_leadership(self) -> Self {
+		self.deprioritize_leadership_by(3)
+	}
+
+	/// Used when a state machine prefers to be a follower and wants to reduce the
+	/// chance of being elected as a leader by setting longer election timeouts.
+	#[must_use]
+	pub fn deprioritize_leadership_by(mut self, factor: u32) -> Self {
+		self.election_timeout *= factor;
+		self.bootstrap_delay *= factor;
+		self
 	}
 }
 

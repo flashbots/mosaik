@@ -3,7 +3,8 @@ use {
 		PeerId,
 		groups::{
 			StateMachine,
-			log::{Storage, Term},
+			Storage,
+			Term,
 			raft::{
 				Message,
 				candidate::Candidate,
@@ -205,7 +206,7 @@ impl<M: StateMachine> Role<M> {
 					term = %request.term,
 					other_leader = %Short(request.leader),
 					other_leader_log = %request.prev_log_position,
-					local_log = %shared.log.last(),
+					local_log = %shared.storage.last(),
 					group = %Short(shared.group_id()),
 					network = %Short(shared.network_id()),
 					"rival group leader detected",
@@ -291,7 +292,7 @@ impl<M: StateMachine> Role<M> {
 		// out in the `receive` method before reaching this point.
 		assert!(request.term >= self.term());
 
-		let local_cursor = shared.log.last();
+		let local_cursor = shared.storage.last();
 
 		tracing::debug!(
 			candidate = %Short(request.candidate),

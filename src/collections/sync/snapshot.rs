@@ -23,7 +23,7 @@ pub trait Snapshot: Clone + Send + 'static {
 	/// number of key-value pairs, etc. This is used to chunk the snapshot into
 	/// smaller pieces and distributing requests for those pieces across multiple
 	/// peers during the sync process.
-	fn items_count(&self) -> u64;
+	fn len(&self) -> u64;
 
 	/// Returns an iterator over the individual data items contained in this
 	/// snapshot.
@@ -32,7 +32,7 @@ pub trait Snapshot: Clone + Send + 'static {
 	/// same snapshot on all peers for a given range.
 	///
 	/// Implementation should either return the full range of items or `None`.
-	fn items(
+	fn iter_range(
 		&self,
 		range: IndexRange,
 	) -> Option<impl Iterator<Item = Self::Item>>;

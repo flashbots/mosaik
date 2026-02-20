@@ -1,9 +1,5 @@
 use {
-	crate::groups::{
-		Command,
-		Cursor,
-		log::{Index, Term},
-	},
+	crate::groups::{Command, Cursor, Index, Term},
 	core::ops::RangeInclusive,
 };
 
@@ -46,7 +42,14 @@ pub trait Storage<C: Command>: Send + 'static {
 
 	/// Returns the index and term of the last log entry.
 	/// Returns `None` if the log is empty.
-	fn last(&self) -> Option<Cursor>;
+	fn last(&self) -> Cursor;
+
+	/// Returns the term of the log entry at the specified index, if it exists.
+	/// Returns `None` if the index is out of bounds (e.g., if it has been
+	/// truncated or if it has not been appended yet).
+	fn term_at(&self, index: Index) -> Option<Term> {
+		self.get(index).map(|(_, term)| term)
+	}
 
 	/// Removes all log entries up to the specified index (inclusive) from the
 	/// log.
@@ -136,13 +139,13 @@ impl<C: Command> Storage<C> for InMemoryLogStore<C> {
 		}
 	}
 
-	fn last(&self) -> Option<Cursor> {
+	fn last(&self) -> Cursor {
 		if self.entries.is_empty() {
-			None
+			Cursor::default()
 		} else {
 			let (_, term) = self.entries.last().unwrap();
 			let logical_index = self.offset + self.entries.len() as u64;
-			Some(Cursor(*term, Index(logical_index)))
+			Cursor(*term, Index(logical_index))
 		}
 	}
 
@@ -205,7 +208,7 @@ mod tests {
 
 		// last() should still report the same logical position
 		assert_eq!(last_before, last_after);
-		assert_eq!(last_after, Some(Cursor(term(1), Index(5))));
+		assert_eq!(last_after, Cursor(term(1), Index(5)));
 	}
 
 	#[test]
@@ -220,7 +223,7 @@ mod tests {
 		assert_eq!(idx, Index(4));
 
 		assert_eq!(store.get(Index(4)), Some((60, term(2))));
-		assert_eq!(store.last(), Some(Cursor(term(2), Index(4))));
+		assert_eq!(store.last(), Cursor(term(2), Index(4)));
 	}
 
 	#[test]
@@ -256,7 +259,7 @@ mod tests {
 		store.prune_prefix(Index(2)); // prune 1, 2
 		store.truncate(Index(5)); // truncate from 5 onward → keeps 3, 4
 
-		assert_eq!(store.last(), Some(Cursor(term(1), Index(4))));
+		assert_eq!(store.last(), Cursor(term(1), Index(4)));
 		assert!(store.get(Index(5)).is_none());
 		assert!(store.get(Index(6)).is_none());
 		assert_eq!(store.get(Index(4)), Some((40, term(1))));
@@ -284,7 +287,7 @@ mod tests {
 
 		store.prune_prefix(Index(3)); // prune everything
 
-		assert!(store.last().is_none());
+		assert_eq!(store.last(), Cursor::zero());
 		let avail = store.available();
 		assert_eq!(*avail.start(), Index(3));
 		assert_eq!(*avail.end(), Index(3));
@@ -317,6 +320,6 @@ mod tests {
 		store.truncate(Index(2)); // truncation point is within pruned area
 
 		// everything remaining should be cleared
-		assert!(store.last().is_none());
+		assert!(store.last().is_zero());
 	}
 }

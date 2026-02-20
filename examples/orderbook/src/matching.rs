@@ -1,7 +1,7 @@
 use {
 	crate::types::{Fill, Order, Price, Quantity, Side, TradingPair},
 	mosaik::{
-		groups::{LogReplaySync, StateMachine},
+		groups::{ApplyContext, LogReplaySync, StateMachine},
 		primitives::UniqueId,
 	},
 	serde::{Deserialize, Serialize},
@@ -184,7 +184,7 @@ impl StateMachine for OrderBook {
 		UniqueId::from("orderbook_state_machine")
 	}
 
-	fn apply(&mut self, command: Self::Command) {
+	fn apply(&mut self, command: Self::Command, _ctx: &dyn ApplyContext) {
 		match command {
 			OrderBookCommand::PlaceOrder(order) => self.place_order(order),
 			OrderBookCommand::CancelOrder(id) => self.cancel_order(id),

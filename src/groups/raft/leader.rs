@@ -6,7 +6,8 @@ use {
 			IndexRange,
 			StateMachine,
 			StateSyncContext,
-			log::{Storage, Term},
+			Storage,
+			Term,
 			raft::{
 				Message,
 				protocol::{AppendEntries, Forward, LogEntry, Vote},
@@ -206,7 +207,7 @@ impl<M: StateMachine> Leader<M> {
 			// todo: run queries in parallel.
 			Message::Forward(Forward::Query { query, request_id }) => {
 				let result = shared.machine().query(query);
-				let position = shared.log.committed();
+				let position = shared.committed();
 				shared.bonds().send_raft_to::<M>(
 					&Message::Forward(Forward::QueryResponse {
 						request_id,
@@ -244,7 +245,7 @@ impl<M: StateMachine> Leader<M> {
 		commands: impl IntoIterator<Item = M::Command>,
 		shared: &Shared<S, M>,
 	) -> IndexRange {
-		let last_index = shared.log.last().index();
+		let last_index = shared.storage.last().index();
 		let pending_commands_count = self.client_commands.len();
 		let last_index = last_index + pending_commands_count;
 
@@ -281,17 +282,17 @@ impl<M: StateMachine> Leader<M> {
 		// non-voters.
 		self.committee.remove_dead_voters(shared);
 
-		let prev_committed = shared.log.committed();
+		let prev_committed = shared.committed();
 		let quorum_index = self.committee.record_vote(follower, log_index);
 
 		if prev_committed != quorum_index {
-			let new_committed = shared.log.commit_up_to(quorum_index);
+			let new_committed = shared.commit_up_to(quorum_index);
 			if new_committed != prev_committed {
 				// advance the commit index up to the latest index that has reached a
 				// quorum of voters in the committee.
 				tracing::trace!(
 					committed_ix = %new_committed,
-					log_position = %shared.log.last(),
+					log_position = %shared.storage.last(),
 					group = %Short(shared.group_id()),
 					network = %Short(shared.network_id()),
 				);
@@ -329,11 +330,11 @@ impl<M: StateMachine> Leader<M> {
 		// see if after purging dead voters and removing this non-voting follower,
 		// we have reached a quorum with a smaller committee and can advance the
 		// commit index.
-		let prev_committed = shared.log.committed();
+		let prev_committed = shared.committed();
 		let quorum_index = self.committee.highest_quorum_index();
 
 		if prev_committed != quorum_index {
-			let new_committed = shared.log.commit_up_to(quorum_index);
+			let new_committed = shared.commit_up_to(quorum_index);
 			if new_committed != prev_committed {
 				// advance the commit index up to the latest index that has reached a
 				// quorum of voters in the committee.
@@ -379,16 +380,16 @@ impl<M: StateMachine> Leader<M> {
 			return Poll::Pending;
 		}
 
-		let prev_pos = shared.log.last();
+		let prev_pos = shared.storage.last();
 
 		// append the new client commands to our log before broadcasting them to
 		// followers but without committing them yet.
 		for command in &entries {
-			shared.log.append(command.clone(), self.term);
+			shared.storage.append(command.clone(), self.term);
 		}
 
 		// signal log update to public api observers
-		shared.update_log_pos(shared.log.last());
+		shared.update_log_pos(shared.storage.last());
 
 		// always vote for our own `AppendEntries` messages. If we are the
 		// only voter in the committee, this will immediately commit the new log
@@ -397,7 +398,7 @@ impl<M: StateMachine> Leader<M> {
 
 		let message = Message::AppendEntries(AppendEntries {
 			term: self.term,
-			leader_commit: shared.log.committed(),
+			leader_commit: shared.committed(),
 			leader: shared.local_id(),
 			prev_log_position: prev_pos,
 			entries: entries
@@ -439,13 +440,13 @@ impl<M: StateMachine> Leader<M> {
 			return Poll::Pending;
 		}
 
-		let prev_pos = shared.log.last();
+		let prev_pos = shared.storage.last();
 		let heartbeat = AppendEntries::<M::Command> {
 			term: self.term,
 			leader: shared.local_id(),
 			prev_log_position: prev_pos,
 			entries: Vec::new(),
-			leader_commit: shared.log.committed(),
+			leader_commit: shared.committed(),
 		};
 
 		shared
@@ -495,7 +496,7 @@ impl Committee {
 		voters: HashSet<PeerId>,
 		shared: &Shared<S, M>,
 	) -> Self {
-		let last_log_index = shared.log.last().index();
+		let last_log_index = shared.storage.last().index();
 		let voters = voters
 			.into_iter()
 			.map(|voter| (voter, last_log_index))

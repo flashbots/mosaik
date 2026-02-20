@@ -15,6 +15,7 @@ mod session;
 mod snapshot;
 
 pub(in crate::collections) use snapshot::{Snapshot, SnapshotItem};
+use tokio::sync::broadcast;
 
 /// State sync strategy for mosaik collections that restores the state of a
 /// lagging follower by syncing data from a known snapshot then replaying
@@ -32,7 +33,7 @@ pub(in crate::collections) use snapshot::{Snapshot, SnapshotItem};
 ///   syncing. This ensures that new nodes can still
 pub struct SnapshotSync<M: SnapshotStateMachine> {
 	config: Config,
-	_p: PhantomData<M>,
+	sessions: broadcast::Sender<(SessionId, M::Snapshot)>,
 }
 
 impl<M: SnapshotStateMachine> Default for SnapshotSync<M> {
@@ -42,10 +43,10 @@ impl<M: SnapshotStateMachine> Default for SnapshotSync<M> {
 }
 
 impl<M: SnapshotStateMachine> SnapshotSync<M> {
-	pub(super) const fn new(config: Config) -> Self {
+	pub(super) fn new(config: Config) -> Self {
 		Self {
 			config,
-			_p: PhantomData,
+			sessions: broadcast::Sender::new(16),
 		}
 	}
 
@@ -76,7 +77,11 @@ impl<M: SnapshotStateMachine> StateSync for SnapshotSync<M> {
 	}
 
 	fn create_provider(&self, cx: &dyn StateSyncContext<Self>) -> Self::Provider {
-		SnapshotSyncProvider::new(self.config.clone(), cx)
+		SnapshotSyncProvider::new(
+			self.config.clone(),
+			self.sessions.subscribe(),
+			cx,
+		)
 	}
 
 	fn create_session(
@@ -164,14 +169,15 @@ impl Default for Config {
 	}
 }
 
+pub(super) type SessionId = u64;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SnapshotSyncMessage {
-	PrepareRequest {
-		position: Index,
-		request_id: u64,
+	RequestSnapshot {
+		session_id: SessionId,
 	},
-	PrepareResponse {
-		available: Vec<Index>,
-		request_id: u64,
+	SnapshotReady {
+		session_id: SessionId,
+		position: Index,
 	},
 }

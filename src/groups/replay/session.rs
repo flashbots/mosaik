@@ -104,7 +104,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 		position: Cursor,
 		entries: Vec<(M::Command, Term)>,
 	) -> Self {
-		let local_pos = cx.log().last().unwrap_or_default();
+		let local_pos = cx.log().last();
 		let gap = local_pos.index().next()..=position.index();
 		let total = (position.index() - local_pos.index()).as_usize();
 
@@ -430,10 +430,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 			let (_, (end, peer, entries)) =
 				self.fetched.remove_entry(&start).unwrap();
 
-			assert_eq!(
-				start,
-				sync_cx.log().last().unwrap_or_default().index().next()
-			);
+			assert_eq!(start, sync_cx.log().last().index().next());
 
 			self.downloaded += entries.len();
 
@@ -445,8 +442,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 				sync_cx.log_mut().append(command, term);
 			}
 
-			let synced_range =
-				start..=sync_cx.log().last().unwrap_or_default().index();
+			let synced_range = start..=sync_cx.log().last().index();
 
 			let progress = self.downloaded as f64 / self.total as f64 * 100.0;
 
@@ -512,7 +508,7 @@ impl<M: StateMachine> StateSyncSession for LogReplaySession<M> {
 		if self.gap.is_empty() {
 			// Sync complete! Apply buffered entries and finalize.
 			self.finalize_sync(sync_cx);
-			let final_pos = sync_cx.log().last().unwrap_or_default();
+
 			tracing::debug!(
 				group = %Short(sync_cx.group_id()),
 				network = %Short(sync_cx.network_id()),
@@ -521,7 +517,8 @@ impl<M: StateMachine> StateSyncSession for LogReplaySession<M> {
 				self.started_at.elapsed(),
 				self.unique_peers.len(),
 			);
-			return Poll::Ready(final_pos);
+
+			return Poll::Ready(sync_cx.log().last());
 		}
 
 		// 0. drive background tasks

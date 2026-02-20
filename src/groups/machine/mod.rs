@@ -7,7 +7,10 @@
 //! state machine.
 
 use {
-	crate::{groups::ConsensusConfig, primitives::UniqueId},
+	crate::{
+		groups::{ConsensusConfig, Index},
+		primitives::UniqueId,
+	},
 	serde::{Serialize, de::DeserializeOwned},
 };
 
@@ -64,15 +67,19 @@ pub trait StateMachine: Sized + Send + 'static {
 
 	/// Applies a command to the state machine, mutating its state. This method is
 	/// called by the log when a command is committed (replicated to a majority).
-	fn apply(&mut self, command: Self::Command);
+	fn apply(&mut self, command: Self::Command, ctx: &dyn ApplyContext);
 
 	/// Optionally allows state machine implementations to optimize the
 	/// application of a batch of commands. By default, this method applies
 	/// commands one by one using the `apply` method, but state machines that
 	/// can optimize batch processing can override this method.
-	fn apply_batch(&mut self, commands: impl IntoIterator<Item = Self::Command>) {
+	fn apply_batch(
+		&mut self,
+		commands: impl IntoIterator<Item = Self::Command>,
+		ctx: &dyn ApplyContext,
+	) {
 		for command in commands {
-			self.apply(command);
+			self.apply(command, ctx);
 		}
 	}
 
@@ -109,6 +116,29 @@ pub trait StateMachine: Sized + Send + 'static {
 	fn consensus_config(&self) -> Option<ConsensusConfig> {
 		None
 	}
+}
+
+pub trait ApplyContext {
+	/// The index of the last committed log entry that has been applied by the
+	/// state machine before applying the current batch of commands.
+	///
+	/// This can be used by the state machine to determine the current position of
+	/// the log when it is applying new commands.
+	///
+	/// If the state machine implements its own `apply_batch` method, it needs to
+	/// compute the index of each command in the batch by itself using the number
+	/// of commands in the batch and the index of the last committed command
+	/// returned by this method.
+	fn prev_committed(&self) -> Index;
+
+	/// The index of the last log entry in the log.
+	fn prev_log_index(&self) -> Index;
+
+	/// Returns true if the state machine is currently online and processing
+	/// commands in real-time. Returns false if the state machine is currently
+	/// offline and is only processing commands for state synchronization
+	/// (catch-up).
+	fn is_online(&self) -> bool;
 }
 
 pub trait StateMachineMessage:

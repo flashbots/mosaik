@@ -1,27 +1,38 @@
 use {
-	super::{Config, SnapshotStateMachine, SnapshotSync, SnapshotSyncMessage},
-	crate::{PeerId, groups::*},
+	super::{
+		Config,
+		SessionId,
+		SnapshotStateMachine,
+		SnapshotSync,
+		SnapshotSyncMessage,
+	},
+	crate::{PeerId, collections::sync::Snapshot, groups::*},
 	core::{
 		marker::PhantomData,
 		task::{Context, Poll},
 	},
-	std::collections::VecDeque,
+	std::collections::{HashMap, VecDeque},
+	tokio::sync::{broadcast, mpsc::UnboundedReceiver},
 };
 
 pub struct SnapshotSyncProvider<M: SnapshotStateMachine> {
 	config: Config,
-	snapshots: VecDeque<M::Snapshot>,
+	snapshots: HashMap<SessionId, M::Snapshot>,
+	snapshots_rx: broadcast::Receiver<(SessionId, M::Snapshot)>,
 }
 
 impl<M: SnapshotStateMachine> SnapshotSyncProvider<M> {
 	pub(super) fn new(
 		config: Config,
+		snapshots_rx: broadcast::Receiver<(SessionId, M::Snapshot)>,
 		cx: &dyn StateSyncContext<<Self as StateSyncProvider>::Owner>,
 	) -> Self {
-		let mut snapshots = VecDeque::new();
-		snapshots.push_back(cx.machine().snapshot(cx));
-
-		Self { config, snapshots }
+		let snapshots = HashMap::new();
+		Self {
+			config,
+			snapshots,
+			snapshots_rx,
+		}
 	}
 }
 
@@ -34,21 +45,9 @@ impl<M: SnapshotStateMachine> StateSyncProvider for SnapshotSyncProvider<M> {
 		sender: PeerId,
 		cx: &mut dyn StateSyncContext<Self::Owner>,
 	) -> Result<(), SnapshotSyncMessage> {
-		todo!("handle incoming snapshot sync message")
-	}
-
-	/// Invoked when a the committed log index of the group changes.
-	fn committed(
-		&mut self,
-		index: Index,
-		cx: &mut dyn StateSyncContext<Self::Owner>,
-	) {
-		if index.0.is_multiple_of(self.config.interval) {
-			self.snapshots.push_back(cx.machine().snapshot(cx));
-		}
-
-		if self.snapshots.len() > self.config.retention_window as usize {
-			self.snapshots.pop_front();
+		match message {
+			SnapshotSyncMessage::RequestSnapshot { session_id } => Ok(()),
+			_ => Err(message),
 		}
 	}
 }

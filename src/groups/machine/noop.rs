@@ -1,5 +1,5 @@
 use crate::{
-	groups::{StateMachine, replay::LogReplaySync},
+	groups::{ApplyContext, StateMachine, replay::LogReplaySync},
 	primitives::UniqueId,
 };
 
@@ -19,7 +19,7 @@ impl StateMachine for NoOp {
 		UniqueId::from("mosaik_noop_state_machine")
 	}
 
-	fn apply(&mut self, (): Self::Command) {}
+	fn apply(&mut self, (): Self::Command, _: &dyn ApplyContext) {}
 
 	fn query(&self, (): Self::Query) -> Self::QueryResult {}
 
