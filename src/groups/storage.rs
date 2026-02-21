@@ -3,14 +3,18 @@ use {
 	core::ops::RangeInclusive,
 };
 
-/// Defines the storage interface for the Raft log.
+/// Defines the storage interface for the group Raft log.
 ///
 /// This trait abstracts over the underlying storage mechanism used to persist
-/// log entries. The log module uses this trait to append new log entries,
-/// retrieve existing entries, and truncate the log when necessary (e.g., when a
-/// follower falls behind and needs to discard old entries).
+/// log entries. The group Raft implementation uses instances implementing this
+/// trait to append new log entries, retrieve existing entries, and truncate the
+/// log when necessary (e.g., when a follower falls behind and needs to discard
+/// old entries).
 ///
-/// Entries in the log are indexed starting from 1.
+/// Entries in the log are indexed starting from 1. Index 0 is reserved and
+/// always represents a non-existent entry with term 0, which is used as a
+/// sentinel value in various places in the Raft protocol (e.g., to indicate the
+/// absence of a previous log entry or a fresh start).
 pub trait Storage<C: Command>: Send + 'static {
 	/// Appends a new log entry to the end of the log and returns the index of
 	/// the newly appended entry.
@@ -27,6 +31,8 @@ pub trait Storage<C: Command>: Send + 'static {
 	/// Retrieves the log entry at the specified index, if it exists. Returns
 	/// `None` if the index is out of bounds (e.g., if it has been truncated or if
 	/// it has not been appended yet).
+	///
+	/// Retrieving index zero should always return `None`.
 	fn get(&self, index: Index) -> Option<(C, Term)>;
 
 	/// Retrieves a range of log entries from the log, starting from `start`
@@ -47,7 +53,13 @@ pub trait Storage<C: Command>: Send + 'static {
 	/// Returns the term of the log entry at the specified index, if it exists.
 	/// Returns `None` if the index is out of bounds (e.g., if it has been
 	/// truncated or if it has not been appended yet).
+	///
+	/// Term of index zero is always zero.
 	fn term_at(&self, index: Index) -> Option<Term> {
+		if index.is_zero() {
+			return Some(Term::zero());
+		}
+
 		self.get(index).map(|(_, term)| term)
 	}
 

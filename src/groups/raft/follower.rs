@@ -145,7 +145,7 @@ impl<M: StateMachine> Follower<M> {
 	/// will not trigger elections even if it does not receive messages from the
 	/// leader, allowing other in-sync nodes to trigger elections if the leader
 	/// is unavailable.
-	pub fn poll_next_tick<S: Storage<M::Command>>(
+	pub fn poll<S: Storage<M::Command>>(
 		&mut self,
 		cx: &mut Context<'_>,
 		shared: &mut Shared<S, M>,
@@ -157,7 +157,7 @@ impl<M: StateMachine> Follower<M> {
 			// can't win elections anyway with a stale log. Focus on catching up and
 			// let other in-sync nodes trigger elections if the leader is
 			// unavailable.
-			match catchup.poll_next_tick(cx, shared) {
+			match catchup.poll(cx, shared) {
 				Poll::Ready(cursor) => {
 					assert_eq!(cursor, shared.storage.last());
 

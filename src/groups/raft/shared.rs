@@ -11,17 +11,23 @@ use {
 			Index,
 			StateMachine,
 			StateSync,
-			StateSyncContext,
 			StateSyncProvider,
 			Storage,
+			SyncContext,
+			SyncProviderContext,
+			SyncSessionContext,
 			Term,
 			config::GroupConfig,
 			raft::Message,
-			state::WorkerState,
+			state::{WorkerRaftCommand, WorkerState},
 		},
 	},
-	core::mem::MaybeUninit,
+	core::{mem::MaybeUninit, task::Poll},
 	std::sync::Arc,
+	tokio::sync::{
+		mpsc::{UnboundedSender, error::SendError},
+		oneshot,
+	},
 };
 
 /// State that is shared across all raft roles.
@@ -270,12 +276,7 @@ where
 		let ctx = LocalApplyContext {
 			prev_committed: committed,
 			prev_log_index: self.storage.last().index(),
-			is_online: self.group.when.get_online_status(),
 		};
-		tracing::info!(
-			">--> commit up to {ctx:?}, applying {} commands",
-			commands.len()
-		);
 
 		self
 			.state_machine
@@ -283,6 +284,23 @@ where
 		self.committed = committed + commands_count;
 
 		self.committed
+	}
+
+	/// Polls the state sync provider for any pending work it needs to do on every
+	/// tick of the raft worker loop.
+	pub fn poll_state_sync_provider(
+		&mut self,
+		cx: &mut std::task::Context<'_>,
+	) -> Poll<()> {
+		// SAFETY: The `sync_provider` field is initialized in the constructor of
+		// `Shared` and is never mutated after that, so it is safe to assume that
+		// it is always initialized when accessed through this method.
+		let provider: *mut _ = unsafe { self.sync_provider.assume_init_mut() };
+
+		// SAFETY: There is no public API on `StateSyncContext` that allows the
+		// mutation of the `sync_provider` field of `Shared`.
+		let provider = unsafe { &mut *provider };
+		provider.poll(cx, self)
 	}
 
 	/// Records the fact that we casted a vote for the given candidate in this
@@ -310,16 +328,16 @@ where
 {
 }
 
-impl<S, M> StateSyncContext<M::StateSync> for Shared<S, M>
+impl<S, M> SyncContext<M::StateSync> for Shared<S, M>
 where
 	S: Storage<M::Command>,
 	M: StateMachine,
 {
-	fn machine(&self) -> &<M::StateSync as StateSync>::Machine {
+	fn state_machine(&self) -> &<M::StateSync as StateSync>::Machine {
 		&self.state_machine
 	}
 
-	fn machine_mut(&mut self) -> &mut <M::StateSync as StateSync>::Machine {
+	fn state_machine_mut(&mut self) -> &mut <M::StateSync as StateSync>::Machine {
 		&mut self.state_machine
 	}
 
@@ -347,10 +365,6 @@ where
 		*self.group.network_id()
 	}
 
-	fn leader(&self) -> Option<PeerId> {
-		self.group.when.current_leader()
-	}
-
 	fn send_to(
 		&mut self,
 		peer: PeerId,
@@ -362,11 +376,14 @@ where
 			.send_raft_to::<M>(&Message::StateSync(message), peer);
 	}
 
-	fn broadcast(&mut self, message: <M::StateSync as StateSync>::Message) {
+	fn broadcast(
+		&mut self,
+		message: <M::StateSync as StateSync>::Message,
+	) -> Vec<PeerId> {
 		self
 			.group
 			.bonds
-			.broadcast_raft::<M>(&Message::<M>::StateSync(message));
+			.broadcast_raft::<M>(&Message::<M>::StateSync(message))
 	}
 
 	fn bonds(&self) -> Bonds {
@@ -374,11 +391,59 @@ where
 	}
 }
 
+impl<S, M> SyncSessionContext<M::StateSync> for Shared<S, M>
+where
+	S: Storage<M::Command>,
+	M: StateMachine,
+{
+	fn leader(&self) -> PeerId {
+		self
+			.group
+			.when
+			.current_leader()
+			.expect("leader always known on lagging followers during sync sessions")
+	}
+}
+
+impl<S, M> SyncProviderContext<M::StateSync> for Shared<S, M>
+where
+	S: Storage<M::Command>,
+	M: StateMachine,
+{
+	fn leader(&self) -> Option<PeerId> {
+		self.group.when.current_leader()
+	}
+
+	fn feed_command(&mut self, command: M::Command) -> Result<(), M::Command> {
+		if self.is_leader() {
+			let sender = self
+				.group
+				.raft_cmd_tx
+				.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
+				.expect("invalid raft_tx type. this is a bug");
+
+			let (unused, _) = oneshot::channel();
+			if let Err(SendError(WorkerRaftCommand::Feed(commands, _))) =
+				sender.send(WorkerRaftCommand::Feed(vec![command], unused))
+			{
+				return Err(
+					commands
+						.into_iter()
+						.next()
+						.expect("just sent this command, so it must be here"),
+				);
+			}
+			Ok(())
+		} else {
+			Err(command)
+		}
+	}
+}
+
 #[derive(Debug)]
 struct LocalApplyContext {
 	prev_committed: Index,
 	prev_log_index: Index,
-	is_online: bool,
 }
 
 impl ApplyContext for LocalApplyContext {
@@ -388,9 +453,5 @@ impl ApplyContext for LocalApplyContext {
 
 	fn prev_log_index(&self) -> Index {
 		self.prev_log_index
-	}
-
-	fn is_online(&self) -> bool {
-		self.is_online
 	}
 }

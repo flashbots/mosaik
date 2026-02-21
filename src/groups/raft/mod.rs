@@ -8,8 +8,8 @@ use {
 			IndexRange,
 			QueryError,
 			StateMachine,
-			StateSyncContext,
 			Storage,
+			SyncContext,
 			raft::{role::Role, shared::Shared},
 			state::WorkerState,
 		},
@@ -153,7 +153,7 @@ where
 				// against the state machine, which is always up to date with the latest
 				// committed state of the group.
 				ready(Ok(CommittedQueryResult {
-					result: self.shared.machine().query(query),
+					result: self.shared.state_machine().query(query),
 					at_position: self.shared.committed(),
 				}))
 				.pin()
@@ -165,7 +165,7 @@ where
 					// its local state machine up to the last locally known committed
 					// state.
 					ready(Ok(CommittedQueryResult {
-						result: self.shared.machine().query(query),
+						result: self.shared.state_machine().query(query),
 						at_position: self.shared.committed(),
 					}))
 					.pin()
@@ -193,7 +193,7 @@ where
 	/// node  in the consensus algorithm, it will trigger different periodic
 	/// actions, such as starting new elections when the node is a follower or
 	/// sending heartbeats when the node is a leader.
-	pub fn poll_next_tick(&mut self, cx: &mut Context<'_>) -> Poll<()> {
-		self.role.poll_next_tick(cx, &mut self.shared)
+	pub fn poll(&mut self, cx: &mut Context<'_>) -> Poll<()> {
+		self.role.poll(cx, &mut self.shared)
 	}
 }

@@ -9,13 +9,17 @@ use {
 /// Represents a snapshot of the state of the state machine at a specific point
 /// in time. This is used to quickly restore the state of a lagging follower
 /// without having to replay the entire log.
-pub trait Snapshot: Clone + Send + 'static {
+///
+/// When instantiating a default snapshot, it should return an empty snapshot
+/// with no items.
+pub trait Snapshot: Default + Clone + Send + 'static {
 	/// Type of the individual data items contained in this snapshot.
 	type Item: SnapshotItem;
 
-	/// Returns the log index at which this snapshot was taken. This is always
-	/// going to be a committed index.
-	fn position(&self) -> Index;
+	/// Returns `true` if this snapshot contains no data items.
+	fn is_empty(&self) -> bool {
+		self.len() == 0
+	}
 
 	/// The number of individual data items contained in this snapshot.
 	///
@@ -36,6 +40,13 @@ pub trait Snapshot: Clone + Send + 'static {
 		&self,
 		range: IndexRange,
 	) -> Option<impl Iterator<Item = Self::Item>>;
+
+	/// Appends the given items to the snapshot.
+	///
+	/// It is guaranteed that the given items are the next items in the snapshot
+	/// after the current last item, so the implementation can simply append them
+	/// to the end of the snapshot.
+	fn append(&mut self, items: impl IntoIterator<Item = Self::Item>);
 }
 
 pub trait SnapshotItem:

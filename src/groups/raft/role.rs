@@ -65,18 +65,18 @@ impl<M: StateMachine> Role<M> {
 	}
 
 	/// Drives the role-specific periodic actions (e.g., elections, heartbeats).
-	pub fn poll_next_tick<S: Storage<M::Command>>(
+	pub fn poll<S: Storage<M::Command>>(
 		&mut self,
 		cx: &mut Context<'_>,
 		shared: &mut Shared<S, M>,
 	) -> Poll<()> {
 		let next_step = match self {
-			Self::Follower(follower) => follower.poll_next_tick(cx, shared),
-			Self::Candidate(candidate) => candidate.poll_next_tick(cx, shared),
-			Self::Leader(leader) => leader.poll_next_tick(cx, shared),
+			Self::Follower(follower) => follower.poll(cx, shared),
+			Self::Candidate(candidate) => candidate.poll(cx, shared),
+			Self::Leader(leader) => leader.poll(cx, shared),
 		};
 
-		match next_step {
+		let readiness = match next_step {
 			Poll::Ready(next) => {
 				if let ControlFlow::Break(next_role) = next {
 					// transition to the next role if the current role's tick indicates a
@@ -90,7 +90,14 @@ impl<M: StateMachine> Role<M> {
 				shared.add_waker(cx.waker().clone());
 				Poll::Pending
 			}
+		};
+
+		// drive the state sync provider on every tick of the loop
+		if shared.poll_state_sync_provider(cx).is_ready() {
+			return Poll::Ready(());
 		}
+
+		readiness
 	}
 
 	/// Handles incoming consensus protocol messages based on the current role.

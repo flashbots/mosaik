@@ -133,12 +133,6 @@ pub trait ApplyContext {
 
 	/// The index of the last log entry in the log.
 	fn prev_log_index(&self) -> Index;
-
-	/// Returns true if the state machine is currently online and processing
-	/// commands in real-time. Returns false if the state machine is currently
-	/// offline and is only processing commands for state synchronization
-	/// (catch-up).
-	fn is_online(&self) -> bool;
 }
 
 pub trait StateMachineMessage:

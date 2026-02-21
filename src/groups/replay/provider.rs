@@ -1,7 +1,13 @@
 use {
 	super::{Config, LogReplaySync, LogReplaySyncMessage},
 	crate::{
-		groups::{Index, StateMachine, StateSyncContext, StateSyncProvider},
+		groups::{
+			Index,
+			StateMachine,
+			StateSyncProvider,
+			SyncContext,
+			SyncProviderContext,
+		},
 		primitives::{Pretty, Short},
 	},
 	core::marker::PhantomData,
@@ -22,7 +28,7 @@ pub struct LogReplayProvider<M: StateMachine> {
 impl<M: StateMachine> LogReplayProvider<M> {
 	pub(super) fn new(
 		config: &Config,
-		_: &dyn StateSyncContext<LogReplaySync<M>>,
+		_: &dyn SyncContext<LogReplaySync<M>>,
 	) -> Self {
 		Self {
 			config: config.clone(),
@@ -41,7 +47,7 @@ impl<M: StateMachine> StateSyncProvider for LogReplayProvider<M> {
 		&mut self,
 		message: LogReplaySyncMessage<M::Command>,
 		sender: crate::PeerId,
-		cx: &mut dyn StateSyncContext<Self::Owner>,
+		cx: &mut dyn SyncProviderContext<Self::Owner>,
 	) -> Result<(), LogReplaySyncMessage<M::Command>> {
 		match message {
 			LogReplaySyncMessage::AvailabilityRequest => {

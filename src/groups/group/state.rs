@@ -212,7 +212,7 @@ pub enum WorkerBondCommand {
 
 /// Commands sent to the group worker that are raft-specific and carry state
 /// machine impl types.
-pub(super) enum WorkerRaftCommand<M: StateMachine> {
+pub(in crate::groups) enum WorkerRaftCommand<M: StateMachine> {
 	Feed(
 		Vec<M::Command>,
 		oneshot::Sender<Result<IndexRange, CommandError<M>>>,

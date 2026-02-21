@@ -1,4 +1,8 @@
 //! Mosaik Replicated Collections
+//!
+//! Each collection instance creates its own mosaik group that runs a raft
+//! consensus algorithm. Each collection instance is independent and can be used
+//! with different sets of nodes in the cluster.
 
 #![allow(unreachable_code, unused)]
 

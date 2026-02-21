@@ -12,53 +12,6 @@ use {
 	serde::{Serialize, de::DeserializeOwned},
 };
 
-/// Provides controlled access for the state synchronization implementation to
-/// the internal state of the group protocol.
-pub trait StateSyncContext<S: StateSync>: Sealed {
-	/// Returns the current state machine instance of the group protocol.
-	fn machine(&self) -> &S::Machine;
-
-	/// Returns a mutable reference to the current state machine instance of the
-	/// group protocol.
-	fn machine_mut(&mut self) -> &mut S::Machine;
-
-	/// Returns a read-only access to the raw log entries storage.
-	fn log(&self) -> &dyn Storage<Command<S>>;
-
-	/// Returns a mutable access to the raw log entries storage.
-	fn log_mut(&mut self) -> &mut dyn Storage<Command<S>>;
-
-	/// Returns the index of the latest committed log entry that has received a
-	/// quorum of votes.
-	fn committed(&self) -> Index;
-
-	/// Returns the `PeerId` of the local node.
-	fn local_id(&self) -> PeerId;
-
-	/// Returns the unique identifier of the group.
-	fn group_id(&self) -> GroupId;
-
-	/// Returns the unique identifier of the network.
-	fn network_id(&self) -> NetworkId;
-
-	/// Returns the `PeerId` of the current leader, if known. This can be used
-	/// to deprioritize syncing from the leader to avoid overloading it with sync
-	/// requests.
-	///
-	/// This value is guaranteed to be `Some` when creating a new sync session.
-	fn leader(&self) -> Option<PeerId>;
-
-	/// Sends a message to a specific peer.
-	fn send_to(&mut self, peer: PeerId, message: S::Message);
-
-	/// Broadcasts a message to all peers in the group.
-	fn broadcast(&mut self, message: S::Message);
-
-	/// Returns [`Bonds`] of the group which can be used to observe changes to the
-	/// list of connected/bonded peers.
-	fn bonds(&self) -> Bonds;
-}
-
 /// Implements the state synchronization (catch-up) process for followers that
 /// are not up-to-date with the current state of the group.
 pub trait StateSync: Send + 'static {
@@ -95,8 +48,11 @@ pub trait StateSync: Send + 'static {
 	fn signature(&self) -> UniqueId;
 
 	/// Returns a new instance of the state synchronization provider that serves
-	/// state to `StateSyncSession` instances during the catch-up process.
-	fn create_provider(&self, cx: &dyn StateSyncContext<Self>) -> Self::Provider;
+	/// state to [`StateSyncSession`] instances during the catch-up process.
+	///
+	/// This method is called exactly once on every peer in the group at
+	/// initialization.
+	fn create_provider(&self, cx: &dyn SyncContext<Self>) -> Self::Provider;
 
 	/// Creates a new state synchronization session for a specific lagging
 	/// follower that is undergoing the catch-up process.
@@ -116,7 +72,7 @@ pub trait StateSync: Send + 'static {
 	/// at the leader, at the moment the sync session is created.
 	fn create_session(
 		&self,
-		cx: &mut dyn StateSyncContext<Self>,
+		cx: &mut dyn SyncSessionContext<Self>,
 		position: Cursor,
 		leader_commit: Index,
 		entries: Vec<(Command<Self>, Term)>,
@@ -126,12 +82,33 @@ pub trait StateSync: Send + 'static {
 pub trait StateSyncProvider: Send + 'static {
 	type Owner: StateSync;
 
+	/// Polls the provider on every tick of the group-internal work scheduler.
+	/// This can be used to drive internal timeouts, trigger retries, etc.
+	///
+	/// When this method returns `Poll::Ready(())`, the provider is indicating
+	/// that it has completed some work and that it is ready to be polled again
+	/// immediately to drive the next step of the state sync process.
+	///
+	/// The provider can also wake the scheduler at any time by calling
+	/// `cx.wake()`, which will cause the scheduler to poll the provider
+	/// again.
+	///
+	/// This is an optional method that is usable by sync providers that need to
+	/// do background work irrespective of receiving messages from followers.
+	fn poll(
+		&mut self,
+		_: &mut Context<'_>,
+		_: &mut dyn SyncProviderContext<Self::Owner>,
+	) -> Poll<()> {
+		Poll::Pending
+	}
+
 	/// Receives a message from a remote peer.
 	fn receive(
 		&mut self,
 		message: Message<Self::Owner>,
 		sender: PeerId,
-		cx: &mut dyn StateSyncContext<Self::Owner>,
+		cx: &mut dyn SyncProviderContext<Self::Owner>,
 	) -> Result<(), Message<Self::Owner>>;
 
 	/// Returns the log position up to which it is safe to prune log entries
@@ -142,7 +119,7 @@ pub trait StateSyncProvider: Send + 'static {
 	/// committed log entry.
 	fn safe_to_prune_prefix(
 		&self,
-		_: &mut dyn StateSyncContext<Self::Owner>,
+		_: &mut dyn SyncProviderContext<Self::Owner>,
 	) -> Option<Index> {
 		None
 	}
@@ -150,7 +127,11 @@ pub trait StateSyncProvider: Send + 'static {
 	/// Notifies the provider that the committed index has advanced to a new
 	/// position. This can be used by the provider to update its internal state,
 	/// create snapshots, etc.
-	fn committed(&mut self, _: Index, _: &mut dyn StateSyncContext<Self::Owner>) {
+	fn committed(
+		&mut self,
+		_: Index,
+		_: &mut dyn SyncProviderContext<Self::Owner>,
+	) {
 	}
 }
 
@@ -169,10 +150,10 @@ pub trait StateSyncSession: Send + 'static {
 	/// point the state synchronization process is complete and the follower is
 	/// fully synchronized with the current state of the group up to the returned
 	/// position.
-	fn poll_next_tick(
+	fn poll(
 		&mut self,
 		cx: &mut Context<'_>,
-		driver: &mut dyn StateSyncContext<Self::Owner>,
+		driver: &mut dyn SyncSessionContext<Self::Owner>,
 	) -> Poll<Cursor>;
 
 	/// Receives a message from a remote peer.
@@ -180,7 +161,7 @@ pub trait StateSyncSession: Send + 'static {
 		&mut self,
 		message: Message<Self::Owner>,
 		sender: PeerId,
-		cx: &mut dyn StateSyncContext<Self::Owner>,
+		cx: &mut dyn SyncSessionContext<Self::Owner>,
 	);
 
 	/// Accepts a batch of log entries that have been produced by the current
@@ -190,8 +171,95 @@ pub trait StateSyncSession: Send + 'static {
 		&mut self,
 		position: Cursor,
 		entries: Vec<(Command<Self::Owner>, Term)>,
-		cx: &mut dyn StateSyncContext<Self::Owner>,
+		cx: &mut dyn SyncSessionContext<Self::Owner>,
 	);
+}
+
+/// Context object that is passed to instances of [`StateSyncProvider`] and
+/// [`StateSyncSession`] instances to provide them with access to the state of
+/// the group.
+pub trait SyncContext<S: StateSync>: Sealed {
+	/// Returns the current state machine instance of this group.
+	fn state_machine(&self) -> &S::Machine;
+
+	/// Returns a mutable reference to the current state machine instance of this
+	/// group.
+	fn state_machine_mut(&mut self) -> &mut S::Machine;
+
+	/// Returns a read-only access to the raw log entries storage.
+	fn log(&self) -> &dyn Storage<Command<S>>;
+
+	/// Returns a mutable access to the raw log entries storage.
+	fn log_mut(&mut self) -> &mut dyn Storage<Command<S>>;
+
+	/// Returns the index of the latest committed log entry that has received a
+	/// quorum of votes.
+	fn committed(&self) -> Index;
+
+	/// Returns the `PeerId` of the local node.
+	fn local_id(&self) -> PeerId;
+
+	/// Returns the unique identifier of the group.
+	fn group_id(&self) -> GroupId;
+
+	/// Returns the unique identifier of the network.
+	fn network_id(&self) -> NetworkId;
+
+	/// Sends a message to a specific peer.
+	fn send_to(&mut self, peer: PeerId, message: S::Message);
+
+	/// Broadcasts a message to all peers in the group and returns the list of
+	/// peers the message was sent to.
+	fn broadcast(&mut self, message: S::Message) -> Vec<PeerId>;
+
+	/// Returns [`Bonds`] of the group which can be used to observe changes to the
+	/// list of connected/bonded peers.
+	fn bonds(&self) -> Bonds;
+}
+
+/// Context object that is passed to instances of [`StateSyncSession`] instances
+/// to provide them with access to the state of the group.
+///
+/// Instances of this type are instantiated on lagging followers during
+/// state catch-up.
+pub trait SyncSessionContext<S: StateSync>: SyncContext<S> {
+	/// Returns the `PeerId` of the current leader.
+	///
+	/// When a sync session is triggered, the leader is always known. This can be
+	/// used to deprioritize syncing from the leader to avoid overloading it with
+	/// sync requests, or to trigger specific logic that can only be executed on
+	/// the leader during the sync process.
+	fn leader(&self) -> PeerId;
+}
+
+/// Context object that is passed to instances of [`StateSyncProvider`]
+/// instances to provide them with access to the state of the group.
+///
+/// Instances of this type are instantiated on all peers in the group running
+/// in all roles.
+pub trait SyncProviderContext<S: StateSync>: SyncContext<S> {
+	/// Returns the `PeerId` of the current leader, if known.
+	///
+	/// The leader is not guaranteed to be known at all times on all peers as the
+	/// network topology changes.
+	fn leader(&self) -> Option<PeerId>;
+
+	/// Returns `true` if the local node is the current leader, `false` otherwise.
+	fn is_leader(&self) -> bool {
+		self.leader() == Some(self.local_id())
+	}
+
+	/// Adds a new command to the log of the group. This call is only valid on the
+	/// current leader and will be rejected if called on a non-leader node.
+	///
+	/// This is a best-effort method that can be used by the provider to feed new
+	/// commands into the log during the sync process, for example to create new
+	/// markers seen by all group members at the same position in the log, there
+	/// is no guarantee of timing, delivery or order of the command added through
+	/// this method. The only guarantee is that if this command makes it to the
+	/// state machine, all nodes in the network will see it at exactly the same
+	/// position.
+	fn feed_command(&mut self, command: Command<S>) -> Result<(), Command<S>>;
 }
 
 pub trait StateSyncMessage:

@@ -5,7 +5,7 @@ use {
 			Cursor,
 			Index,
 			StateMachine,
-			StateSyncContext,
+			SyncContext,
 			Term,
 			machine::*,
 		},
@@ -108,13 +108,13 @@ impl<M: StateMachine> StateSync for LogReplaySync<M> {
 			.derive(self.config.fetch_timeout.as_secs().to_le_bytes())
 	}
 
-	fn create_provider(&self, cx: &dyn StateSyncContext<Self>) -> Self::Provider {
+	fn create_provider(&self, cx: &dyn SyncContext<Self>) -> Self::Provider {
 		LogReplayProvider::new(&self.config, cx)
 	}
 
 	fn create_session(
 		&self,
-		cx: &mut dyn StateSyncContext<Self>,
+		cx: &mut dyn SyncSessionContext<Self>,
 		position: Cursor,
 		_leader_committed: Index,
 		entries: Vec<(M::Command, Term)>,

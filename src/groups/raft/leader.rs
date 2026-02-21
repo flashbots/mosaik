@@ -5,8 +5,8 @@ use {
 			Index,
 			IndexRange,
 			StateMachine,
-			StateSyncContext,
 			Storage,
+			SyncContext,
 			Term,
 			raft::{
 				Message,
@@ -115,7 +115,7 @@ impl<M: StateMachine> Leader<M> {
 	/// Returns `Poll::Ready(ControlFlow::Break(new_role))` if the role should
 	/// transition to a new state (e.g., follower) or `Poll::Pending` if it
 	/// should continue waiting in the leader state.
-	pub fn poll_next_tick<S: Storage<M::Command>>(
+	pub fn poll<S: Storage<M::Command>>(
 		&mut self,
 		cx: &mut Context,
 		shared: &mut Shared<S, M>,
@@ -206,7 +206,7 @@ impl<M: StateMachine> Leader<M> {
 			// sent by followers that are forwarding client queries to the leader.
 			// todo: run queries in parallel.
 			Message::Forward(Forward::Query { query, request_id }) => {
-				let result = shared.machine().query(query);
+				let result = shared.state_machine().query(query);
 				let position = shared.committed();
 				shared.bonds().send_raft_to::<M>(
 					&Message::Forward(Forward::QueryResponse {

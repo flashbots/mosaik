@@ -13,7 +13,7 @@ use {
 		Network,
 		PeerId,
 		UniqueId,
-		collections::sync::SessionId,
+		collections::sync::{SnapshotInfo, SnapshotRequest},
 		groups::{
 			ApplyContext,
 			CommandError,
@@ -21,10 +21,12 @@ use {
 			Index,
 			IndexRange,
 			StateMachine,
-			StateSyncContext,
+			SyncContext,
 			Term,
 		},
+		primitives::UnboundedChannel,
 	},
+	chrono::{DateTime, Utc},
 	core::{any::type_name, cmp::Ordering},
 	serde::{Deserialize, Serialize},
 	tokio::sync::{broadcast, mpsc::UnboundedSender, watch},
@@ -37,7 +39,7 @@ pub type VecReader<T> = Vec<T, READER>;
 pub struct Vec<T: Value, const IS_WRITER: bool = WRITER> {
 	when: When,
 	group: Group<VecStateMachine<T>>,
-	snapshot: watch::Receiver<im::Vector<T>>,
+	data: watch::Receiver<im::Vector<T>>,
 }
 
 // read-only access, available to both readers and writers
@@ -46,14 +48,14 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// Time: O(1)
 	pub fn len(&self) -> usize {
-		self.snapshot.borrow().len()
+		self.data.borrow().len()
 	}
 
 	/// Test whether a vector is empty.
 	///
 	/// Time: O(1)
 	pub fn is_empty(&self) -> bool {
-		self.snapshot.borrow().is_empty()
+		self.data.borrow().is_empty()
 	}
 
 	/// Get the last element of a vector.
@@ -62,7 +64,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// Time: O(log n)
 	pub fn back(&self) -> Option<T> {
-		self.snapshot.borrow().back().cloned()
+		self.data.borrow().back().cloned()
 	}
 
 	/// Get the last element of a vector.
@@ -73,7 +75,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// Time: O(log n)
 	pub fn last(&self) -> Option<T> {
-		self.snapshot.borrow().last().cloned()
+		self.data.borrow().last().cloned()
 	}
 
 	/// Get the first element of a vector.
@@ -82,7 +84,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// Time: O(log n)
 	pub fn front(&self) -> Option<T> {
-		self.snapshot.borrow().front().cloned()
+		self.data.borrow().front().cloned()
 	}
 
 	/// Get the first element of a vector.
@@ -93,7 +95,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// Time: O(log n)
 	pub fn head(&self) -> Option<T> {
-		self.snapshot.borrow().head().cloned()
+		self.data.borrow().head().cloned()
 	}
 
 	/// Test if a given element is in the vector.
@@ -104,7 +106,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// Time: O(n)
 	pub fn contains(&self, value: &T) -> bool {
-		self.snapshot.borrow().clone().contains(value)
+		self.data.borrow().clone().contains(value)
 	}
 
 	/// Get a clone of the value at index `index` in a vector.
@@ -113,7 +115,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// Time: O(log n)
 	pub fn get(&self, index: u64) -> Option<T> {
-		self.snapshot.borrow().get(index as usize).cloned()
+		self.data.borrow().get(index as usize).cloned()
 	}
 
 	/// Get the index of a given element in the vector.
@@ -124,17 +126,12 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// Time: O(n)
 	pub fn index_of(&self, value: &T) -> Option<u64> {
-		self
-			.snapshot
-			.borrow()
-			.clone()
-			.index_of(value)
-			.map(|i| i as u64)
+		self.data.borrow().clone().index_of(value).map(|i| i as u64)
 	}
 
 	/// Get an iterator over a vector.
 	pub fn iter(&self) -> impl Iterator<Item = T> {
-		let iter_clone = self.snapshot.borrow().clone();
+		let iter_clone = self.data.borrow().clone();
 		iter_clone.into_iter()
 	}
 
@@ -315,22 +312,61 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 		store_id: crate::UniqueId,
 		sync_config: SyncConfig,
 	) -> VecWriter<T> {
-		let (machine, snapshot) = VecStateMachine::new(
+		let machine = VecStateMachine::new(
 			store_id, //
 			WRITER,
 			sync_config,
 		);
+
+		let data = machine.data();
 		let group = network
 			.groups()
 			.with_key(store_id.into())
 			.with_state_machine(machine)
 			.join();
+		let when = When::new(group.when().clone());
 
-		VecWriter::<T> {
-			when: When::new(group.when().clone()),
-			group,
-			snapshot,
-		}
+		VecWriter::<T> { when, group, data }
+	}
+
+	/// Create a new vector in reader mode.
+	///
+	/// The returned reader provides read-only access to the vector's contents.
+	/// Readers can be used by multiple nodes concurrently, and they will see all
+	/// changes made by any writer. However, readers cannot modify the vector, and
+	/// they will not be able to make any changes themselves. Readers have longer
+	/// election timeouts to reduce the likelihood of them being elected as
+	/// group leaders, which reduces latency for read operations.
+	///
+	/// This creates a new vector with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `reader` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different groups ids
+	/// and the resulting vectors will not be able to see each other. Make sure
+	/// that the sync configuration used for readers is compatible with the sync
+	/// configuration used for writers, otherwise the readers will not see any of
+	/// the writers' changes.
+	pub fn reader_with_sync_config(
+		network: &Network,
+		store_id: StoreId,
+		sync_config: SyncConfig,
+	) -> VecReader<T> {
+		let machine = VecStateMachine::new(
+			store_id, //
+			READER,
+			sync_config,
+		);
+
+		let data = machine.data();
+		let group = network
+			.groups()
+			.with_key(store_id.into())
+			.with_state_machine(machine)
+			.join();
+		let when = When::new(group.when().clone());
+
+		VecReader::<T> { when, group, data }
 	}
 
 	/// Create a new vector in writer mode.
@@ -366,48 +402,6 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	pub fn reader(network: &Network, store_id: StoreId) -> VecReader<T> {
 		Self::reader_with_sync_config(network, store_id, SyncConfig::default())
 	}
-
-	/// Create a new vector in reader mode.
-	///
-	/// The returned reader provides read-only access to the vector's contents.
-	/// Readers can be used by multiple nodes concurrently, and they will see all
-	/// changes made by any writer. However, readers cannot modify the vector, and
-	/// they will not be able to make any changes themselves. Readers have longer
-	/// election timeouts to reduce the likelihood of them being elected as
-	/// group leaders, which reduces latency for read operations.
-	///
-	/// This creates a new vector with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `reader` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different groups ids
-	/// and the resulting vectors will not be able to see each other. Make sure
-	/// that the sync configuration used for readers is compatible with the sync
-	/// configuration used for writers, otherwise the readers will not see any of
-	/// the writers' changes.
-	pub fn reader_with_sync_config(
-		network: &Network,
-		store_id: StoreId,
-		sync_config: SyncConfig,
-	) -> VecReader<T> {
-		let (machine, snapshot) = VecStateMachine::new(
-			store_id, //
-			READER,
-			sync_config,
-		);
-
-		let group = network
-			.groups()
-			.with_key(store_id.into())
-			.with_state_machine(machine)
-			.join();
-
-		VecReader::<T> {
-			when: When::new(group.when().clone()),
-			group,
-			snapshot,
-		}
-	}
 }
 
 // internal
@@ -438,8 +432,7 @@ struct VecStateMachine<T: Value> {
 	latest: watch::Sender<im::Vector<T>>,
 	store_id: StoreId,
 	is_writer: bool,
-	sync_config: SyncConfig,
-	snapshot_tx: broadcast::Sender<(SessionId, VecSnapshot<T>)>,
+	state_sync: SnapshotSync<Self>,
 }
 
 impl<T: Value> VecStateMachine<T> {
@@ -447,20 +440,24 @@ impl<T: Value> VecStateMachine<T> {
 		store_id: StoreId,
 		is_writer: bool,
 		sync_config: SyncConfig,
-	) -> (Self, watch::Receiver<im::Vector<T>>) {
+	) -> Self {
 		let data = im::Vector::new();
-		let (latest, snapshot) = watch::channel(data.clone());
-		(
-			Self {
-				data,
-				latest,
-				store_id,
-				is_writer,
-				sync_config,
-				snapshot_tx: broadcast::Sender::new(16),
-			},
-			snapshot,
-		)
+		let state_sync = SnapshotSync::new(sync_config, |request| {
+			VecCommand::TakeSnapshot(request)
+		});
+		let latest = watch::Sender::new(data.clone());
+
+		Self {
+			data,
+			latest,
+			store_id,
+			is_writer,
+			state_sync,
+		}
+	}
+
+	pub fn data(&self) -> watch::Receiver<im::Vector<T>> {
+		self.latest.subscribe()
 	}
 }
 
@@ -479,13 +476,13 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 		commands: impl IntoIterator<Item = Self::Command>,
 		ctx: &dyn ApplyContext,
 	) {
-		let mut batch_size = 0;
+		let mut commands_len = 0usize;
+		let mut sync_requests = vec![];
 		for command in commands {
 			match command {
 				VecCommand::Clear => {
 					self.data.clear();
 				}
-
 				VecCommand::Swap { i, j } => {
 					if i < self.data.len() as u64 && j < self.data.len() as u64 {
 						self.data.swap(i as usize, j as usize);
@@ -494,7 +491,6 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 				VecCommand::Insert { index, value } => {
 					self.data.insert(index as usize, value);
 				}
-
 				VecCommand::PushBack { value } => {
 					self.data.push_back(value);
 				}
@@ -520,12 +516,25 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 				VecCommand::Extend { entries } => {
 					self.data.extend(entries);
 				}
-				VecCommand::TakeSnapshot {
-					request_id,
-					requested_by,
-				} => {
-					todo!("take snapshot")
+				VecCommand::TakeSnapshot(request) => {
+					// take note of the snapshot request, we will take the actual snapshot
+					// after applying all commands from this batch.
+					if !self.state_sync.is_expired(&request) {
+						sync_requests.push(request);
+					}
 				}
+			}
+
+			commands_len += 1;
+		}
+
+		if !sync_requests.is_empty() {
+			let snapshot = self.create_snapshot();
+			let position = ctx.prev_committed() + commands_len as u64;
+			for request in sync_requests {
+				self
+					.state_sync
+					.serve_snapshot(request, position, snapshot.clone());
 			}
 		}
 
@@ -534,7 +543,7 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 
 	/// The group-key for a vector is derived from the store ID and the type of
 	/// the vector's elements. This ensures that different vectors (with different
-	/// store IDs or element types) will be in different
+	/// store IDs or element types) will be in different groups.
 	fn signature(&self) -> crate::UniqueId {
 		UniqueId::from("mosaik_collections_vec")
 			.derive(self.store_id)
@@ -548,7 +557,7 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 
 	/// This state machine uses the `SnapshotSync` state sync strategy.
 	fn state_sync(&self) -> Self::StateSync {
-		SnapshotSync::new(self.sync_config.clone())
+		self.state_sync.clone()
 	}
 
 	/// Readers have longer election timeouts to reduce the likelihood of them
@@ -562,14 +571,15 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 impl<T: Value> SnapshotStateMachine for VecStateMachine<T> {
 	type Snapshot = VecSnapshot<T>;
 
-	fn snapshot(
-		&self,
-		cx: &dyn StateSyncContext<SnapshotSync<Self>>,
-	) -> Self::Snapshot {
+	fn create_snapshot(&self) -> Self::Snapshot {
 		VecSnapshot {
-			position: cx.committed(),
 			data: self.data.clone(),
 		}
+	}
+
+	fn install_snapshot(&mut self, snapshot: Self::Snapshot) {
+		self.data = snapshot.data;
+		self.latest.send_replace(self.data.clone());
 	}
 }
 
@@ -577,49 +587,25 @@ impl<T: Value> SnapshotStateMachine for VecStateMachine<T> {
 #[serde(bound = "T: Value")]
 enum VecCommand<T> {
 	Clear,
-	Swap {
-		i: u64,
-		j: u64,
-	},
-	Insert {
-		index: u64,
-		value: T,
-	},
-	PushBack {
-		value: T,
-	},
-	PushFront {
-		value: T,
-	},
+	Swap { i: u64, j: u64 },
+	Insert { index: u64, value: T },
+	PushBack { value: T },
+	PushFront { value: T },
 	PopBack,
 	PopFront,
-	Remove {
-		index: u64,
-	},
-	Truncate {
-		len: u64,
-	},
-	Extend {
-		entries: std::vec::Vec<T>,
-	},
-	TakeSnapshot {
-		request_id: u64,
-		requested_by: PeerId,
-	},
+	Remove { index: u64 },
+	Truncate { len: u64 },
+	Extend { entries: std::vec::Vec<T> },
+	TakeSnapshot(SnapshotRequest),
 }
 
 #[derive(Debug, Clone)]
 pub struct VecSnapshot<T: Value> {
-	position: Index,
 	data: im::Vector<T>,
 }
 
 impl<T: Value> Snapshot for VecSnapshot<T> {
 	type Item = T;
-
-	fn position(&self) -> Index {
-		self.position
-	}
 
 	fn len(&self) -> u64 {
 		self.data.len() as u64
@@ -636,6 +622,18 @@ impl<T: Value> Snapshot for VecSnapshot<T> {
 			return None;
 		}
 
-		Some(self.data.iter().skip(skip).take(take).cloned())
+		Some(self.data.skip(skip).take(take).into_iter())
+	}
+
+	fn append(&mut self, items: impl IntoIterator<Item = Self::Item>) {
+		self.data.extend(items);
+	}
+}
+
+impl<T: Value> Default for VecSnapshot<T> {
+	fn default() -> Self {
+		Self {
+			data: im::Vector::new(),
+		}
 	}
 }

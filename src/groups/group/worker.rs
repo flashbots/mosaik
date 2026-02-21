@@ -152,7 +152,7 @@ where
 				_ = self.work_queue.next() => { }
 
 				// polls the consensus protocol and drives its execution
-				() = poll_fn(|cx| self.raft.poll_next_tick(cx)) => { }
+				() = poll_fn(|cx| self.raft.poll(cx)) => { }
 
 				// Triggered when there are changes to the discovery catalog
 				_ = catalog.changed() => {

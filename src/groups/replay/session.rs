@@ -6,8 +6,8 @@ use {
 			Cursor,
 			Index,
 			StateMachine,
-			StateSyncContext,
 			StateSyncSession,
+			SyncSessionContext,
 			Term,
 		},
 		primitives::{AsyncWorkQueue, Pretty, Short, UnboundedChannel},
@@ -69,7 +69,7 @@ pub struct LogReplaySession<M: StateMachine> {
 	// pending background tasks
 	tasks: AsyncWorkQueue,
 
-	/// Wakers for `poll_next_tick` calls that are waiting for the catch-up
+	/// Wakers for `poll` calls that are waiting for the catch-up
 	/// process to make some progress.
 	wakers: Vec<Waker>,
 
@@ -100,7 +100,7 @@ where
 impl<M: StateMachine> LogReplaySession<M> {
 	pub(super) fn new(
 		config: &Config,
-		cx: &dyn StateSyncContext<LogReplaySync<M>>,
+		cx: &dyn SyncSessionContext<LogReplaySync<M>>,
 		position: Cursor,
 		entries: Vec<(M::Command, Term)>,
 	) -> Self {
@@ -110,12 +110,9 @@ impl<M: StateMachine> LogReplaySession<M> {
 
 		assert_ne!(
 			total, 0,
-			"no need to create a sync session if we're not behind"
+			"no need to create a sync session if we're not behind, local: \
+			 {local_pos}, target: {position}"
 		);
-
-		let leader = cx
-			.leader()
-			.expect("always known when creating a new sync session; qed");
 
 		let tasks = AsyncWorkQueue::default();
 		let terminations = UnboundedChannel::default();
@@ -133,8 +130,8 @@ impl<M: StateMachine> LogReplaySession<M> {
 		let watcher = cx.bonds();
 		tasks.enqueue(async move {
 			loop {
-				// just wake the scheduler, the next `poll_next_tick` will detect
-				// the changes and update the known bonds and availability sets.
+				// just wake the scheduler, the next `poll` will detect the
+				// changes and update the known bonds and availability sets.
 				watcher.changed().await;
 			}
 		});
@@ -143,9 +140,9 @@ impl<M: StateMachine> LogReplaySession<M> {
 
 		Self {
 			gap,
-			leader,
 			tasks,
 			terminations,
+			leader: cx.leader(),
 			config: config.clone(),
 			buffered: entries
 				.into_iter()
@@ -164,7 +161,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 		}
 	}
 
-	/// Triggers a new `poll_next_tick` call by the group worker.
+	/// Triggers a new `poll` call by the group worker.
 	fn wake_all(&mut self) {
 		for waker in self.wakers.drain(..) {
 			waker.wake();
@@ -199,7 +196,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 	fn poll_timeouts(
 		&mut self,
 		poll_cx: &mut Context<'_>,
-		sync_cx: &mut dyn StateSyncContext<LogReplaySync<M>>,
+		sync_cx: &mut dyn SyncSessionContext<LogReplaySync<M>>,
 	) {
 		let mut timed_out = Vec::new();
 
@@ -235,7 +232,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 	/// set.
 	fn poll_new_bonds(
 		&mut self,
-		cx: &mut dyn StateSyncContext<LogReplaySync<M>>,
+		cx: &mut dyn SyncSessionContext<LogReplaySync<M>>,
 	) {
 		let current: HashSet<PeerId> =
 			cx.bonds().iter().map(|b| *b.peer().id()).collect();
@@ -270,7 +267,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 	/// unscheduled gaps.
 	fn schedule_fetches(
 		&mut self,
-		sync_cx: &mut dyn StateSyncContext<LogReplaySync<M>>,
+		sync_cx: &mut dyn SyncSessionContext<LogReplaySync<M>>,
 	) {
 		let chunk_size = self.config.batch_size;
 
@@ -341,7 +338,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 		&mut self,
 		peer: PeerId,
 		range: RangeInclusive<Index>,
-		sync_cx: &mut dyn StateSyncContext<LogReplaySync<M>>,
+		sync_cx: &mut dyn SyncSessionContext<LogReplaySync<M>>,
 	) {
 		tracing::trace!(
 			peer = %Short(peer),
@@ -368,12 +365,12 @@ impl<M: StateMachine> LogReplaySession<M> {
 	/// `AvailabilityResponse` message indicating that it has the missing log
 	/// entries available for fetching in the specified range. This method
 	/// updates the scheduler's availability tracking and triggers a new
-	/// `poll_next_tick` to schedule fetches from the newly available peer.
+	/// `poll` to schedule fetches from the newly available peer.
 	fn on_availability_response(
 		&mut self,
 		peer: PeerId,
 		available: RangeInclusive<Index>,
-		cx: &dyn StateSyncContext<LogReplaySync<M>>,
+		cx: &dyn SyncSessionContext<LogReplaySync<M>>,
 	) {
 		self.availability.insert(peer, available);
 
@@ -418,7 +415,7 @@ impl<M: StateMachine> LogReplaySession<M> {
 	fn drain_fetched_entries(
 		&mut self,
 		poll_cx: &Context<'_>,
-		sync_cx: &mut dyn StateSyncContext<LogReplaySync<M>>,
+		sync_cx: &mut dyn SyncSessionContext<LogReplaySync<M>>,
 	) {
 		let mut cursor = *self.gap.start();
 
@@ -471,7 +468,10 @@ impl<M: StateMachine> LogReplaySession<M> {
 	/// Called when the gap has been fully filled with fetched entries and the
 	/// follower is now in sync with the leader. This applies any buffered entries
 	/// received during the catch-up process and finalizes the sync session.
-	fn finalize_sync(&mut self, cx: &mut dyn StateSyncContext<LogReplaySync<M>>) {
+	fn finalize_sync(
+		&mut self,
+		cx: &mut dyn SyncSessionContext<LogReplaySync<M>>,
+	) {
 		let mut pos = self.gap.end().next();
 
 		if !self.buffered.is_empty() {
@@ -498,10 +498,10 @@ impl<M: StateMachine> LogReplaySession<M> {
 impl<M: StateMachine> StateSyncSession for LogReplaySession<M> {
 	type Owner = LogReplaySync<M>;
 
-	fn poll_next_tick(
+	fn poll(
 		&mut self,
 		poll_cx: &mut Context<'_>,
-		sync_cx: &mut dyn StateSyncContext<LogReplaySync<M>>,
+		sync_cx: &mut dyn SyncSessionContext<LogReplaySync<M>>,
 	) -> Poll<Cursor> {
 		self.wakers.push(poll_cx.waker().clone());
 
@@ -548,7 +548,7 @@ impl<M: StateMachine> StateSyncSession for LogReplaySession<M> {
 		&mut self,
 		message: LogReplaySyncMessage<M::Command>,
 		sender: crate::PeerId,
-		cx: &mut dyn StateSyncContext<LogReplaySync<M>>,
+		cx: &mut dyn SyncSessionContext<LogReplaySync<M>>,
 	) {
 		match message {
 			LogReplaySyncMessage::AvailabilityResponse(range) => {
@@ -567,7 +567,7 @@ impl<M: StateMachine> StateSyncSession for LogReplaySession<M> {
 		&mut self,
 		position: Cursor,
 		entries: Vec<(M::Command, Term)>,
-		_: &mut dyn StateSyncContext<LogReplaySync<M>>,
+		_: &mut dyn SyncSessionContext<LogReplaySync<M>>,
 	) {
 		let pos = position.index().next();
 		self.buffered.extend(

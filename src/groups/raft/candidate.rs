@@ -139,7 +139,7 @@ impl<M: StateMachine> Candidate<M> {
 	/// Returns `Poll::Ready(ControlFlow::Break(new_role))` if the role should
 	/// transition to a new state (e.g., follower or leader) or `Poll::Pending`
 	/// if it should continue waiting in the candidate state.
-	pub fn poll_next_tick<S: Storage<M::Command>>(
+	pub fn poll<S: Storage<M::Command>>(
 		&mut self,
 		cx: &mut Context,
 		shared: &mut Shared<S, M>,

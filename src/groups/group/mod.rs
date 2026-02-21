@@ -207,13 +207,12 @@ impl<M: StateMachine> Group<M> {
 		&self,
 		commands: impl IntoIterator<Item = M::Command>,
 	) -> Result<IndexRange, CommandError<M>> {
-		let Some(sender) = self
+		#[allow(clippy::missing_panics_doc)]
+		let sender = self
 			.state
 			.raft_cmd_tx
 			.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
-		else {
-			unreachable!("invalid raft_tx type. this is a bug.");
-		};
+			.expect("invalid raft_tx type. this is a bug.");
 
 		let commands: Vec<_> = commands.into_iter().collect();
 
@@ -252,13 +251,12 @@ impl<M: StateMachine> Group<M> {
 		query: M::Query,
 		consistency: Consistency,
 	) -> Result<CommittedQueryResult<M>, QueryError<M>> {
-		let Some(sender) = self
+		#[allow(clippy::missing_panics_doc)]
+		let sender = self
 			.state
 			.raft_cmd_tx
 			.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
-		else {
-			unreachable!("invalid raft_tx type. this is a bug.");
-		};
+			.expect("invalid raft_tx type. this is a bug.");
 
 		let (result_tx, result_rx) = oneshot::channel();
 		if let Err(SendError(WorkerRaftCommand::Query(_, _, _))) =
