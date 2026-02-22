@@ -33,7 +33,8 @@ pub(super) struct SnapshotSyncInner<M: SnapshotStateMachine> {
 	config: Config,
 	to_command: SyncInitCommand<M>,
 	requests_tx: UnboundedSender<(SnapshotRequest, Cursor, M::Snapshot)>,
-	requests_rx: Option<UnboundedReceiver<(SnapshotRequest, Cursor, M::Snapshot)>>,
+	requests_rx:
+		Option<UnboundedReceiver<(SnapshotRequest, Cursor, M::Snapshot)>>,
 }
 
 impl<M: SnapshotStateMachine> SnapshotSyncInner<M> {
@@ -51,17 +52,7 @@ impl<M: SnapshotStateMachine> SnapshotSyncInner<M> {
 	}
 
 	pub fn is_expired(&self, request: &SnapshotRequest) -> bool {
-		let Ok(elapsed) = Utc::now()
-			.signed_duration_since(request.requested_at)
-			.abs()
-			.to_std()
-		else {
-			// if the request timestamp is in the future for some reason, consider it
-			// expired to be safe.
-			return true;
-		};
-
-		elapsed > self.config.snapshot_ttl
+		self.config.is_expired(request)
 	}
 
 	pub fn serve_snapshot(

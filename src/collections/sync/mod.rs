@@ -104,7 +104,13 @@ pub struct Config {
 	/// The batch size for snapshot data transfer during the sync process.
 	fetch_batch_size: u64,
 
-	/// The time-to-live for snapshot requests.
+	/// The time-to-live for active snapshot.
+	///
+	/// Snapshots are considered active from the moment they were last interacted
+	/// with (either created or fetched from) and until they have been inactive
+	/// for this duration. Providers will ignore sync requests that are older
+	/// than this duration and will discard snapshots that have been inactive for
+	/// this duration as well.
 	snapshot_ttl: Duration,
 
 	/// How long to wait for a `SnapshotReady` response before retrying the
@@ -131,20 +137,16 @@ impl Config {
 		self
 	}
 
-	/// The time-to-live for snapshot requests. If a snapshot command is applied
-	/// to the log at a timestamp that is this later than the timestamp of
-	/// the snapshot request by this duration, the provider should ignore the
-	/// request and not create a snapshot for it.
+	/// The time-to-live for active snapshot.
 	///
-	/// Snapshots on providers are discarded after they have been inactive for
-	/// this duration as well. Each fetch request for a snapshot will reset the
-	/// timer for that snapshot.
+	/// Snapshots are considered active from the moment they were last interacted
+	/// with (either created or fetched from) and until they have been inactive
+	/// for this duration. Providers will ignore sync requests that are older
+	/// than this duration and will discard snapshots that have been inactive for
+	/// this duration as well.
 	#[must_use]
-	pub const fn with_snapshot_request_ttl(
-		mut self,
-		snapshot_request_ttl: Duration,
-	) -> Self {
-		self.snapshot_ttl = snapshot_request_ttl;
+	pub const fn with_snapshot_ttl(mut self, snapshot_ttl: Duration) -> Self {
+		self.snapshot_ttl = snapshot_ttl;
 		self
 	}
 
@@ -167,6 +169,25 @@ impl Config {
 	pub const fn with_fetch_timeout(mut self, fetch_timeout: Duration) -> Self {
 		self.fetch_timeout = fetch_timeout;
 		self
+	}
+}
+
+impl Config {
+	/// Returns true if the given snapshot request is considered stale and should
+	/// be ignored by the provider when it is replicated in the log, false
+	/// otherwise.
+	pub(super) fn is_expired(&self, request: &SnapshotRequest) -> bool {
+		let Ok(elapsed) = Utc::now()
+			.signed_duration_since(request.requested_at)
+			.abs()
+			.to_std()
+		else {
+			// if the request timestamp is in the future for some reason, consider it
+			// expired to be safe.
+			return true;
+		};
+
+		elapsed > self.snapshot_ttl
 	}
 }
 

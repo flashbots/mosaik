@@ -79,6 +79,11 @@ pub enum BondMessage {
 	/// Response to a `Ping` message.
 	Pong,
 
+	/// Voluntarily sent by a node to the group when it is leaving, so nodes don't
+	/// need to wait for heartbeat timeouts to detect that a node has left and
+	/// can adjust their quorums
+	Departure,
+
 	/// Broadcasted to all bonded peers when the local peer's discovery entry
 	/// changes to propagate the update quickly to all group members.
 	PeerEntryUpdate(Box<SignedPeerEntry>),

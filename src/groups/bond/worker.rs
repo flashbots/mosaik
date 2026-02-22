@@ -237,6 +237,7 @@ impl BondWorker {
 				match message {
 					BondMessage::Pong => {}
 					BondMessage::Ping => self.on_heartbeat_ping(),
+					BondMessage::Departure => self.on_departure(),
 					BondMessage::PeerEntryUpdate(entry) => {
 						self.on_peer_entry_update(*entry);
 					}
@@ -264,6 +265,20 @@ impl BondWorker {
 
 				self.cancel.cancel();
 			}
+		}
+	}
+
+	/// Called when the remote peer voluntarily leaves the group and sends a
+	/// `Departure` message. This allows us to immediately terminate the bond.
+	fn on_departure(&self) {
+		if !self.cancel.is_cancelled() {
+			tracing::trace!(
+				peer = %Short(self.link.remote_id()),
+				network = %self.group.network_id(),
+				group = %Short(self.group.group_id()),
+				"voluntarily left the group",
+			);
+			self.cancel.cancel();
 		}
 	}
 

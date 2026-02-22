@@ -16,6 +16,7 @@ use {
 		primitives::Short,
 	},
 	core::{fmt, marker::PhantomData},
+	dashmap::DashMap,
 	derive_more::Deref,
 	serde::{Deserialize, Serialize},
 	state::WorkerState,
@@ -69,6 +70,10 @@ pub struct CommittedQueryResult<M: StateMachine> {
 /// the `GroupId` of this group.
 pub struct Group<M: StateMachine> {
 	state: Arc<WorkerState>,
+
+	/// A reference to the global map of all active groups in the local node,
+	/// which is used when the group is dropped to remove itself from the map.
+	groups: Arc<DashMap<GroupId, Arc<WorkerState>>>,
 
 	#[doc(hidden)]
 	_p: PhantomData<M>,
@@ -273,6 +278,14 @@ impl<M: StateMachine> Group<M> {
 	}
 }
 
+impl<M: StateMachine> Drop for Group<M> {
+	fn drop(&mut self) {
+		self.state.bonds.notify_departure();
+		self.state.cancel.cancel();
+		self.groups.remove(self.id());
+	}
+}
+
 impl<M: StateMachine> CommittedQueryResult<M> {
 	/// Consumes the `CommittedQueryResult` and returns the inner query result.
 	pub fn into(self) -> M::QueryResult {
@@ -311,9 +324,13 @@ where
 
 // Internal APIs
 impl<M: StateMachine> Group<M> {
-	pub(super) const fn new(state: Arc<WorkerState>) -> Self {
+	pub(super) const fn new(
+		state: Arc<WorkerState>,
+		groups: Arc<DashMap<GroupId, Arc<WorkerState>>>,
+	) -> Self {
 		Self {
 			state,
+			groups,
 			_p: PhantomData,
 		}
 	}

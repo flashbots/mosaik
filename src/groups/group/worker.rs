@@ -210,7 +210,7 @@ where
 		tracing::debug!(
 			group = %Short(self.state.group_id()),
 			network = %self.state.network_id(),
-			"leaving group",
+			"leaving",
 		);
 	}
 

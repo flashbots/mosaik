@@ -170,7 +170,9 @@ where
 
 		let group_id = *config.group_id();
 		match self.groups.active.entry(group_id) {
-			Entry::Occupied(existing) => existing.get().public_handle::<M>(),
+			Entry::Occupied(existing) => {
+				existing.get().public_handle::<M>(&self.groups.active)
+			}
 			Entry::Vacant(place) => {
 				let worker = Worker::<S, M>::spawn(
 					self.groups,
@@ -178,7 +180,7 @@ where
 					self.storage,
 					self.state_machine,
 				);
-				place.insert(worker).public_handle::<M>()
+				place.insert(worker).public_handle::<M>(&self.groups.active)
 			}
 		}
 	}

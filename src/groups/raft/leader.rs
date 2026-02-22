@@ -434,7 +434,7 @@ impl<M: StateMachine> Leader<M> {
 				ix_range = %Pretty(&range),
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
-				"broadcasted {count} new log entries to",
+				"broadcasting {count} new log entries to",
 			);
 		}
 

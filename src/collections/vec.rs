@@ -528,11 +528,6 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 					{
 						// take note of the snapshot request, we will take the actual
 						// snapshot after applying all commands from this batch.
-						tracing::info!(
-							"..--> Received snapshot request from {}, local_id = {}",
-							Short(request.requested_by),
-							Short(self.local_id)
-						);
 						sync_requests.push(request);
 					}
 				}

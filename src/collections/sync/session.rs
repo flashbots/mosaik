@@ -197,10 +197,13 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 	///
 	/// If no buffered entries exist, any anchor is valid (the buffer will be
 	/// populated later from the leader).
-	fn try_select_anchor(&mut self) -> bool {
+	fn try_select_anchor(
+		&mut self,
+		cx: &dyn SyncSessionContext<SnapshotSync<M>>,
+	) -> bool {
 		if self.anchor.is_some() {
 			// Already selected — check for upgrade
-			return self.try_upgrade_anchor();
+			return self.try_upgrade_anchor(cx);
 		}
 
 		let earliest_buf = self.earliest_buffered();
@@ -216,7 +219,9 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 			if valid {
 				tracing::info!(
 					anchor = %anchor_cursor,
-					len = info.len,
+					items = info.len,
+					group = %Short(cx.group_id()),
+					network = %Short(cx.network_id()),
 					"selected snapshot anchor"
 				);
 
@@ -248,7 +253,10 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 	/// Check if a higher anchor has become available and upgrade to it,
 	/// discarding any in-progress fetch state. This is safe because all
 	/// snapshot-ready peers have the full snapshot.
-	fn try_upgrade_anchor(&mut self) -> bool {
+	fn try_upgrade_anchor(
+		&mut self,
+		cx: &dyn SyncSessionContext<SnapshotSync<M>>,
+	) -> bool {
 		let Some(current) = self.anchor else {
 			return false;
 		};
@@ -269,6 +277,8 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 				old_anchor = %current,
 				new_anchor = %new_anchor,
 				len = info.len,
+				group = %Short(cx.group_id()),
+				network = %Short(cx.network_id()),
 				"upgrading snapshot anchor"
 			);
 
@@ -303,13 +313,13 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 		info: SnapshotInfo,
 		cx: &dyn SyncSessionContext<SnapshotSync<M>>,
 	) {
-		tracing::info!(
+		tracing::debug!(
 			from = %Short(peer),
 			anchor = %info.anchor,
-			len = info.len,
+			items = info.len,
 			group = %Short(cx.group_id()),
 			network = %Short(cx.network_id()),
-			"received snapshot ready"
+			"snapshot available"
 		);
 
 		// Stop retrying RequestSnapshot after the first SnapshotReady
@@ -338,7 +348,7 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 		}
 
 		// Try to select or upgrade the anchor
-		self.try_select_anchor();
+		self.try_select_anchor(cx);
 
 		self.wake_all();
 	}
@@ -545,11 +555,11 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 	) {
 		tracing::trace!(
 			peer = %Short(peer),
-			anchor = %anchor,
 			range = ?range,
+			anchor = %anchor,
 			group = %Short(sync_cx.group_id()),
 			network = %Short(sync_cx.network_id()),
-			"requesting snapshot data from"
+			"syncing from"
 		);
 
 		sync_cx.send_to(
@@ -601,9 +611,11 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 
 			tracing::debug!(
 				range = ?(start..end),
+				total = self.total,
+				downloaded = self.downloaded,
 				group = %Short(sync_cx.group_id()),
 				network = %Short(sync_cx.network_id()),
-				"snapshot sync {progress:.1}% complete",
+				"syncing snapshot {progress:.1}%",
 			);
 
 			cursor = end;
@@ -706,7 +718,7 @@ impl<M: SnapshotStateMachine> StateSyncSession for SnapshotSyncSession<M> {
 		self.poll_snapshot_request_timeout(poll_cx, sync_cx);
 
 		// 3. Try to select or upgrade anchor if we haven't yet
-		self.try_select_anchor();
+		self.try_select_anchor(sync_cx);
 
 		// 4. Drain any fetched items that have become contiguous
 		self.drain_fetched_items(poll_cx, sync_cx);

@@ -476,6 +476,14 @@ impl Bonds {
 		]);
 	}
 
+	/// Notifies all active bonds that the bond with the specified peer has
+	/// been terminated voluntarily by the remote peer, so they don't need to wait
+	/// for heartbeat timeouts to detect that the peer has left and can adjust
+	/// their quorums.
+	pub(super) fn notify_departure(&self) {
+		self.broadcast(&BondMessage::Departure, &[]);
+	}
+
 	/// Sends a raft protocol message to all bonded peers.
 	pub(super) fn broadcast_raft<M: StateMachine>(
 		&self,

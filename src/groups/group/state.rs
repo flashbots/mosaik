@@ -23,6 +23,7 @@ use {
 		network::{LocalNode, link::Link},
 	},
 	core::any::{Any, TypeId},
+	dashmap::DashMap,
 	iroh::protocol::AcceptError,
 	std::sync::Arc,
 	tokio::sync::{
@@ -148,9 +149,12 @@ impl WorkerState {
 	///
 	/// Panics if the provided state machine type does not match the one used by
 	/// this group.
-	pub fn public_handle<M: StateMachine>(self: &Arc<Self>) -> Group<M> {
+	pub fn public_handle<M: StateMachine>(
+		self: &Arc<Self>,
+		groups: &Arc<DashMap<GroupId, Arc<Self>>>,
+	) -> Group<M> {
 		assert_eq!(self.state_machine_type(), TypeId::of::<M>());
-		Group::new(Arc::clone(self))
+		Group::new(Arc::clone(self), Arc::clone(groups))
 	}
 
 	/// Accepts an incoming bond connection for this group.

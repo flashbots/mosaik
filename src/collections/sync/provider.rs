@@ -200,10 +200,11 @@ impl<M: SnapshotStateMachine> SnapshotSyncProvider<M> {
 				.is_ready()
 			{
 				for (request, position, snapshot) in requests {
-					if request.requested_by == sync_cx.local_id() {
-						// this is our own request, we can ignore it since we will
-						// have the snapshot available locally as soon as it's
-						// committed.
+					if request.requested_by == sync_cx.local_id()
+						|| self.config.is_expired(&request)
+					{
+						// ignore requests that were made by this node or are stale by the
+						// time they are being processed.
 						continue;
 					}
 
@@ -231,6 +232,15 @@ impl<M: SnapshotStateMachine> SnapshotSyncProvider<M> {
 							len,
 						}
 						.into(),
+					);
+
+					tracing::trace!(
+						to = %Short(request.requested_by),
+						anchor = %position,
+						items = len,
+						group = %sync_cx.group_id(),
+						network = %sync_cx.network_id(),
+						"offering snapshot"
 					);
 				}
 			}
