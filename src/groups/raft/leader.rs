@@ -302,6 +302,15 @@ impl<M: StateMachine> Leader<M> {
 				// check with the state sync provider if we can prune any log entries up
 				// to the new committed index after advancing the commit index.
 				shared.prune_safe_prefix();
+
+				// Trigger an immediate heartbeat so followers learn about the
+				// new commit index without waiting for the next heartbeat
+				// interval. This is important for state sync: when a
+				// TakeSnapshot command is committed, all in-sync followers
+				// should process it promptly so they can start serving
+				// snapshot data to catching-up peers in parallel with the
+				// leader.
+				self.schedule_immediate_heartbeat();
 			}
 		}
 	}
@@ -349,6 +358,10 @@ impl<M: StateMachine> Leader<M> {
 				// check with the state sync provider if we can prune any log entries up
 				// to the new committed index after advancing the commit index.
 				shared.prune_safe_prefix();
+
+				// Trigger an immediate heartbeat so followers learn about the
+				// new commit index promptly.
+				self.schedule_immediate_heartbeat();
 			}
 		}
 	}
@@ -464,6 +477,21 @@ impl<M: StateMachine> Leader<M> {
 
 		for waker in self.wakers.drain(..) {
 			waker.wake();
+		}
+	}
+
+	/// Resets the heartbeat timer to fire immediately and wakes the poll loop
+	/// so that the next leader tick sends an empty `AppendEntries` with the
+	/// latest `leader_commit` to all followers. This ensures that followers
+	/// learn about newly committed entries without waiting for the regular
+	/// heartbeat interval.
+	fn schedule_immediate_heartbeat(&mut self) {
+		if self.client_commands.is_empty() {
+			self.heartbeat_timeout.as_mut().reset(Instant::now().into());
+
+			for waker in self.wakers.drain(..) {
+				waker.wake();
+			}
 		}
 	}
 }
