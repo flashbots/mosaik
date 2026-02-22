@@ -52,7 +52,7 @@ impl<M: StateMachine> StateSyncProvider for LogReplayProvider<M> {
 		match message {
 			LogReplaySyncMessage::AvailabilityRequest => {
 				let available = cx.log().available();
-				let committed = cx.committed();
+				let committed = cx.committed().index();
 				let available = *available.start()..=committed.min(*available.end());
 
 				tracing::trace!(

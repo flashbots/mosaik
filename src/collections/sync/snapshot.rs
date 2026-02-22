@@ -1,8 +1,9 @@
 use {
 	crate::{
 		collections::sync::SnapshotStateMachine,
-		groups::{Index, IndexRange, Term},
+		groups::{Index, Term},
 	},
+	core::ops::Range,
 	serde::{Serialize, de::DeserializeOwned},
 };
 
@@ -38,7 +39,7 @@ pub trait Snapshot: Default + Clone + Send + 'static {
 	/// Implementation should either return the full range of items or `None`.
 	fn iter_range(
 		&self,
-		range: IndexRange,
+		range: Range<u64>,
 	) -> Option<impl Iterator<Item = Self::Item>>;
 
 	/// Appends the given items to the snapshot.

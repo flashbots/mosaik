@@ -32,8 +32,8 @@ use {
 pub(super) struct SnapshotSyncInner<M: SnapshotStateMachine> {
 	config: Config,
 	to_command: SyncInitCommand<M>,
-	requests_tx: UnboundedSender<(SnapshotRequest, Index, M::Snapshot)>,
-	requests_rx: Option<UnboundedReceiver<(SnapshotRequest, Index, M::Snapshot)>>,
+	requests_tx: UnboundedSender<(SnapshotRequest, Cursor, M::Snapshot)>,
+	requests_rx: Option<UnboundedReceiver<(SnapshotRequest, Cursor, M::Snapshot)>>,
 }
 
 impl<M: SnapshotStateMachine> SnapshotSyncInner<M> {
@@ -67,7 +67,7 @@ impl<M: SnapshotStateMachine> SnapshotSyncInner<M> {
 	pub fn serve_snapshot(
 		&self,
 		request: SnapshotRequest,
-		position: Index,
+		position: Cursor,
 		snapshot: M::Snapshot,
 	) {
 		let _ = self.requests_tx.send((request, position, snapshot));
@@ -81,6 +81,14 @@ impl<M: SnapshotStateMachine> SnapshotSyncInner<M> {
 			.derive(type_name::<M>())
 			.derive(self.config.fetch_batch_size.to_le_bytes())
 			.derive(self.config.snapshot_ttl.as_millis().to_le_bytes())
+			.derive(
+				self
+					.config
+					.snapshot_request_timeout
+					.as_millis()
+					.to_le_bytes(),
+			)
+			.derive(self.config.fetch_timeout.as_millis().to_le_bytes())
 	}
 
 	pub fn create_provider(

@@ -4,10 +4,12 @@ use {
 	core::{
 		any::type_name,
 		marker::PhantomData,
+		ops::Range,
 		task::{Context, Poll},
 		time::Duration,
 	},
 	derive_more::From,
+	inner::SnapshotSyncInner,
 	provider::SnapshotSyncProvider,
 	serde::{Deserialize, Serialize, de::DeserializeOwned},
 	session::SnapshotSyncSession,
@@ -69,7 +71,7 @@ pub use snapshot::{Snapshot, SnapshotItem};
 ///    point the follower is fully synced and can start applying new commands
 ///    from the log as they come in.
 pub struct SnapshotSync<M: SnapshotStateMachine>(
-	Arc<RwLock<inner::SnapshotSyncInner<M>>>,
+	Arc<RwLock<SnapshotSyncInner<M>>>,
 );
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +106,14 @@ pub struct Config {
 
 	/// The time-to-live for snapshot requests.
 	snapshot_ttl: Duration,
+
+	/// How long to wait for a `SnapshotReady` response before retrying the
+	/// `RequestSnapshot` message to the (possibly new) leader.
+	snapshot_request_timeout: Duration,
+
+	/// How long to wait for a `FetchDataResponse` before considering the
+	/// request timed out and removing the peer from availability.
+	fetch_timeout: Duration,
 }
 
 impl Config {
@@ -137,6 +147,27 @@ impl Config {
 		self.snapshot_ttl = snapshot_request_ttl;
 		self
 	}
+
+	/// How long to wait for a `SnapshotReady` response from the leader before
+	/// retrying the `RequestSnapshot` message. This timeout resets each time a
+	/// retry is sent and is disabled once the first `SnapshotReady` arrives.
+	#[must_use]
+	pub const fn with_snapshot_request_timeout(
+		mut self,
+		snapshot_request_timeout: Duration,
+	) -> Self {
+		self.snapshot_request_timeout = snapshot_request_timeout;
+		self
+	}
+
+	/// How long to wait for a `FetchDataResponse` from a peer before
+	/// considering the in-flight request timed out and removing the peer
+	/// from availability tracking.
+	#[must_use]
+	pub const fn with_fetch_timeout(mut self, fetch_timeout: Duration) -> Self {
+		self.fetch_timeout = fetch_timeout;
+		self
+	}
 }
 
 impl Default for Config {
@@ -144,6 +175,8 @@ impl Default for Config {
 		Self {
 			fetch_batch_size: 200,
 			snapshot_ttl: Duration::from_secs(10),
+			snapshot_request_timeout: Duration::from_secs(15),
+			fetch_timeout: Duration::from_secs(5),
 		}
 	}
 }
@@ -159,9 +192,8 @@ impl<M: SnapshotStateMachine> SnapshotSync<M> {
 		config: Config,
 		to_command: impl Fn(SnapshotRequest) -> M::Command + Send + Sync + 'static,
 	) -> Self {
-		Self(Arc::new(RwLock::new(inner::SnapshotSyncInner::new(
-			config, to_command,
-		))))
+		let inner = SnapshotSyncInner::new(config, to_command);
+		Self(Arc::new(RwLock::new(inner)))
 	}
 }
 
@@ -209,7 +241,7 @@ impl<M: SnapshotStateMachine> SnapshotSync<M> {
 	pub fn serve_snapshot(
 		&self,
 		request: SnapshotRequest,
-		position: Index,
+		position: Cursor,
 		snapshot: M::Snapshot,
 	) {
 		self.0.read().serve_snapshot(request, position, snapshot);
@@ -225,22 +257,22 @@ pub enum SnapshotSyncMessage<T> {
 	FetchDataResponse(FetchDataResponse<T>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct SnapshotInfo {
-	pub anchor: Index,
+	pub anchor: Cursor,
 	pub len: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FetchDataRequest {
-	pub anchor: Index,
-	pub range: IndexRange,
+	pub anchor: Cursor,
+	pub range: Range<u64>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound = "T: SnapshotItem")]
 pub struct FetchDataResponse<T> {
-	pub anchor: Index,
-	pub range: IndexRange,
+	pub anchor: Cursor,
+	pub offset: u64,
 	pub items: Vec<T>,
 }

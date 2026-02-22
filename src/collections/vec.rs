@@ -18,16 +18,17 @@ use {
 			ApplyContext,
 			CommandError,
 			ConsensusConfig,
+			Cursor,
 			Index,
 			IndexRange,
 			StateMachine,
 			SyncContext,
 			Term,
 		},
-		primitives::UnboundedChannel,
+		primitives::{Short, UnboundedChannel},
 	},
 	chrono::{DateTime, Utc},
-	core::{any::type_name, cmp::Ordering},
+	core::{any::type_name, cmp::Ordering, ops::Range},
 	serde::{Deserialize, Serialize},
 	tokio::sync::{broadcast, mpsc::UnboundedSender, watch},
 };
@@ -316,6 +317,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 			store_id, //
 			WRITER,
 			sync_config,
+			network.local().id(),
 		);
 
 		let data = machine.data();
@@ -356,6 +358,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 			store_id, //
 			READER,
 			sync_config,
+			network.local().id(),
 		);
 
 		let data = machine.data();
@@ -433,6 +436,7 @@ struct VecStateMachine<T: Value> {
 	store_id: StoreId,
 	is_writer: bool,
 	state_sync: SnapshotSync<Self>,
+	local_id: PeerId,
 }
 
 impl<T: Value> VecStateMachine<T> {
@@ -440,6 +444,7 @@ impl<T: Value> VecStateMachine<T> {
 		store_id: StoreId,
 		is_writer: bool,
 		sync_config: SyncConfig,
+		local_id: PeerId,
 	) -> Self {
 		let data = im::Vector::new();
 		let state_sync = SnapshotSync::new(sync_config, |request| {
@@ -453,6 +458,7 @@ impl<T: Value> VecStateMachine<T> {
 			store_id,
 			is_writer,
 			state_sync,
+			local_id,
 		}
 	}
 
@@ -517,9 +523,16 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 					self.data.extend(entries);
 				}
 				VecCommand::TakeSnapshot(request) => {
-					// take note of the snapshot request, we will take the actual snapshot
-					// after applying all commands from this batch.
-					if !self.state_sync.is_expired(&request) {
+					if request.requested_by != self.local_id
+						&& !self.state_sync.is_expired(&request)
+					{
+						// take note of the snapshot request, we will take the actual
+						// snapshot after applying all commands from this batch.
+						tracing::info!(
+							"..--> Received snapshot request from {}, local_id = {}",
+							Short(request.requested_by),
+							Short(self.local_id)
+						);
 						sync_requests.push(request);
 					}
 				}
@@ -528,17 +541,21 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 			commands_len += 1;
 		}
 
+		self.latest.send_replace(self.data.clone());
+
 		if !sync_requests.is_empty() {
 			let snapshot = self.create_snapshot();
-			let position = ctx.prev_committed() + commands_len as u64;
+			let position = Cursor::new(
+				ctx.current_term(),
+				ctx.committed().index() + commands_len as u64,
+			);
+
 			for request in sync_requests {
 				self
 					.state_sync
 					.serve_snapshot(request, position, snapshot.clone());
 			}
 		}
-
-		self.latest.send_replace(self.data.clone());
 	}
 
 	/// The group-key for a vector is derived from the store ID and the type of
@@ -613,12 +630,12 @@ impl<T: Value> Snapshot for VecSnapshot<T> {
 
 	fn iter_range(
 		&self,
-		range: IndexRange,
+		range: Range<u64>,
 	) -> Option<impl Iterator<Item = Self::Item>> {
-		let skip = range.start().as_usize();
-		let take = (*range.end() - *range.start()).as_usize() + 1;
+		let skip = range.start as usize;
+		let take = (range.end - range.start) as usize;
 
-		if skip + take >= self.data.len() {
+		if skip + take > self.data.len() {
 			return None;
 		}
 

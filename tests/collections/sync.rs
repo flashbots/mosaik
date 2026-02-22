@@ -1,13 +1,15 @@
 use {
 	crate::utils::{discover_all, timeout_ms, timeout_s},
-	mosaik::{collections::SyncConfig, *},
+	mosaik::{collections::SyncConfig, primitives::Short, *},
 	rstest::rstest,
 };
 
 #[rstest]
 #[case(1, 100, false)]
+#[case(100, 30, false)]
 #[case(1000, 100, false)]
 #[case(10_000, 100, false)]
+#[case(10_000, 1000, false)]
 #[case(100_000, 100, false)]
 #[case(100_000, 100, true)]
 #[tokio::test]
@@ -44,7 +46,10 @@ async fn vec(
 	);
 
 	timeout_s(15, w0.when().online()).await?;
+	tracing::info!("w0 is online as {}", Short(n0.local().id()));
+
 	timeout_s(15, r1.when().online()).await?;
+	tracing::info!("r1 is online as {}", Short(n1.local().id()));
 
 	let mut ver = w0.version();
 	let start = std::time::Instant::now();
@@ -60,7 +65,7 @@ async fn vec(
 	}
 
 	let elapsed = start.elapsed();
-	tracing::info!("data appended in {elapsed:?}, final version: {ver}");
+	tracing::info!("vec populated in {elapsed:?}, final version: {ver}");
 
 	timeout_ms(2000 + 10 * data_size, w0.when().reaches(ver)).await?;
 	tracing::info!("w0 state committed version {ver} in {:?}", start.elapsed());
@@ -78,8 +83,8 @@ async fn vec(
 
 	let n2 = Network::new(network_id).await?;
 	discover_all([&n0, &n1, &n2]).await?;
+	tracing::info!("r2 joining the network as {}", Short(n2.local().id()));
 
-	tracing::info!("r2 joining the network");
 	let r2 = collections::Vec::<u64>::reader_with_sync_config(
 		&n2,
 		store_id,

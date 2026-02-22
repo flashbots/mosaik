@@ -207,7 +207,7 @@ impl<M: StateMachine> Leader<M> {
 			// todo: run queries in parallel.
 			Message::Forward(Forward::Query { query, request_id }) => {
 				let result = shared.state_machine().query(query);
-				let position = shared.committed();
+				let position = shared.committed().index();
 				shared.bonds().send_raft_to::<M>(
 					&Message::Forward(Forward::QueryResponse {
 						request_id,
@@ -398,7 +398,7 @@ impl<M: StateMachine> Leader<M> {
 
 		let message = Message::AppendEntries(AppendEntries {
 			term: self.term,
-			leader_commit: shared.committed(),
+			leader_commit: shared.committed().index(),
 			leader: shared.local_id(),
 			prev_log_position: prev_pos,
 			entries: entries
@@ -446,7 +446,7 @@ impl<M: StateMachine> Leader<M> {
 			leader: shared.local_id(),
 			prev_log_position: prev_pos,
 			entries: Vec::new(),
-			leader_commit: shared.committed(),
+			leader_commit: shared.committed().index(),
 		};
 
 		shared

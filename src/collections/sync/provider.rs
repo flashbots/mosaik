@@ -1,6 +1,7 @@
 use {
 	super::{
 		Config,
+		FetchDataResponse,
 		Snapshot,
 		SnapshotRequest,
 		SnapshotStateMachine,
@@ -41,18 +42,18 @@ pub struct SnapshotSyncProvider<M: SnapshotStateMachine> {
 
 	/// Receives snapshot requests from the state machine when they appear in the
 	/// log.
-	requests_rx: UnboundedReceiver<(SnapshotRequest, Index, M::Snapshot)>,
+	requests_rx: UnboundedReceiver<(SnapshotRequest, Cursor, M::Snapshot)>,
 
 	/// The list of available snapshots that can be served to followers, indexed
 	/// by their anchor position.
-	available: HashMap<Index, AvailableSnapshot<M>>,
+	available: HashMap<Cursor, AvailableSnapshot<M>>,
 }
 
 impl<M: SnapshotStateMachine> SnapshotSyncProvider<M> {
 	pub(super) fn new(
 		config: Config,
 		sync_init_cmd: SyncInitCommand<M>,
-		requests_rx: UnboundedReceiver<(SnapshotRequest, Index, M::Snapshot)>,
+		requests_rx: UnboundedReceiver<(SnapshotRequest, Cursor, M::Snapshot)>,
 		_cx: &dyn SyncContext<SnapshotSync<M>>,
 	) -> Self {
 		Self {
@@ -118,7 +119,7 @@ impl<M: SnapshotStateMachine> StateSyncProvider for SnapshotSyncProvider<M> {
 						"failed to schedule snapshot request"
 					);
 				} else {
-					tracing::info!(
+					tracing::trace!(
 						by = %Short(sender),
 						group = %cx.group_id(),
 						network = %cx.network_id(),
@@ -128,9 +129,58 @@ impl<M: SnapshotStateMachine> StateSyncProvider for SnapshotSyncProvider<M> {
 
 				Ok(())
 			}
-			SnapshotSyncMessage::FetchDataRequest(_) => todo!(),
+			SnapshotSyncMessage::FetchDataRequest(request) => {
+				// Look up the snapshot for the requested anchor
+				if let Some(available) = self.available.get_mut(&request.anchor) {
+					// Revive the snapshot TTL on each fetch
+					available.revive(self.config.snapshot_ttl);
+
+					if let Some(items) =
+						available.snapshot.iter_range(request.range.clone())
+					{
+						let items: std::vec::Vec<_> = items.collect();
+						cx.send_to(
+							sender,
+							SnapshotSyncMessage::FetchDataResponse(FetchDataResponse {
+								anchor: request.anchor,
+								offset: request.range.start,
+								items,
+							}),
+						);
+					} else {
+						tracing::warn!(
+							from = %Short(sender),
+							anchor = %request.anchor,
+							range = ?request.range,
+							group = %cx.group_id(),
+							network = %cx.network_id(),
+							"snapshot range out of bounds"
+						);
+					}
+				} else {
+					tracing::debug!(
+						from = %Short(sender),
+						anchor = %request.anchor,
+						group = %cx.group_id(),
+						network = %cx.network_id(),
+						"requested snapshot not available (expired or unknown)"
+					);
+				}
+
+				Ok(())
+			}
 			other => Err(other),
 		}
+	}
+
+	/// Snapshot-based sync does not need log entries for replay — committed
+	/// entries are safe to prune since lagging followers will catch up via
+	/// snapshots rather than log replay.
+	fn safe_to_prune_prefix(
+		&self,
+		cx: &mut dyn SyncProviderContext<Self::Owner>,
+	) -> Option<Index> {
+		Some(cx.committed().index())
 	}
 }
 
@@ -150,6 +200,13 @@ impl<M: SnapshotStateMachine> SnapshotSyncProvider<M> {
 				.is_ready()
 			{
 				for (request, position, snapshot) in requests {
+					if request.requested_by == sync_cx.local_id() {
+						// this is our own request, we can ignore it since we will
+						// have the snapshot available locally as soon as it's
+						// committed.
+						continue;
+					}
+
 					let len = snapshot.len();
 					match self.available.entry(position) {
 						Entry::Occupied(mut existing) => {

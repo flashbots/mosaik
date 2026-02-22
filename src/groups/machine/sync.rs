@@ -129,7 +129,7 @@ pub trait StateSyncProvider: Send + 'static {
 	/// create snapshots, etc.
 	fn committed(
 		&mut self,
-		_: Index,
+		_: Cursor,
 		_: &mut dyn SyncProviderContext<Self::Owner>,
 	) {
 	}
@@ -194,7 +194,7 @@ pub trait SyncContext<S: StateSync>: Sealed {
 
 	/// Returns the index of the latest committed log entry that has received a
 	/// quorum of votes.
-	fn committed(&self) -> Index;
+	fn committed(&self) -> Cursor;
 
 	/// Returns the `PeerId` of the local node.
 	fn local_id(&self) -> PeerId;
@@ -230,6 +230,11 @@ pub trait SyncSessionContext<S: StateSync>: SyncContext<S> {
 	/// sync requests, or to trigger specific logic that can only be executed on
 	/// the leader during the sync process.
 	fn leader(&self) -> PeerId;
+
+	/// Sets the committed index to the given value. This is used after
+	/// snapshot-based state sync to fast-forward the committed index to the
+	/// snapshot anchor position having the actual log entries.
+	fn set_committed(&mut self, position: Cursor);
 }
 
 /// Context object that is passed to instances of [`StateSyncProvider`]

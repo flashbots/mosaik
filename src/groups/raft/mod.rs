@@ -154,7 +154,7 @@ where
 				// committed state of the group.
 				ready(Ok(CommittedQueryResult {
 					result: self.shared.state_machine().query(query),
-					at_position: self.shared.committed(),
+					at_position: self.shared.committed().index(),
 				}))
 				.pin()
 			}
@@ -166,7 +166,7 @@ where
 					// state.
 					ready(Ok(CommittedQueryResult {
 						result: self.shared.state_machine().query(query),
-						at_position: self.shared.committed(),
+						at_position: self.shared.committed().index(),
 					}))
 					.pin()
 				}

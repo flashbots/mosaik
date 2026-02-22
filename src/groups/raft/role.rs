@@ -93,6 +93,7 @@ impl<M: StateMachine> Role<M> {
 		};
 
 		// drive the state sync provider on every tick of the loop
+		// at lower priority than the primary role-specific actions.
 		if shared.poll_state_sync_provider(cx).is_ready() {
 			return Poll::Ready(());
 		}

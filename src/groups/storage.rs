@@ -74,6 +74,20 @@ pub trait Storage<C: Command>: Send + 'static {
 	/// After pruning entries should still maintain their original indices, so
 	/// that the index of the latest committed entry is never affected.
 	fn prune_prefix(&mut self, up_to: Index);
+
+	/// Resets the log to a state where all entries up to and including the
+	/// given cursor are considered to have been applied and pruned. This is
+	/// used after snapshot-based state sync to fast-forward the log position
+	/// without having the actual log entries.
+	///
+	/// After this call:
+	/// - `last()` returns the given cursor (when no entries are appended).
+	/// - `term_at(cursor.index())` returns the cursor's term.
+	/// - `append(...)` continues from the next index after the cursor.
+	fn reset_to(&mut self, cursor: Cursor) {
+		let _ = cursor;
+		unimplemented!("reset_to is not supported by this storage implementation")
+	}
 }
 
 /// An in-memory implementation of the `Storage` trait replicated log storage in
@@ -83,6 +97,10 @@ pub trait Storage<C: Command>: Send + 'static {
 pub struct InMemoryLogStore<C: Command> {
 	entries: Vec<(C, Term)>,
 	offset: u64,
+	/// Tracks the cursor at the current offset boundary — set when entries are
+	/// pruned or when the log is reset via snapshot sync. This allows `last()`
+	/// and `term_at()` to return correct values even when `entries` is empty.
+	last_pruned: Option<Cursor>,
 }
 
 impl<C: Command> Default for InMemoryLogStore<C> {
@@ -90,6 +108,7 @@ impl<C: Command> Default for InMemoryLogStore<C> {
 		Self {
 			entries: Vec::new(),
 			offset: 0,
+			last_pruned: None,
 		}
 	}
 }
@@ -153,12 +172,23 @@ impl<C: Command> Storage<C> for InMemoryLogStore<C> {
 
 	fn last(&self) -> Cursor {
 		if self.entries.is_empty() {
-			Cursor::default()
+			self.last_pruned.unwrap_or_default()
 		} else {
 			let (_, term) = self.entries.last().unwrap();
 			let logical_index = self.offset + self.entries.len() as u64;
 			Cursor(*term, Index(logical_index))
 		}
+	}
+
+	fn term_at(&self, index: Index) -> Option<Term> {
+		if index.is_zero() {
+			return Some(Term::zero());
+		}
+		// At the offset boundary, return the last pruned/reset term if available.
+		if index.0 == self.offset {
+			return self.last_pruned.map(|c| c.term());
+		}
+		self.get(index).map(|(_, term)| term)
 	}
 
 	fn prune_prefix(&mut self, up_to: Index) {
@@ -168,8 +198,19 @@ impl<C: Command> Storage<C> for InMemoryLogStore<C> {
 		}
 
 		let to_drain = ((up_to.0 - self.offset) as usize).min(self.entries.len());
+		if to_drain > 0 {
+			let (_, term) = &self.entries[to_drain - 1];
+			let logical_index = self.offset + to_drain as u64;
+			self.last_pruned = Some(Cursor(*term, Index(logical_index)));
+		}
 		self.entries.drain(..to_drain);
 		self.offset += to_drain as u64;
+	}
+
+	fn reset_to(&mut self, cursor: Cursor) {
+		self.entries.clear();
+		self.offset = cursor.index().0;
+		self.last_pruned = Some(cursor);
 	}
 }
 
@@ -299,7 +340,7 @@ mod tests {
 
 		store.prune_prefix(Index(3)); // prune everything
 
-		assert_eq!(store.last(), Cursor::zero());
+		assert_eq!(store.last(), Cursor(term(1), Index(3)));
 		let avail = store.available();
 		assert_eq!(*avail.start(), Index(3));
 		assert_eq!(*avail.end(), Index(3));
@@ -331,7 +372,7 @@ mod tests {
 		store.prune_prefix(Index(3)); // prune 1, 2, 3
 		store.truncate(Index(2)); // truncation point is within pruned area
 
-		// everything remaining should be cleared
-		assert!(store.last().is_zero());
+		// everything remaining should be cleared, last() returns last_pruned
+		assert_eq!(store.last(), Cursor(term(1), Index(3)));
 	}
 }

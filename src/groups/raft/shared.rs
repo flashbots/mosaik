@@ -65,9 +65,9 @@ where
 	/// Applicable to all roles.
 	pub sync_provider: MaybeUninit<<M::StateSync as StateSync>::Provider>,
 
-	/// The index of the latest replicated and committed log entry that has been
-	/// applied to the state machine.
-	committed: Index,
+	/// The index and term of the latest replicated and committed log entry that
+	/// has been applied to the state machine.
+	committed: Cursor,
 }
 
 impl<S, M> Shared<S, M>
@@ -88,7 +88,7 @@ where
 			wakers: Vec::new(),
 			sync_provider: MaybeUninit::uninit(),
 			state_machine,
-			committed: Index::default(),
+			committed: Cursor::default(),
 		};
 
 		let provider = instance.sync.create_provider(&instance);
@@ -129,7 +129,7 @@ where
 
 	/// Returns the index of the last committed log entry that has been replicated
 	/// to a quorum and applied to the state machine.
-	pub const fn committed(&self) -> Index {
+	pub const fn committed(&self) -> Cursor {
 		self.committed
 	}
 
@@ -187,8 +187,12 @@ where
 		// mutation of the `sync_provider` field of `Shared`.
 		let provider = unsafe { &mut *provider };
 
-		if let Some(up_to) = provider.safe_to_prune_prefix(self) {
-			self.storage.prune_prefix(up_to);
+		if !self.committed().index().is_zero()
+			&& let Some(up_to) = provider.safe_to_prune_prefix(self)
+		{
+			self
+				.storage
+				.prune_prefix(up_to.min(self.committed().index().prev()));
 		}
 	}
 
@@ -213,8 +217,8 @@ where
 
 	/// Updates the committed index in the group public api observers. This should
 	/// be called whenever the committed index of the log advances.
-	pub fn update_committed(&mut self, committed: Index) {
-		self.group.when.update_committed(committed);
+	pub fn update_committed(&mut self, committed: Cursor) {
+		self.group.when.update_committed(committed.index());
 
 		// SAFETY: The `sync_provider` field is initialized in the constructor of
 		// `Shared` and is never mutated after that, so it is safe to assume that
@@ -267,21 +271,43 @@ where
 	/// calling this method.
 	///
 	/// Returns the index of the latest committed entry after this operation,
-	/// which may be less than the given index goes beyond the end of the log.
-	pub fn commit_up_to(&mut self, index: Index) -> Index {
+	/// which may be less than the given index if it goes beyond the end of the
+	/// log.
+	pub fn commit_up_to(&mut self, index: Index) -> Cursor {
 		let committed = self.committed();
-		let range = committed.next()..=index;
+		let range = committed.index().next()..=index;
 		let commands = self.storage.get_range(&range);
-		let commands_count = commands.len() as u64;
-		let ctx = LocalApplyContext {
-			prev_committed: committed,
-			prev_log_index: self.storage.last().index(),
-		};
+		let log_position = self.storage.last();
 
-		self
-			.state_machine
-			.apply_batch(commands.into_iter().map(|(_, _, cmd)| cmd), &ctx);
-		self.committed = committed + commands_count;
+		// Partition commands into consecutive batches by term and apply each
+		// batch with the correct `current_term` in the apply context.
+		let mut iter = commands.into_iter().peekable();
+
+		while iter.peek().is_some() {
+			let batch_term = iter.peek().unwrap().0;
+			let batch: Vec<_> = core::iter::from_fn(|| {
+				if iter.peek().map(|(t, _, _)| *t) == Some(batch_term) {
+					iter.next()
+				} else {
+					None
+				}
+			})
+			.collect();
+
+			let batch_size = batch.len() as u64;
+			let ctx = LocalApplyContext {
+				prev_committed: self.committed,
+				log_position,
+				term: batch_term,
+			};
+
+			self
+				.state_machine
+				.apply_batch(batch.into_iter().map(|(_, _, cmd)| cmd), &ctx);
+
+			self.committed =
+				Cursor::new(batch_term, self.committed.index() + batch_size);
+		}
 
 		self.committed
 	}
@@ -349,7 +375,7 @@ where
 		&mut self.storage
 	}
 
-	fn committed(&self) -> Index {
+	fn committed(&self) -> Cursor {
 		self.committed
 	}
 
@@ -403,6 +429,11 @@ where
 			.current_leader()
 			.expect("leader always known on lagging followers during sync sessions")
 	}
+
+	fn set_committed(&mut self, position: Cursor) {
+		self.committed = position;
+		self.group.when.update_committed(position.index());
+	}
 }
 
 impl<S, M> SyncProviderContext<M::StateSync> for Shared<S, M>
@@ -442,16 +473,21 @@ where
 
 #[derive(Debug)]
 struct LocalApplyContext {
-	prev_committed: Index,
-	prev_log_index: Index,
+	prev_committed: Cursor,
+	log_position: Cursor,
+	term: Term,
 }
 
 impl ApplyContext for LocalApplyContext {
-	fn prev_committed(&self) -> Index {
+	fn committed(&self) -> Cursor {
 		self.prev_committed
 	}
 
-	fn prev_log_index(&self) -> Index {
-		self.prev_log_index
+	fn log_position(&self) -> Cursor {
+		self.log_position
+	}
+
+	fn current_term(&self) -> Term {
+		self.term
 	}
 }

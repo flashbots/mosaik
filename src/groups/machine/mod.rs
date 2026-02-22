@@ -8,7 +8,7 @@
 
 use {
 	crate::{
-		groups::{ConsensusConfig, Index},
+		groups::{ConsensusConfig, Cursor, Term},
 		primitives::UniqueId,
 	},
 	serde::{Serialize, de::DeserializeOwned},
@@ -119,8 +119,8 @@ pub trait StateMachine: Sized + Send + 'static {
 }
 
 pub trait ApplyContext {
-	/// The index of the last committed log entry that has been applied by the
-	/// state machine before applying the current batch of commands.
+	/// The index and term of the last committed log entry that has been applied
+	/// by the state machine before applying the current batch of commands.
 	///
 	/// This can be used by the state machine to determine the current position of
 	/// the log when it is applying new commands.
@@ -129,10 +129,13 @@ pub trait ApplyContext {
 	/// compute the index of each command in the batch by itself using the number
 	/// of commands in the batch and the index of the last committed command
 	/// returned by this method.
-	fn prev_committed(&self) -> Index;
+	fn committed(&self) -> Cursor;
 
-	/// The index of the last log entry in the log.
-	fn prev_log_index(&self) -> Index;
+	/// The index and term of the last log entry in the log.
+	fn log_position(&self) -> Cursor;
+
+	/// The term of the commands being applied.
+	fn current_term(&self) -> Term;
 }
 
 pub trait StateMachineMessage:
