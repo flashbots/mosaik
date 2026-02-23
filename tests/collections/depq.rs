@@ -779,6 +779,7 @@ async fn many_writers_many_readers() -> anyhow::Result<()> {
 
 	// writer 1 inserts one more
 	let v = timeout_s(2, w1.insert(60, 6, 600)).await??;
+	timeout_s(2, w1.when().reaches(v)).await?;
 	timeout_s(2, r0.when().reaches(v)).await?;
 	timeout_s(2, r1.when().reaches(v)).await?;
 

@@ -254,7 +254,7 @@ impl Config {
 impl Default for Config {
 	fn default() -> Self {
 		Self {
-			fetch_batch_size: 200,
+			fetch_batch_size: 2000,
 			snapshot_ttl: Duration::from_secs(10),
 			snapshot_request_timeout: Duration::from_secs(15),
 			fetch_timeout: Duration::from_secs(5),

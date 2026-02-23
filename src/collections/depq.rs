@@ -2,6 +2,7 @@ use {
 	super::{
 		Error,
 		READER,
+		SyncConfig,
 		WRITER,
 		When,
 		primitives::{Key, OrderedKey, StoreId, Value, Version},
@@ -9,19 +10,36 @@ use {
 	crate::{
 		Group,
 		Network,
+		PeerId,
 		UniqueId,
+		collections::sync::{
+			Snapshot,
+			SnapshotStateMachine,
+			SnapshotSync,
+			protocol::SnapshotRequest,
+		},
 		groups::{
 			ApplyContext,
 			CommandError,
 			ConsensusConfig,
-			LogReplaySync,
+			Cursor,
 			StateMachine,
 		},
 	},
-	core::{any::type_name, ops::RangeBounds},
+	core::{
+		any::type_name,
+		ops::{Range, RangeBounds},
+	},
 	serde::{Deserialize, Serialize},
+	std::hash::BuildHasherDefault,
 	tokio::sync::watch,
 };
+
+/// Deterministic hasher for the internal `im::HashMap`, ensuring that
+/// iteration order is identical across all nodes for the same DEPQ state.
+/// Uses `DefaultHasher` (SipHash-1-3) with a fixed zero seed.
+type HashMap<K, V> =
+	im::HashMap<K, V, BuildHasherDefault<std::hash::DefaultHasher>>;
 
 pub type PriorityQueueWriter<P, K, V> = PriorityQueue<P, K, V, WRITER>;
 pub type PriorityQueueReader<P, K, V> = PriorityQueue<P, K, V, READER>;
@@ -42,7 +60,7 @@ pub struct PriorityQueue<
 > {
 	when: When,
 	group: Group<DepqStateMachine<P, K, V>>,
-	snapshot: watch::Receiver<DepqSnapshot<P, K, V>>,
+	data: watch::Receiver<PriorityQueueSnapshot<P, K, V>>,
 }
 
 // read-only access, available to both writers and readers
@@ -53,21 +71,21 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	///
 	/// Time: O(1)
 	pub fn len(&self) -> usize {
-		self.snapshot.borrow().by_key.len()
+		self.data.borrow().by_key.len()
 	}
 
 	/// Test whether the priority queue is empty.
 	///
 	/// Time: O(1)
 	pub fn is_empty(&self) -> bool {
-		self.snapshot.borrow().by_key.is_empty()
+		self.data.borrow().by_key.is_empty()
 	}
 
 	/// Test whether the priority queue contains a given key.
 	///
 	/// Time: O(log n)
 	pub fn contains_key(&self, key: &K) -> bool {
-		self.snapshot.borrow().clone().by_key.contains_key(key)
+		self.data.borrow().clone().by_key.contains_key(key)
 	}
 
 	/// Get the value for a given key, if it exists.
@@ -75,7 +93,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	/// Time: O(log n)
 	pub fn get(&self, key: &K) -> Option<V> {
 		self
-			.snapshot
+			.data
 			.borrow()
 			.clone()
 			.by_key
@@ -88,7 +106,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	/// Time: O(log n)
 	pub fn get_priority(&self, key: &K) -> Option<P> {
 		self
-			.snapshot
+			.data
 			.borrow()
 			.clone()
 			.by_key
@@ -103,7 +121,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	///
 	/// Time: O(log n)
 	pub fn get_min(&self) -> Option<(P, K, V)> {
-		let snap = self.snapshot.borrow().clone();
+		let snap = self.data.borrow().clone();
 		snap.by_priority.get_min().and_then(|(p, bucket)| {
 			bucket
 				.iter()
@@ -119,7 +137,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	///
 	/// Time: O(log n)
 	pub fn get_max(&self) -> Option<(P, K, V)> {
-		let snap = self.snapshot.borrow().clone();
+		let snap = self.data.borrow().clone();
 		snap.by_priority.get_max().and_then(|(p, bucket)| {
 			bucket
 				.iter()
@@ -133,7 +151,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	/// Time: O(log n)
 	pub fn max_priority(&self) -> Option<P> {
 		self
-			.snapshot
+			.data
 			.borrow()
 			.clone()
 			.by_priority
@@ -146,7 +164,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	/// Time: O(log n)
 	pub fn min_priority(&self) -> Option<P> {
 		self
-			.snapshot
+			.data
 			.borrow()
 			.clone()
 			.by_priority
@@ -162,7 +180,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 
 	/// Get an iterator over all entries in ascending priority order.
 	pub fn iter_asc(&self) -> impl Iterator<Item = (P, K, V)> {
-		let snap = self.snapshot.borrow().clone();
+		let snap = self.data.borrow().clone();
 		snap.by_priority.into_iter().flat_map(|(p, bucket)| {
 			bucket.into_iter().map(move |(k, v)| (p.clone(), k, v))
 		})
@@ -170,7 +188,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 
 	/// Get an iterator over all entries in descending priority order.
 	pub fn iter_desc(&self) -> impl Iterator<Item = (P, K, V)> {
-		let snap = self.snapshot.borrow().clone();
+		let snap = self.data.borrow().clone();
 		let entries: std::vec::Vec<_> = snap
 			.by_priority
 			.into_iter()
@@ -358,30 +376,70 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	/// read access to the queue's contents. Writers can be used by multiple
 	/// nodes concurrently, and all changes made by any writer will be replicated
 	/// to all other writers and readers.
+	///
+	/// This creates a new priority queue with default synchronization
+	/// configuration. If you want to customize the synchronization behavior
+	/// (e.g. snapshot sync configuration), use `writer_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting queues will not be able to see each other.
 	pub fn writer(
 		network: &Network,
 		store_id: StoreId,
 	) -> PriorityQueueWriter<P, K, V> {
-		let (machine, snapshot) = DepqStateMachine::new(store_id, true);
-		let group = network
-			.groups()
-			.with_key(store_id.into())
-			.with_state_machine(machine)
-			.join();
-
-		PriorityQueueWriter::<P, K, V> {
-			when: When::new(group.when().clone()),
-			group,
-			snapshot,
-		}
+		Self::writer_with_config(network, store_id, SyncConfig::default())
 	}
 
 	/// Create a new priority queue in writer mode.
+	///
+	/// The returned writer can be used to modify the queue, and it also provides
+	/// read access to the queue's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new priority queue with the specified sync configuration.
+	/// If you want to use the default sync configuration, use the `writer`
+	/// method instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting queues will not be able to see each other.
+	pub fn writer_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: SyncConfig,
+	) -> PriorityQueueWriter<P, K, V> {
+		Self::create::<WRITER>(network, store_id, config)
+	}
+
+	/// Create a new priority queue in writer mode.
+	///
+	/// This creates a new priority queue with default synchronization
+	/// configuration. If you want to customize the synchronization behavior
+	/// (e.g. snapshot sync configuration), use `new_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting queues will not be able to see each other.
 	pub fn new(
 		network: &Network,
 		store_id: StoreId,
 	) -> PriorityQueueWriter<P, K, V> {
-		PriorityQueueWriter::<P, K, V>::writer(network, store_id)
+		Self::writer(network, store_id)
+	}
+
+	/// Create a new priority queue in writer mode.
+	///
+	/// This creates a new priority queue with the specified sync configuration.
+	/// If you want to use the default sync configuration, use the `new` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting queues will not be able to see each other.
+	pub fn new_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: SyncConfig,
+	) -> PriorityQueueWriter<P, K, V> {
+		Self::writer_with_config(network, store_id, config)
 	}
 
 	/// Create a new priority queue in reader mode.
@@ -396,17 +454,48 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 		network: &Network,
 		store_id: StoreId,
 	) -> PriorityQueueReader<P, K, V> {
-		let (machine, snapshot) = DepqStateMachine::new(store_id, false);
+		Self::reader_with_config(network, store_id, SyncConfig::default())
+	}
+
+	/// Create a new priority queue in reader mode.
+	///
+	/// The returned reader provides read-only access to the queue's contents.
+	/// Readers can be used by multiple nodes concurrently, and they will see all
+	/// changes made by any writer. However, readers cannot modify the queue, and
+	/// they will not be able to make any changes themselves. Readers have longer
+	/// election timeouts to reduce the likelihood of them being elected as
+	/// group leaders, which reduces latency for read operations.
+	pub fn reader_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: SyncConfig,
+	) -> PriorityQueueReader<P, K, V> {
+		Self::create::<READER>(network, store_id, config)
+	}
+
+	fn create<const W: bool>(
+		network: &Network,
+		store_id: StoreId,
+		config: SyncConfig,
+	) -> PriorityQueue<P, K, V, W> {
+		let machine = DepqStateMachine::new(
+			store_id, //
+			W,
+			config,
+			network.local().id(),
+		);
+
+		let data = machine.data();
 		let group = network
 			.groups()
 			.with_key(store_id.into())
 			.with_state_machine(machine)
 			.join();
 
-		PriorityQueueReader::<P, K, V> {
+		PriorityQueue::<P, K, V, W> {
 			when: When::new(group.when().clone()),
 			group,
-			snapshot,
+			data,
 		}
 	}
 }
@@ -435,9 +524,11 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 }
 
 struct DepqStateMachine<P: OrderedKey, K: Key, V: Value> {
-	data: DepqSnapshot<P, K, V>,
-	latest: watch::Sender<DepqSnapshot<P, K, V>>,
+	data: PriorityQueueSnapshot<P, K, V>,
+	latest: watch::Sender<PriorityQueueSnapshot<P, K, V>>,
 	store_id: StoreId,
+	local_id: PeerId,
+	state_sync: SnapshotSync<Self>,
 	is_writer: bool,
 }
 
@@ -445,18 +536,27 @@ impl<P: OrderedKey, K: Key, V: Value> DepqStateMachine<P, K, V> {
 	pub fn new(
 		store_id: StoreId,
 		is_writer: bool,
-	) -> (Self, watch::Receiver<DepqSnapshot<P, K, V>>) {
-		let data = DepqSnapshot::new();
-		let (latest, snapshot) = watch::channel(data.clone());
-		(
-			Self {
-				data,
-				latest,
-				store_id,
-				is_writer,
-			},
-			snapshot,
-		)
+		sync_config: SyncConfig,
+		local_id: PeerId,
+	) -> Self {
+		let data = PriorityQueueSnapshot::default();
+		let state_sync = SnapshotSync::new(sync_config, |request| {
+			DepqCommand::TakeSnapshot(request)
+		});
+		let latest = watch::Sender::new(data.clone());
+
+		Self {
+			data,
+			latest,
+			store_id,
+			local_id,
+			state_sync,
+			is_writer,
+		}
+	}
+
+	pub fn data(&self) -> watch::Receiver<PriorityQueueSnapshot<P, K, V>> {
+		self.latest.subscribe()
 	}
 
 	/// Insert a single entry, updating both indexes. If the key already exists,
@@ -514,7 +614,7 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 	type Command = DepqCommand<P, K, V>;
 	type Query = ();
 	type QueryResult = ();
-	type StateSync = LogReplaySync<Self>;
+	type StateSync = SnapshotSync<Self>;
 
 	fn apply(&mut self, command: Self::Command, ctx: &dyn ApplyContext) {
 		self.apply_batch([command], ctx);
@@ -525,10 +625,13 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 		commands: impl IntoIterator<Item = Self::Command>,
 		ctx: &dyn ApplyContext,
 	) {
+		let mut commands_len = 0usize;
+		let mut sync_requests = vec![];
+
 		for command in commands {
 			match command {
 				DepqCommand::Clear => {
-					self.data = DepqSnapshot::new();
+					self.data = PriorityQueueSnapshot::default();
 				}
 				DepqCommand::Insert {
 					priority,
@@ -570,9 +673,32 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 						self.apply_remove(&key);
 					}
 				}
+				DepqCommand::TakeSnapshot(request) => {
+					if request.requested_by != self.local_id
+						&& !self.state_sync.is_expired(&request)
+					{
+						sync_requests.push(request);
+					}
+				}
+			}
+			commands_len += 1;
+		}
+
+		self.latest.send_replace(self.data.clone());
+
+		if !sync_requests.is_empty() {
+			let snapshot = self.create_snapshot();
+			let position = Cursor::new(
+				ctx.current_term(),
+				ctx.committed().index() + commands_len as u64,
+			);
+
+			for request in sync_requests {
+				self
+					.state_sync
+					.serve_snapshot(request, position, snapshot.clone());
 			}
 		}
-		self.latest.send_replace(self.data.clone());
 	}
 
 	/// The group-key for a DEPQ is derived from the store ID and the types of
@@ -592,9 +718,9 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 	/// query method is a no-op.
 	fn query(&self, (): Self::Query) {}
 
-	/// The state sync mechanism for out of sync followers.
+	/// This state machine uses the `SnapshotSync` state sync strategy.
 	fn state_sync(&self) -> Self::StateSync {
-		LogReplaySync::default()
+		self.state_sync.clone()
 	}
 
 	/// Readers have longer election timeouts to reduce the likelihood of them
@@ -602,6 +728,24 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 	fn consensus_config(&self) -> Option<ConsensusConfig> {
 		(!self.is_writer)
 			.then(|| ConsensusConfig::default().deprioritize_leadership())
+	}
+}
+
+impl<P: OrderedKey, K: Key, V: Value> SnapshotStateMachine
+	for DepqStateMachine<P, K, V>
+{
+	type Snapshot = PriorityQueueSnapshot<P, K, V>;
+
+	fn create_snapshot(&self) -> Self::Snapshot {
+		PriorityQueueSnapshot {
+			by_key: self.data.by_key.clone(),
+			by_priority: self.data.by_priority.clone(),
+		}
+	}
+
+	fn install_snapshot(&mut self, snapshot: Self::Snapshot) {
+		self.data = snapshot;
+		self.latest.send_replace(self.data.clone());
 	}
 }
 
@@ -632,6 +776,7 @@ enum DepqCommand<P, K, V> {
 		start: SerBound<P>,
 		end: SerBound<P>,
 	},
+	TakeSnapshot(SnapshotRequest),
 }
 
 /// Serializable equivalent of [`core::ops::Bound`], needed because
@@ -662,19 +807,66 @@ impl<T: Clone> SerBound<T> {
 }
 
 /// Snapshot of the DEPQ state, combining both indexes for efficient access.
+///
+/// Only the `by_key` index is synced over the wire because `by_priority` can
+/// be fully reconstructed from the `(P, K, V)` tuples stored in `by_key`.
+/// Both indexes are maintained incrementally during `append` so that
+/// `install_snapshot` is a cheap move rather than one large rebuild.
 #[derive(Clone)]
-struct DepqSnapshot<P: OrderedKey, K: Key, V: Value> {
+pub struct PriorityQueueSnapshot<P: OrderedKey, K: Key, V: Value> {
 	/// Key → (priority, value) for O(log n) key lookups.
-	by_key: im::HashMap<K, (P, V)>,
+	by_key: HashMap<K, (P, V)>,
 	/// Priority → {key → value} for O(log n) min/max and range operations.
-	by_priority: im::OrdMap<P, im::HashMap<K, V>>,
+	by_priority: im::OrdMap<P, HashMap<K, V>>,
 }
 
-impl<P: OrderedKey, K: Key, V: Value> DepqSnapshot<P, K, V> {
-	fn new() -> Self {
+impl<P: OrderedKey, K: Key, V: Value> Default
+	for PriorityQueueSnapshot<P, K, V>
+{
+	fn default() -> Self {
 		Self {
-			by_key: im::HashMap::new(),
+			by_key: HashMap::default(),
 			by_priority: im::OrdMap::new(),
+		}
+	}
+}
+
+impl<P: OrderedKey, K: Key, V: Value> Snapshot
+	for PriorityQueueSnapshot<P, K, V>
+{
+	type Item = (P, K, V);
+
+	fn len(&self) -> u64 {
+		self.by_key.len() as u64
+	}
+
+	fn iter_range(
+		&self,
+		range: Range<u64>,
+	) -> Option<impl Iterator<Item = Self::Item>> {
+		if range.end > self.by_key.len() as u64 {
+			return None;
+		}
+
+		Some(
+			self
+				.by_key
+				.iter()
+				.map(|(k, (p, v))| (p.clone(), k.clone(), v.clone()))
+				.skip(range.start as usize)
+				.take((range.end - range.start) as usize),
+		)
+	}
+
+	fn append(&mut self, items: impl IntoIterator<Item = Self::Item>) {
+		for (priority, key, value) in items {
+			self
+				.by_key
+				.insert(key.clone(), (priority.clone(), value.clone()));
+			let mut bucket =
+				self.by_priority.get(&priority).cloned().unwrap_or_default();
+			bucket.insert(key, value);
+			self.by_priority.insert(priority, bucket);
 		}
 	}
 }
