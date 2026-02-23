@@ -2,6 +2,7 @@ use {
 	super::{
 		Error,
 		READER,
+		SyncConfig,
 		WRITER,
 		When,
 		primitives::{Key, StoreId, Value, Version},
@@ -9,19 +10,34 @@ use {
 	crate::{
 		Group,
 		Network,
+		PeerId,
 		UniqueId,
+		collections::sync::{
+			Snapshot,
+			SnapshotStateMachine,
+			SnapshotSync,
+			protocol::SnapshotRequest,
+		},
 		groups::{
 			ApplyContext,
 			CommandError,
 			ConsensusConfig,
+			Cursor,
 			LogReplaySync,
 			StateMachine,
 		},
 	},
 	core::any::type_name,
 	serde::{Deserialize, Serialize},
+	std::hash::BuildHasherDefault,
 	tokio::sync::watch,
 };
+
+/// Deterministic hasher for the internal `im::HashMap`, ensuring that
+/// iteration order is identical across all nodes for the same map state.
+/// Uses `DefaultHasher` (SipHash-1-3) with a fixed zero seed.
+type HashMap<K, V> =
+	im::HashMap<K, V, BuildHasherDefault<std::hash::DefaultHasher>>;
 
 pub type MapWriter<K, V> = Map<K, V, WRITER>;
 pub type MapReader<K, V> = Map<K, V, READER>;
@@ -30,7 +46,7 @@ pub type MapReader<K, V> = Map<K, V, READER>;
 pub struct Map<K: Key, V: Value, const IS_WRITER: bool = WRITER> {
 	when: When,
 	group: Group<MapStateMachine<K, V>>,
-	snapshot: watch::Receiver<im::HashMap<K, V>>,
+	data: watch::Receiver<HashMap<K, V>>,
 }
 
 // read-only access, available to both writers and readers
@@ -39,45 +55,45 @@ impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
 	///
 	/// Time: O(1)
 	pub fn len(&self) -> usize {
-		self.snapshot.borrow().len()
+		self.data.borrow().len()
 	}
 
 	/// Test whether the map is empty.
 	///
 	/// Time: O(1)
 	pub fn is_empty(&self) -> bool {
-		self.snapshot.borrow().is_empty()
+		self.data.borrow().is_empty()
 	}
 
 	/// Test whether the map contains a given key.
 	///
 	/// Time: O(log n)
 	pub fn contains_key(&self, key: &K) -> bool {
-		self.snapshot.borrow().contains_key(key)
+		self.data.borrow().contains_key(key)
 	}
 
 	/// Get the value for a given key, if it exists.
 	///
 	/// Time: O(log n)
 	pub fn get(&self, key: &K) -> Option<V> {
-		self.snapshot.borrow().get(key).cloned()
+		self.data.borrow().get(key).cloned()
 	}
 
 	/// Get an iterator over the key-value pairs in the map.
 	pub fn iter(&self) -> impl Iterator<Item = (K, V)> {
-		let iter_clone = self.snapshot.borrow().clone();
+		let iter_clone = self.data.borrow().clone();
 		iter_clone.into_iter()
 	}
 
 	/// Get an iterator over the keys in the map.
 	pub fn keys(&self) -> impl Iterator<Item = K> {
-		let iter_clone = self.snapshot.borrow().clone();
+		let iter_clone = self.data.borrow().clone();
 		iter_clone.into_iter().map(|(k, _)| k)
 	}
 
 	/// Get an iterator over the values in the map.
 	pub fn values(&self) -> impl Iterator<Item = V> {
-		let iter_clone = self.snapshot.borrow().clone();
+		let iter_clone = self.data.borrow().clone();
 		iter_clone.into_iter().map(|(_, v)| v)
 	}
 
@@ -166,24 +182,74 @@ impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
 	/// read access to the map's contents. Writers can be used by multiple
 	/// nodes concurrently, and all changes made by any writer will be replicated
 	/// to all other writers and readers.
+	///
+	/// This creates a new map with default synchronization configuration. If you
+	/// want to customize the synchronization behavior (e.g. snapshot sync
+	/// configuration), use `writer_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting maps will not be able to see each other.
 	pub fn writer(network: &Network, store_id: StoreId) -> MapWriter<K, V> {
-		let (machine, snapshot) = MapStateMachine::new(store_id, true);
-		let group = network
-			.groups()
-			.with_key(store_id.into())
-			.with_state_machine(machine)
-			.join();
-
-		MapWriter::<K, V> {
-			when: When::new(group.when().clone()),
-			group,
-			snapshot,
-		}
+		Self::writer_with_config(network, store_id, SyncConfig::default())
 	}
 
 	/// Create a new map in writer mode.
+	///
+	/// The returned writer can be used to modify the map, and it also provides
+	/// read access to the map's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new map with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `writer` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting maps will not be able to see each other.
+	pub fn writer_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: SyncConfig,
+	) -> MapWriter<K, V> {
+		Self::create::<WRITER>(network, store_id, config)
+	}
+
+	/// Create a new map in writer mode.
+	///
+	/// The returned writer can be used to modify the map, and it also provides
+	/// read access to the map's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new map with default synchronization configuration. If you
+	/// want to customize the synchronization behavior (e.g. snapshot sync
+	/// configuration), use `writer_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting maps will not be able to see each other.
 	pub fn new(network: &Network, store_id: StoreId) -> MapWriter<K, V> {
-		MapWriter::<K, V>::writer(network, store_id)
+		Self::writer(network, store_id)
+	}
+
+	/// Create a new map in writer mode.
+	///
+	/// The returned writer can be used to modify the map, and it also provides
+	/// read access to the map's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new map with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `writer` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting maps will not be able to see each other.
+	pub fn new_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: SyncConfig,
+	) -> MapWriter<K, V> {
+		Self::writer_with_config(network, store_id, config)
 	}
 
 	/// Create a new map in reader mode.
@@ -195,18 +261,64 @@ impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
 	/// election timeouts to reduce the likelihood of them being elected as
 	/// group leaders, which reduces latency for read operations.
 	pub fn reader(network: &Network, store_id: StoreId) -> MapReader<K, V> {
-		let (machine, snapshot) = MapStateMachine::new(store_id, false);
+		Self::reader_with_config(network, store_id, SyncConfig::default())
+	}
+
+	/// Create a new map in reader mode.
+	///
+	/// The returned reader provides read-only access to the map's contents.
+	/// Readers can be used by multiple nodes concurrently, and they will see all
+	/// changes made by any writer. However, readers cannot modify the map, and
+	/// they will not be able to make any changes themselves. Readers have longer
+	/// election timeouts to reduce the likelihood of them being elected as
+	/// group leaders, which reduces latency for read operations.
+	pub fn reader_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: SyncConfig,
+	) -> MapReader<K, V> {
+		Self::create::<READER>(network, store_id, config)
+	}
+
+	fn create<const W: bool>(
+		network: &Network,
+		store_id: StoreId,
+		config: SyncConfig,
+	) -> Map<K, V, W> {
+		let machine = MapStateMachine::new(
+			store_id, //
+			W,
+			config,
+			network.local().id(),
+		);
+
+		let data = machine.data();
 		let group = network
 			.groups()
 			.with_key(store_id.into())
 			.with_state_machine(machine)
 			.join();
 
-		MapReader::<K, V> {
+		Map::<K, V, W> {
 			when: When::new(group.when().clone()),
 			group,
-			snapshot,
+			data,
 		}
+	}
+}
+
+impl<K: Key, V: Value> SnapshotStateMachine for MapStateMachine<K, V> {
+	type Snapshot = MapSnapshot<K, V>;
+
+	fn create_snapshot(&self) -> Self::Snapshot {
+		MapSnapshot {
+			data: self.data.clone(),
+		}
+	}
+
+	fn install_snapshot(&mut self, snapshot: Self::Snapshot) {
+		self.data = snapshot.data;
+		self.latest.send_replace(self.data.clone());
 	}
 }
 
@@ -234,9 +346,11 @@ impl<K: Key, V: Value> Map<K, V, WRITER> {
 }
 
 struct MapStateMachine<K: Key, V: Value> {
-	data: im::HashMap<K, V>,
-	latest: watch::Sender<im::HashMap<K, V>>,
+	data: HashMap<K, V>,
+	latest: watch::Sender<HashMap<K, V>>,
 	store_id: StoreId,
+	local_id: PeerId,
+	state_sync: SnapshotSync<Self>,
 	is_writer: bool,
 }
 
@@ -244,18 +358,28 @@ impl<K: Key, V: Value> MapStateMachine<K, V> {
 	pub fn new(
 		store_id: StoreId,
 		is_writer: bool,
-	) -> (Self, watch::Receiver<im::HashMap<K, V>>) {
-		let data = im::HashMap::new();
-		let (latest, snapshot) = watch::channel(data.clone());
-		(
-			Self {
-				data,
-				latest,
-				store_id,
-				is_writer,
-			},
-			snapshot,
-		)
+		sync_config: SyncConfig,
+		local_id: PeerId,
+	) -> Self {
+		let data = HashMap::default();
+		let state_sync = SnapshotSync::new(sync_config, |request| {
+			MapCommand::TakeSnapshot(request)
+		});
+
+		let latest = watch::Sender::new(data.clone());
+
+		Self {
+			data,
+			latest,
+			store_id,
+			local_id,
+			state_sync,
+			is_writer,
+		}
+	}
+
+	pub fn data(&self) -> watch::Receiver<HashMap<K, V>> {
+		self.latest.subscribe()
 	}
 }
 
@@ -263,7 +387,7 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 	type Command = MapCommand<K, V>;
 	type Query = ();
 	type QueryResult = ();
-	type StateSync = LogReplaySync<Self>;
+	type StateSync = SnapshotSync<Self>;
 
 	fn apply(&mut self, command: Self::Command, ctx: &dyn ApplyContext) {
 		self.apply_batch([command], ctx);
@@ -272,8 +396,11 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 	fn apply_batch(
 		&mut self,
 		commands: impl IntoIterator<Item = Self::Command>,
-		_: &dyn ApplyContext,
+		ctx: &dyn ApplyContext,
 	) {
+		let mut commands_len = 0usize;
+		let mut sync_requests = vec![];
+
 		for command in commands {
 			match command {
 				MapCommand::Clear => {
@@ -290,9 +417,34 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 						self.data.insert(key, value);
 					}
 				}
+				MapCommand::TakeSnapshot(request) => {
+					if request.requested_by != self.local_id
+						&& !self.state_sync.is_expired(&request)
+					{
+						// take note of the snapshot request, we will take the actual
+						// snapshot after applying all commands from this batch.
+						sync_requests.push(request);
+					}
+				}
+			}
+			commands_len += 1;
+		}
+
+		self.latest.send_replace(self.data.clone());
+
+		if !sync_requests.is_empty() {
+			let snapshot = self.create_snapshot();
+			let position = Cursor::new(
+				ctx.current_term(),
+				ctx.committed().index() + commands_len as u64,
+			);
+
+			for request in sync_requests {
+				self
+					.state_sync
+					.serve_snapshot(request, position, snapshot.clone());
 			}
 		}
-		self.latest.send_replace(self.data.clone());
 	}
 
 	/// The group-key for a map is derived from the store ID and the types of
@@ -312,7 +464,7 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 
 	/// The state sync mechanism for out of sync followers.
 	fn state_sync(&self) -> Self::StateSync {
-		LogReplaySync::default()
+		self.state_sync.clone()
 	}
 
 	/// Readers have longer election timeouts to reduce the likelihood of them
@@ -330,4 +482,48 @@ enum MapCommand<K, V> {
 	Insert { key: K, value: V },
 	Remove { key: K },
 	Extend { entries: Vec<(K, V)> },
+	TakeSnapshot(SnapshotRequest),
+}
+
+#[derive(Debug, Clone)]
+pub struct MapSnapshot<K: Key, V: Value> {
+	data: HashMap<K, V>,
+}
+
+impl<K: Key, V: Value> Default for MapSnapshot<K, V> {
+	fn default() -> Self {
+		Self {
+			data: HashMap::default(),
+		}
+	}
+}
+
+impl<K: Key, V: Value> Snapshot for MapSnapshot<K, V> {
+	type Item = (K, V);
+
+	fn len(&self) -> u64 {
+		self.data.len() as u64
+	}
+
+	fn iter_range(
+		&self,
+		range: std::ops::Range<u64>,
+	) -> Option<impl Iterator<Item = Self::Item>> {
+		if range.end > self.data.len() as u64 {
+			return None;
+		}
+
+		Some(
+			self
+				.data
+				.iter()
+				.skip(range.start as usize)
+				.take((range.end - range.start) as usize)
+				.map(|(k, v)| (k.clone(), v.clone())),
+		)
+	}
+
+	fn append(&mut self, items: impl IntoIterator<Item = Self::Item>) {
+		self.data.extend(items);
+	}
 }

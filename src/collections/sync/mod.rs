@@ -9,24 +9,25 @@ use {
 		time::Duration,
 	},
 	derive_more::From,
-	inner::SnapshotSyncInner,
+	parking_lot::RwLock,
+	protocol::{SnapshotRequest, SnapshotSyncMessage},
 	provider::SnapshotSyncProvider,
 	serde::{Deserialize, Serialize, de::DeserializeOwned},
 	session::SnapshotSyncSession,
 	std::sync::Arc,
-	tokio::sync::{broadcast, mpsc::UnboundedSender},
+	tokio::sync::{
+		broadcast,
+		mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
+	},
 };
 
-mod inner;
+pub(super) mod protocol;
 mod provider;
 mod session;
-mod snapshot;
-
-use parking_lot::RwLock;
-pub use snapshot::{Snapshot, SnapshotItem};
 
 /// State sync strategy for mosaik collections that restores the state of a
-/// lagging follower by syncing data from a snapshot.
+/// lagging follower by syncing data from a snapshot at a specific anchor state
+/// log position.
 ///
 /// The mechanism of this state sync strategy is as follows:
 ///
@@ -70,18 +71,18 @@ pub use snapshot::{Snapshot, SnapshotItem};
 ///    it received during the sync process but has not applied yet. At this
 ///    point the follower is fully synced and can start applying new commands
 ///    from the log as they come in.
+///
+/// Notes:
+///
+///  - This state sync strategy always sync the full state of the group until a
+///    specific log position, it does not support syncing partial state or
+///    between two log positions.
 pub struct SnapshotSync<M: SnapshotStateMachine>(
 	Arc<RwLock<SnapshotSyncInner<M>>>,
 );
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SnapshotRequest {
-	pub requested_by: PeerId,
-	pub requested_at: DateTime<Utc>,
-}
-
 /// Extension of the `StateMachine` trait that requires the state machine to be
-/// able to create snapshots.
+/// able to create and install snapshots.
 pub trait SnapshotStateMachine: StateMachine {
 	/// The type that represents the state of the state machine at a specific
 	/// point in time.
@@ -99,12 +100,72 @@ pub trait SnapshotStateMachine: StateMachine {
 	fn install_snapshot(&mut self, snapshot: Self::Snapshot);
 }
 
+/// Represents a snapshot of the state of the state machine at a specific point
+/// in time. This is used to quickly restore the state of a lagging follower
+/// without having to replay the entire log.
+///
+/// When instantiating a default snapshot, it should return an empty snapshot
+/// with no items.
+pub trait Snapshot: Default + Clone + Send + 'static {
+	/// Type of the individual data items contained in this snapshot.
+	type Item: SnapshotItem;
+
+	/// Returns `true` if this snapshot contains no data items.
+	fn is_empty(&self) -> bool {
+		self.len() == 0
+	}
+
+	/// The number of individual data items contained in this snapshot.
+	///
+	/// E.g. in `Vec` it will be the number of elements, in `Map` it will be the
+	/// number of key-value pairs, etc. This is used to chunk the snapshot into
+	/// smaller pieces and distributing requests for those pieces across multiple
+	/// peers during the sync process.
+	fn len(&self) -> u64;
+
+	/// Returns an iterator over the individual data items contained in this
+	/// snapshot.
+	///
+	/// This iterator must always return the same items in the same order for the
+	/// same snapshot on all peers for a given range.
+	///
+	/// Implementation should either return the full range of items or `None`.
+	fn iter_range(
+		&self,
+		range: Range<u64>,
+	) -> Option<impl Iterator<Item = Self::Item>>;
+
+	/// Appends the given items to the snapshot.
+	///
+	/// It is guaranteed that the given items are the next items in the snapshot
+	/// after the current last item, so the implementation can simply append them
+	/// to the end of the snapshot.
+	fn append(&mut self, items: impl IntoIterator<Item = Self::Item>);
+}
+
+/// Represents an individual data item contained in a snapshot. This is used to
+/// define the type of items that are being transferred during the snapshot sync
+/// process.
+///
+/// This does not have to be the same type as the items contained in the state
+/// machine's state.
+pub trait SnapshotItem:
+	Clone + Send + Serialize + DeserializeOwned + 'static
+{
+}
+
+impl<T> SnapshotItem for T where
+	T: Clone + Send + Serialize + DeserializeOwned + 'static
+{
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
-	/// The batch size for snapshot data transfer during the sync process.
+	/// The batch size for individual snapshot items transfer during the sync
+	/// process using the `FetchDataRequest`/`FetchDataResponse` messages.
 	fetch_batch_size: u64,
 
-	/// The time-to-live for active snapshot.
+	/// The time-to-live for active snapshots.
 	///
 	/// Snapshots are considered active from the moment they were last interacted
 	/// with (either created or fetched from) and until they have been inactive
@@ -123,9 +184,8 @@ pub struct Config {
 }
 
 impl Config {
-	/// The batch size for snapshot data transfer during the sync process. This
-	/// is the number of individual data items contained in a snapshot that will
-	/// be transferred in a single message during the sync process.
+	/// The batch size for individual snapshot items transfer during the sync
+	/// process using the `FetchDataRequest`/`FetchDataResponse` messages.
 	///
 	/// Try to keep this value in the range that would give us individual batches
 	/// in the range of 2MB-5MB or for the fetch transfer to not exceed the
@@ -209,6 +269,10 @@ pub type SyncInitCommand<M: SnapshotStateMachine> =
 
 // construction
 impl<M: SnapshotStateMachine> SnapshotSync<M> {
+	/// Creates a new instance of the snapshot sync strategy with the given config
+	/// and a function that translates snapshot requests to state-machine-specific
+	/// marker commands that will be replicated in the log to trigger snapshot
+	/// creation.
 	pub(super) fn new(
 		config: Config,
 		to_command: impl Fn(SnapshotRequest) -> M::Command + Send + Sync + 'static,
@@ -269,31 +333,90 @@ impl<M: SnapshotStateMachine> SnapshotSync<M> {
 	}
 }
 
-#[derive(Clone, Serialize, Deserialize, From)]
-#[serde(bound = "T: SnapshotItem")]
-pub enum SnapshotSyncMessage<T> {
-	RequestSnapshot,
-	SnapshotReady(SnapshotInfo),
-	FetchDataRequest(FetchDataRequest),
-	FetchDataResponse(FetchDataResponse<T>),
+struct PendingRequest<M: SnapshotStateMachine> {
+	request: SnapshotRequest,
+	position: Cursor,
+	snapshot: M::Snapshot,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-pub struct SnapshotInfo {
-	pub anchor: Cursor,
-	pub len: u64,
+struct SnapshotSyncInner<M: SnapshotStateMachine> {
+	config: Config,
+	to_command: SyncInitCommand<M>,
+	requests_tx: UnboundedSender<PendingRequest<M>>,
+	requests_rx: Option<UnboundedReceiver<PendingRequest<M>>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FetchDataRequest {
-	pub anchor: Cursor,
-	pub range: Range<u64>,
+impl<M: SnapshotStateMachine> SnapshotSyncInner<M> {
+	pub fn new(
+		config: Config,
+		to_command: impl Fn(SnapshotRequest) -> M::Command + Send + Sync + 'static,
+	) -> Self {
+		let (requests_tx, requests_rx) = unbounded_channel();
+		Self {
+			config,
+			requests_tx,
+			requests_rx: Some(requests_rx),
+			to_command: Arc::new(to_command),
+		}
+	}
+
+	pub fn is_expired(&self, request: &SnapshotRequest) -> bool {
+		self.config.is_expired(request)
+	}
+
+	pub fn serve_snapshot(
+		&self,
+		request: SnapshotRequest,
+		position: Cursor,
+		snapshot: M::Snapshot,
+	) {
+		let _ = self.requests_tx.send(PendingRequest {
+			request,
+			position,
+			snapshot,
+		});
+	}
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(bound = "T: SnapshotItem")]
-pub struct FetchDataResponse<T> {
-	pub anchor: Cursor,
-	pub offset: u64,
-	pub items: Vec<T>,
+// StateSync implementation
+impl<M: SnapshotStateMachine> SnapshotSyncInner<M> {
+	pub fn signature(&self) -> crate::UniqueId {
+		UniqueId::from("mosaik_collections_snapshot_sync")
+			.derive(type_name::<M>())
+			.derive(self.config.fetch_batch_size.to_le_bytes())
+			.derive(self.config.snapshot_ttl.as_millis().to_le_bytes())
+			.derive(
+				self
+					.config
+					.snapshot_request_timeout
+					.as_millis()
+					.to_le_bytes(),
+			)
+			.derive(self.config.fetch_timeout.as_millis().to_le_bytes())
+	}
+
+	pub fn create_provider(
+		&mut self,
+		_cx: &dyn SyncContext<SnapshotSync<M>>,
+	) -> SnapshotSyncProvider<M> {
+		let Some(requests_rx) = self.requests_rx.take() else {
+			unreachable!("create_provider called more than once. this is a bug.")
+		};
+
+		SnapshotSyncProvider::<M>::new(
+			self.config.clone(),
+			self.to_command.clone(),
+			requests_rx,
+		)
+	}
+
+	pub fn create_session(
+		&self,
+		cx: &mut dyn SyncSessionContext<SnapshotSync<M>>,
+		position: Cursor,
+		leader_commit: Index,
+		entries: Vec<(M::Command, Term)>,
+	) -> SnapshotSyncSession<M> {
+		SnapshotSyncSession::new(&self.config, cx, position, leader_commit, entries)
+	}
 }

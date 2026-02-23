@@ -1,17 +1,15 @@
 use {
 	super::{
 		Config,
-		FetchDataResponse,
 		Snapshot,
-		SnapshotRequest,
 		SnapshotStateMachine,
 		SnapshotSync,
-		SnapshotSyncMessage,
 		SyncInitCommand,
+		protocol::*,
 	},
 	crate::{
 		PeerId,
-		collections::sync::SnapshotInfo,
+		collections::sync::PendingRequest,
 		groups::*,
 		primitives::Short,
 	},
@@ -32,6 +30,9 @@ use {
 	},
 };
 
+/// Long-running state sync provider that responds to `SnapshotRequest`,
+/// `FetchDataRequest` and `FetchDataResponse` from `SnapshotSyncSession` to
+/// serve snapshots and its data to lagging followers.
 pub struct SnapshotSyncProvider<M: SnapshotStateMachine> {
 	// must match on all instances of the collection on all peers in the group.
 	config: Config,
@@ -42,7 +43,7 @@ pub struct SnapshotSyncProvider<M: SnapshotStateMachine> {
 
 	/// Receives snapshot requests from the state machine when they appear in the
 	/// log.
-	requests_rx: UnboundedReceiver<(SnapshotRequest, Cursor, M::Snapshot)>,
+	requests_rx: UnboundedReceiver<PendingRequest<M>>,
 
 	/// The list of available snapshots that can be served to followers, indexed
 	/// by their anchor position.
@@ -53,8 +54,7 @@ impl<M: SnapshotStateMachine> SnapshotSyncProvider<M> {
 	pub(super) fn new(
 		config: Config,
 		sync_init_cmd: SyncInitCommand<M>,
-		requests_rx: UnboundedReceiver<(SnapshotRequest, Cursor, M::Snapshot)>,
-		_cx: &dyn SyncContext<SnapshotSync<M>>,
+		requests_rx: UnboundedReceiver<PendingRequest<M>>,
 	) -> Self {
 		Self {
 			config,
@@ -84,6 +84,10 @@ impl<M: SnapshotStateMachine> StateSyncProvider for SnapshotSyncProvider<M> {
 		Poll::Pending
 	}
 
+	/// Handles incoming messages from other peers related to snapshot sync.
+	///
+	/// If a message is not handled at the provider level and should be forwarded
+	/// to the session, it is returned as an error.
 	fn receive(
 		&mut self,
 		message: SnapshotSyncMessage<<M::Snapshot as Snapshot>::Item>,
@@ -91,84 +95,25 @@ impl<M: SnapshotStateMachine> StateSyncProvider for SnapshotSyncProvider<M> {
 		cx: &mut dyn SyncProviderContext<Self::Owner>,
 	) -> Result<(), SnapshotSyncMessage<<M::Snapshot as Snapshot>::Item>> {
 		match message {
+			// A follower is starting a state catch-up session because it is lagging
+			// behind the state of the group.
 			SnapshotSyncMessage::RequestSnapshot => {
-				if !cx.is_leader() {
-					tracing::debug!(
-						from = %sender,
-						group = %cx.group_id(),
-						network = %cx.network_id(),
-						"ignoring snapshot request on a non-leader node"
-					);
-					return Ok(());
-				}
-
-				// create a snapshot request and translate it to a state-machine's
-				// specific command then feed it to the group for replication at a
-				// later position in the log that will be seen by all peers in the
-				// group.
-				let request = (self.sync_init_cmd)(SnapshotRequest {
-					requested_by: sender,
-					requested_at: Utc::now(),
-				});
-
-				if cx.feed_command(request).is_err() {
-					tracing::debug!(
-						from = %sender,
-						group = %cx.group_id(),
-						network = %cx.network_id(),
-						"failed to schedule snapshot request"
-					);
-				} else {
-					tracing::trace!(
-						by = %Short(sender),
-						group = %cx.group_id(),
-						network = %cx.network_id(),
-						"snapshot sync requested"
-					);
-				}
-
+				self.on_snapshot_request(
+					SnapshotRequest {
+						requested_by: sender,
+						requested_at: Utc::now(),
+					},
+					cx,
+				);
 				Ok(())
 			}
+			// A follower is requesting a specific range of items from a snapshot
+			// anchored at a specific position.
 			SnapshotSyncMessage::FetchDataRequest(request) => {
-				// Look up the snapshot for the requested anchor
-				if let Some(available) = self.available.get_mut(&request.anchor) {
-					// Revive the snapshot TTL on each fetch
-					available.revive(self.config.snapshot_ttl);
-
-					if let Some(items) =
-						available.snapshot.iter_range(request.range.clone())
-					{
-						let items: std::vec::Vec<_> = items.collect();
-						cx.send_to(
-							sender,
-							SnapshotSyncMessage::FetchDataResponse(FetchDataResponse {
-								anchor: request.anchor,
-								offset: request.range.start,
-								items,
-							}),
-						);
-					} else {
-						tracing::warn!(
-							from = %Short(sender),
-							anchor = %request.anchor,
-							range = ?request.range,
-							group = %cx.group_id(),
-							network = %cx.network_id(),
-							"snapshot range out of bounds"
-						);
-					}
-				} else {
-					tracing::debug!(
-						from = %Short(sender),
-						anchor = %request.anchor,
-						group = %cx.group_id(),
-						network = %cx.network_id(),
-						"requested snapshot not available (expired or unknown)"
-					);
-				}
-
+				self.on_fetch_data_request(&request, sender, cx);
 				Ok(())
 			}
+			// forward to `SnapshotSyncSession`
 			other => Err(other),
 		}
 	}
@@ -192,61 +137,58 @@ impl<M: SnapshotStateMachine> SnapshotSyncProvider<M> {
 		task_cx: &mut Context<'_>,
 		sync_cx: &mut dyn SyncProviderContext<SnapshotSync<M>>,
 	) -> Poll<()> {
-		if !self.requests_rx.is_empty() {
-			let mut requests = Vec::with_capacity(self.requests_rx.len());
-			if self
-				.requests_rx
-				.poll_recv_many(task_cx, &mut requests, self.requests_rx.len())
-				.is_ready()
+		let mut received = false;
+		while let Poll::Ready(Some(pending)) = self.requests_rx.poll_recv(task_cx) {
+			received = true;
+			if pending.request.requested_by == sync_cx.local_id()
+				|| self.config.is_expired(&pending.request)
 			{
-				for (request, position, snapshot) in requests {
-					if request.requested_by == sync_cx.local_id()
-						|| self.config.is_expired(&request)
-					{
-						// ignore requests that were made by this node or are stale by the
-						// time they are being processed.
-						continue;
-					}
+				// ignore requests that were made by this node or are stale by the
+				// time they are being processed.
+				continue;
+			}
 
-					let len = snapshot.len();
-					match self.available.entry(position) {
-						Entry::Occupied(mut existing) => {
-							// extend the TTL of the existing snapshot if a new snapshot for
-							// the same position is being served.
-							existing.get_mut().revive(self.config.snapshot_ttl);
-						}
-						Entry::Vacant(place) => {
-							// new snapshot for this position, add it to the available list.
-							place.insert(AvailableSnapshot::new(
-								snapshot,
-								self.config.snapshot_ttl,
-							));
-						}
-					}
-
-					// notify the requester that the snapshot is available.
-					sync_cx.send_to(
-						request.requested_by,
-						SnapshotInfo {
-							anchor: position,
-							len,
-						}
-						.into(),
-					);
-
-					tracing::trace!(
-						to = %Short(request.requested_by),
-						anchor = %position,
-						items = len,
-						group = %sync_cx.group_id(),
-						network = %sync_cx.network_id(),
-						"offering snapshot"
-					);
+			let len = pending.snapshot.len();
+			match self.available.entry(pending.position) {
+				Entry::Occupied(mut existing) => {
+					// extend the TTL of the existing snapshot if a new snapshot for
+					// the same position is being served.
+					existing.get_mut().revive(self.config.snapshot_ttl);
+				}
+				Entry::Vacant(place) => {
+					// new snapshot for this position, add it to the available list.
+					place.insert(AvailableSnapshot::new(
+						pending.snapshot,
+						self.config.snapshot_ttl,
+					));
 				}
 			}
+
+			// notify the requester that the snapshot is available.
+			sync_cx.send_to(
+				pending.request.requested_by,
+				SnapshotInfo {
+					anchor: pending.position,
+					items_count: len,
+				}
+				.into(),
+			);
+
+			tracing::trace!(
+				to = %Short(pending.request.requested_by),
+				anchor = %pending.position,
+				items = len,
+				group = %sync_cx.group_id(),
+				network = %sync_cx.network_id(),
+				"offering snapshot"
+			);
 		}
 
-		Poll::Pending
+		if received {
+			Poll::Ready(())
+		} else {
+			Poll::Pending
+		}
 	}
 
 	/// Removes snapshots that have not been active for longer than the configured
@@ -262,6 +204,108 @@ impl<M: SnapshotStateMachine> SnapshotSyncProvider<M> {
 		for pos in expired {
 			self.available.remove(&pos);
 		}
+	}
+
+	/// Handles incoming snapshot requests by translating them to
+	/// state-machine-specific commands and feeding them to the group for
+	/// replication.
+	fn on_snapshot_request(
+		&self,
+		request: SnapshotRequest,
+		cx: &mut dyn SyncProviderContext<SnapshotSync<M>>,
+	) {
+		let sender = request.requested_by;
+		if !cx.is_leader() {
+			tracing::debug!(
+				from = %sender,
+				group = %cx.group_id(),
+				network = %cx.network_id(),
+				"ignoring snapshot request on a non-leader node"
+			);
+			return;
+		}
+
+		// create a snapshot request and translate it to a state-machine's
+		// specific command then feed it to the group for replication at a
+		// later position in the log that will be seen by all peers in the
+		// group.
+		let request = (self.sync_init_cmd)(request);
+
+		if cx.feed_command(request).is_err() {
+			tracing::debug!(
+				from = %sender,
+				group = %cx.group_id(),
+				network = %cx.network_id(),
+				"failed to schedule snapshot request"
+			);
+		} else {
+			tracing::trace!(
+				by = %Short(sender),
+				group = %cx.group_id(),
+				network = %cx.network_id(),
+				"snapshot sync requested"
+			);
+		}
+	}
+
+	/// Handles incoming `FetchDataRequest` messages by looking up the requested
+	/// snapshot and sending the requested range of items back to the requester if
+	/// the snapshot is still available.
+	///
+	/// Each request extends the TTL of the snapshot to ensure that it remains
+	/// available for the duration of the sync process with lagging followers.
+	fn on_fetch_data_request(
+		&mut self,
+		request: &FetchDataRequest,
+		sender: PeerId,
+		cx: &mut dyn SyncProviderContext<SnapshotSync<M>>,
+	) {
+		let Some(available) = self.available.get_mut(&request.anchor) else {
+			tracing::debug!(
+				from = %Short(sender),
+				anchor = %request.anchor,
+				group = %cx.group_id(),
+				network = %cx.network_id(),
+				"requested snapshot not available (expired or unknown)"
+			);
+			return;
+		};
+
+		// clamp the requested range to the configured max batch size
+		let end = request
+			.range
+			.end
+			.min(request.range.start + self.config.fetch_batch_size);
+		let range = request.range.start..end;
+
+		if range.is_empty() {
+			return;
+		}
+
+		// Revive the snapshot TTL on each fetch
+		available.revive(self.config.snapshot_ttl);
+
+		let Some(items) = available.snapshot.iter_range(range) else {
+			tracing::warn!(
+				from = %Short(sender),
+				anchor = %request.anchor,
+				range = ?request.range,
+				group = %cx.group_id(),
+				network = %cx.network_id(),
+				"snapshot range out of bounds"
+			);
+			return;
+		};
+
+		let items: std::vec::Vec<_> = items.collect();
+		cx.send_to(
+			sender,
+			SnapshotSyncMessage::FetchDataResponse(FetchDataResponse {
+				anchor: request.anchor,
+				offset: request.range.start,
+				items,
+			}),
+		);
 	}
 }
 

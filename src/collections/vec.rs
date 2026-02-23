@@ -6,25 +6,19 @@ use {
 		WRITER,
 		When,
 		primitives::{Key, StoreId, Value, Version},
-		sync::{Snapshot, SnapshotStateMachine, SnapshotSync},
+		sync::{
+			Snapshot,
+			SnapshotStateMachine,
+			SnapshotSync,
+			protocol::SnapshotRequest,
+		},
 	},
 	crate::{
 		Group,
 		Network,
 		PeerId,
 		UniqueId,
-		collections::sync::{SnapshotInfo, SnapshotRequest},
-		groups::{
-			ApplyContext,
-			CommandError,
-			ConsensusConfig,
-			Cursor,
-			Index,
-			IndexRange,
-			StateMachine,
-			SyncContext,
-			Term,
-		},
+		groups::*,
 		primitives::{Short, UnboundedChannel},
 	},
 	chrono::{DateTime, Utc},
@@ -33,7 +27,14 @@ use {
 	tokio::sync::{broadcast, mpsc::UnboundedSender, watch},
 };
 
+/// Mutable access to a replicated vector.
+///
+/// Has higher priority for assuming group leadership.
 pub type VecWriter<T> = Vec<T, WRITER>;
+
+/// Read-only access to a vector.
+///
+/// Has lower priority for assuming group leadership.
 pub type VecReader<T> = Vec<T, READER>;
 
 /// Replicated ordered, index-addressable sequence.
@@ -288,11 +289,8 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// Note that different sync configurations will create different groups ids
 	/// and the resulting vectors will not be able to see each other.
-	pub fn writer(
-		network: &crate::network::Network,
-		store_id: crate::UniqueId,
-	) -> VecWriter<T> {
-		Self::writer_with_sync_config(network, store_id, SyncConfig::default())
+	pub fn writer(network: &Network, store_id: UniqueId) -> VecWriter<T> {
+		Self::writer_with_config(network, store_id, SyncConfig::default())
 	}
 
 	/// Create a new vector in writer mode.
@@ -308,27 +306,12 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// Note that different sync configurations will create different groups ids
 	/// and the resulting vectors will not be able to see each other.
-	pub fn writer_with_sync_config(
-		network: &crate::network::Network,
-		store_id: crate::UniqueId,
+	pub fn writer_with_config(
+		network: &Network,
+		store_id: UniqueId,
 		sync_config: SyncConfig,
 	) -> VecWriter<T> {
-		let machine = VecStateMachine::new(
-			store_id, //
-			WRITER,
-			sync_config,
-			network.local().id(),
-		);
-
-		let data = machine.data();
-		let group = network
-			.groups()
-			.with_key(store_id.into())
-			.with_state_machine(machine)
-			.join();
-		let when = When::new(group.when().clone());
-
-		VecWriter::<T> { when, group, data }
+		Self::create::<WRITER>(network, store_id, sync_config)
 	}
 
 	/// Create a new vector in reader mode.
@@ -349,45 +332,30 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	/// that the sync configuration used for readers is compatible with the sync
 	/// configuration used for writers, otherwise the readers will not see any of
 	/// the writers' changes.
-	pub fn reader_with_sync_config(
+	pub fn reader_with_config(
 		network: &Network,
 		store_id: StoreId,
 		sync_config: SyncConfig,
 	) -> VecReader<T> {
-		let machine = VecStateMachine::new(
-			store_id, //
-			READER,
-			sync_config,
-			network.local().id(),
-		);
-
-		let data = machine.data();
-		let group = network
-			.groups()
-			.with_key(store_id.into())
-			.with_state_machine(machine)
-			.join();
-		let when = When::new(group.when().clone());
-
-		VecReader::<T> { when, group, data }
+		Self::create::<READER>(network, store_id, sync_config)
 	}
 
 	/// Create a new vector in writer mode.
 	///
 	/// This is an alias for the `writer` method.
 	pub fn new(network: &Network, store_id: StoreId) -> VecWriter<T> {
-		VecWriter::<T>::writer(network, store_id)
+		Self::writer(network, store_id)
 	}
 
 	/// Create a new vector in writer mode with the specified sync configuration.
 	///
-	/// This is an alias for the `writer_with_sync_config` method.
-	pub fn new_with_sync_config(
+	/// This is an alias for the `writer_with_config` method.
+	pub fn new_with_config(
 		network: &Network,
 		store_id: StoreId,
 		sync_config: SyncConfig,
 	) -> VecWriter<T> {
-		VecWriter::<T>::writer_with_sync_config(network, store_id, sync_config)
+		Self::writer_with_config(network, store_id, sync_config)
 	}
 
 	/// Create a new vector in reader mode.
@@ -400,10 +368,33 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	/// group leaders, which reduces latency for read operations.
 	///
 	/// This creates a new vector with the default sync configuration. If you want
-	/// to specify a custom sync configuration, use the `reader_with_sync_config`
+	/// to specify a custom sync configuration, use the `reader_with_config`
 	/// method instead.
 	pub fn reader(network: &Network, store_id: StoreId) -> VecReader<T> {
-		Self::reader_with_sync_config(network, store_id, SyncConfig::default())
+		Self::reader_with_config(network, store_id, SyncConfig::default())
+	}
+
+	fn create<const W: bool>(
+		network: &Network,
+		store_id: StoreId,
+		sync_config: SyncConfig,
+	) -> Vec<T, W> {
+		let machine = VecStateMachine::new(
+			store_id, //
+			W,
+			sync_config,
+			network.local().id(),
+		);
+
+		let data = machine.data();
+		let group = network
+			.groups()
+			.with_key(store_id.into())
+			.with_state_machine(machine)
+			.join();
+		let when = When::new(group.when().clone());
+
+		Vec::<T, W> { when, group, data }
 	}
 }
 
@@ -484,6 +475,7 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 	) {
 		let mut commands_len = 0usize;
 		let mut sync_requests = vec![];
+
 		for command in commands {
 			match command {
 				VecCommand::Clear => {

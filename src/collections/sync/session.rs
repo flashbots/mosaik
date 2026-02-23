@@ -1,14 +1,5 @@
 use {
-	super::{
-		Config,
-		FetchDataRequest,
-		FetchDataResponse,
-		Snapshot,
-		SnapshotInfo,
-		SnapshotStateMachine,
-		SnapshotSync,
-		SnapshotSyncMessage,
-	},
+	super::{Config, Snapshot, SnapshotStateMachine, SnapshotSync, protocol::*},
 	crate::{
 		PeerId,
 		groups::{Cursor, Index, StateSyncSession, SyncSessionContext, Term},
@@ -219,18 +210,18 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 			if valid {
 				tracing::info!(
 					anchor = %anchor_cursor,
-					items = info.len,
+					items = info.items_count,
 					group = %Short(cx.group_id()),
 					network = %Short(cx.network_id()),
 					"selected snapshot anchor"
 				);
 
 				self.anchor = Some(**anchor_cursor);
-				self.snapshot_len = info.len;
-				self.total = info.len as usize;
+				self.snapshot_len = info.items_count;
+				self.total = info.items_count as usize;
 
-				if info.len > 0 {
-					self.gap = Some(0..info.len);
+				if info.items_count > 0 {
+					self.gap = Some(0..info.items_count);
 				} else {
 					// Empty snapshot — nothing to fetch
 					self.gap = Some(0..0);
@@ -276,7 +267,7 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 			tracing::info!(
 				old_anchor = %current,
 				new_anchor = %new_anchor,
-				len = info.len,
+				len = info.items_count,
 				group = %Short(cx.group_id()),
 				network = %Short(cx.network_id()),
 				"upgrading snapshot anchor"
@@ -284,14 +275,14 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 
 			// Reset fetch state
 			self.anchor = Some(new_anchor);
-			self.snapshot_len = info.len;
-			self.total = info.len as usize;
+			self.snapshot_len = info.items_count;
+			self.total = info.items_count as usize;
 			self.downloaded = 0;
 			self.accumulated = M::Snapshot::default();
 			self.inflight.clear();
 			self.fetched.clear();
 
-			self.gap = Some(0..info.len);
+			self.gap = Some(0..info.items_count);
 
 			// Update available peers for the new anchor
 			self.available_peers.clear();
@@ -316,7 +307,7 @@ impl<M: SnapshotStateMachine> SnapshotSyncSession<M> {
 		tracing::debug!(
 			from = %Short(peer),
 			anchor = %info.anchor,
-			items = info.len,
+			items = info.items_count,
 			group = %Short(cx.group_id()),
 			network = %Short(cx.network_id()),
 			"snapshot available"
@@ -745,7 +736,7 @@ impl<M: SnapshotStateMachine> StateSyncSession for SnapshotSyncSession<M> {
 		cx: &mut dyn SyncSessionContext<Self::Owner>,
 	) {
 		match message {
-			SnapshotSyncMessage::SnapshotReady(info) => {
+			SnapshotSyncMessage::SnapshotOffer(info) => {
 				self.on_snapshot_ready(sender, info, cx);
 			}
 			SnapshotSyncMessage::FetchDataResponse(response) => {

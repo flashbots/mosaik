@@ -118,6 +118,11 @@ pub trait StateMachine: Sized + Send + 'static {
 	}
 }
 
+/// Contextual information provided to the state machine when applying commands.
+///
+/// This trait does not offer any information that is non-deterministic or that
+/// can diverge between different nodes in the group, so it is safe to use for
+/// deterministic state machines.
 pub trait ApplyContext {
 	/// The index and term of the last committed log entry that has been applied
 	/// by the state machine before applying the current batch of commands.
