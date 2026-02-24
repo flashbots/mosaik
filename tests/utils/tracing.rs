@@ -31,6 +31,8 @@ fn init_test_logging() {
 			"mio",
 			"acto",
 			"swarm_discovery",
+			"mainline",
+			"pkarr",
 		];
 
 		// disable disabling noisy modules tracing

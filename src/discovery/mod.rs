@@ -24,6 +24,7 @@ use {
 };
 
 mod announce;
+mod bootstrap;
 mod catalog;
 mod config;
 mod entry;

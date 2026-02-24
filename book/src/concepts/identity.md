@@ -76,6 +76,8 @@ let other: NetworkId = "other-app".into();
 assert_ne!(id1, other);
 ```
 
+The `NetworkId` also drives **automatic peer discovery**: nodes sharing the same `NetworkId` find each other through the [Mainline DHT](../subsystems/discovery/dht-bootstrap.md) without requiring any hardcoded bootstrap peers. Simply using the same network name is enough for nodes to connect.
+
 ## Tags: Capability Labels
 
 Tags are `Digest` values used to describe a node's role or capabilities:

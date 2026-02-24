@@ -4,14 +4,17 @@ The Discovery subsystem handles gossip-based peer discovery and catalog synchron
 
 ## Overview
 
-Discovery uses two complementary protocols:
+Discovery uses three complementary mechanisms:
 
-| Protocol     | ALPN                   | Purpose                                          |
-| ------------ | ---------------------- | ------------------------------------------------ |
-| Announce     | `/mosaik/announce`     | Real-time gossip broadcasts via iroh-gossip      |
-| Catalog Sync | `/mosaik/catalog-sync` | Full bidirectional catalog exchange for catch-up |
+| Mechanism     | Transport              | Purpose                                          |
+| ------------- | ---------------------- | ------------------------------------------------ |
+| DHT Bootstrap | Mainline DHT (pkarr)   | Automatic peer discovery via shared `NetworkId`  |
+| Announce      | `/mosaik/announce`     | Real-time gossip broadcasts via iroh-gossip      |
+| Catalog Sync  | `/mosaik/catalog-sync` | Full bidirectional catalog exchange for catch-up |
 
-Together, they ensure that every node eventually learns about every other node in the network.
+Nodes sharing the same `NetworkId` automatically discover each other through the DHT — no hardcoded bootstrap peers are required. Once an initial connection is established, the Announce and Catalog Sync protocols take over for real-time updates.
+
+See the [DHT Bootstrap](./discovery/dht-bootstrap.md) sub-chapter for details on the automatic discovery mechanism.
 
 ## Configuration
 
@@ -39,15 +42,17 @@ let network = Network::builder(network_id)
 
 ### Configuration Options
 
-| Field               | Default | Description                                     |
-| ------------------- | ------- | ----------------------------------------------- |
-| `bootstrap_peers`   | `[]`    | Initial peers to connect to on startup          |
-| `tags`              | `[]`    | Tags to advertise about this node               |
-| `announce_interval` | 15s     | How often to re-announce via gossip             |
-| `announce_jitter`   | 0.5     | Max jitter factor (0.0–1.0) for announce timing |
-| `purge_after`       | 300s    | Duration after which stale entries are purged   |
-| `max_time_drift`    | 10s     | Maximum acceptable clock drift between peers    |
-| `events_backlog`    | 100     | Past events retained in event broadcast channel |
+| Field                  | Default | Description                                             |
+| ---------------------- | ------- | ------------------------------------------------------- |
+| `bootstrap_peers`      | `[]`    | Initial peers to connect to on startup                  |
+| `tags`                 | `[]`    | Tags to advertise about this node                       |
+| `announce_interval`    | 15s     | How often to re-announce via gossip                     |
+| `announce_jitter`      | 0.5     | Max jitter factor (0.0–1.0) for announce timing         |
+| `purge_after`          | 300s    | Duration after which stale entries are purged           |
+| `max_time_drift`       | 10s     | Maximum acceptable clock drift between peers            |
+| `events_backlog`       | 100     | Past events retained in event broadcast channel         |
+| `dht_publish_interval` | 300s    | How often to publish to the DHT (`None` to disable)     |
+| `dht_poll_interval`    | 60s     | How often to poll the DHT for peers (`None` to disable) |
 
 Both `with_bootstrap()` and `with_tags()` are **additive** — calling them multiple times adds to the list.
 

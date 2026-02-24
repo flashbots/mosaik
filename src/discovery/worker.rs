@@ -11,7 +11,7 @@ use {
 	},
 	crate::{
 		PeerId,
-		discovery::{PeerEntryVersion, SignedPeerEntry},
+		discovery::{PeerEntryVersion, SignedPeerEntry, bootstrap::DhtBootstrap},
 		network::LocalNode,
 		primitives::{IntoIterOrSingle, Pretty, Short},
 	},
@@ -126,6 +126,9 @@ pub(super) struct WorkerLoop {
 	/// Peer gossip announcement protocol handler.
 	announce: Announce,
 
+	/// Automatic DHT bootstrap system
+	bootstrap: DhtBootstrap,
+
 	/// Public API discovery events.
 	events: broadcast::Sender<Event>,
 
@@ -156,6 +159,7 @@ impl WorkerLoop {
 		let (events_tx, events_rx) = broadcast::channel(config.events_backlog);
 
 		let sync = CatalogSync::new(local.clone(), catalog.clone());
+		let bootstrap = DhtBootstrap::new(&local, &config, catalog.subscribe());
 		let announce = Announce::new(local.clone(), &config, catalog.subscribe());
 		let announce_interval = interval(config.announce_interval);
 		let purge_interval = interval(config.purge_after);
@@ -172,6 +176,7 @@ impl WorkerLoop {
 			handle: Arc::clone(&handle),
 			sync,
 			announce,
+			bootstrap,
 			events: events_tx,
 			syncs: JoinSet::new(),
 			commands: commands_rx,
@@ -228,6 +233,11 @@ impl WorkerLoop {
 				// Announcement protocol events
 				Some(event) = self.announce.events().recv() => {
 					self.on_announce_event(event);
+				}
+
+				// Automatic DHT bootstrap peer discovered
+				Some(peer_id) = self.bootstrap.events().recv() => {
+					self.on_dht_discovery(peer_id).await;
 				}
 
 				// Catalog sync protocol events
@@ -330,6 +340,19 @@ impl WorkerLoop {
 			announce::Event::PeerDeparted(peer_id, entry_version) => {
 				self.on_peer_departed(peer_id, entry_version);
 			}
+		}
+	}
+
+	/// Handles peers discovered via the Mainline DHT bootstrap mechanism.
+	async fn on_dht_discovery(&self, peer_id: PeerId) {
+		if self.handle.catalog.borrow().get(&peer_id).is_none() {
+			tracing::trace!(
+				peer_id = %Short(&peer_id),
+				network = %self.handle.local.network_id(),
+				"peer discovered via DHT auto bootstrap"
+			);
+
+			self.announce.dial(peer_id).await;
 		}
 	}
 
