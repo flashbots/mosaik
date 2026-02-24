@@ -1,0 +1,9 @@
+[book]
+title = "Mosaik"
+authors = ["Flashbots", "Karim Agha"]
+description = "Developer documentation for mosaik — a Rust runtime for building self-organizing, leaderless distributed systems."
+language = "en"
+
+[output.html]
+git-repository-url = "https://github.com/flashbots/mosaik"
+edit-url-template = "https://github.com/flashbots/mosaik/edit/main/book/{path}"
