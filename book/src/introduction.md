@@ -7,7 +7,7 @@
 When you deploy mosaik-based binaries on arbitrary machines, the network **self-organizes**: nodes discover each other via gossip, infer the data-flow topology, elect leaders where needed, and converge to a stable operational state. Each node needs only two things to participate:
 
 1. **A network ID** — identifies which logical network to join
-2. **A bootstrap peer** — the peer ID of any node already on the network (the [bootstrap example](https://github.com/flashbots/mosaik/blob/main/examples/bootstrap.rs) can be used in production as a universal bootstrap node)
+2. ** (optionally) A bootstrap peer** — the peer ID of any node already on the network (the [bootstrap example](https://github.com/flashbots/mosaik/blob/main/examples/bootstrap.rs) can be used in production as a universal bootstrap node). Mosaik provides automatic bootstrap by publishing peer identities and their network id associations in Mainline DHT for zero-config discovery.
 
 A secret key is automatically generated on each run, giving the node a unique identity. Specifying a fixed secret key is only recommended for bootstrap nodes that need a stable, well-known peer ID across restarts.
 

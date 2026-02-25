@@ -35,7 +35,7 @@ Gossip-based peer discovery and catalog synchronization. Nodes announce their pr
 
 - **Announcements** — real-time broadcast of peer presence and metadata changes via `iroh-gossip`, with signed entries and periodic re-announcements
 - **Catalog Sync** — full bidirectional catalog exchange for initial catch-up and on-demand synchronization
-- **Automatic Mainline DHT bootstrap** - nodes self-register their identities for the network 
+- **Automatic DHT bootstrap** - See the [DHT Bootstrap](./discovery/dht-bootstrap.md) sub-chapter for details on the automatic discovery mechanism.
 
 Discovery is largely transparent and ships with sensible defaults. To spin up a node on a given network, just provide a `NetworkId`:
 
