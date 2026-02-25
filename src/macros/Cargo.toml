@@ -1,5 +1,6 @@
 [package]
 name = "mosaik-macros"
+description = "Procedural macros for the Mosaik runtime."
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -8,6 +9,7 @@ homepage.workspace = true
 repository.workspace = true
 authors.workspace = true
 exclude.workspace = true
+publish = true
 
 [lib]
 proc-macro = true

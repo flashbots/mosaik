@@ -1,6 +1,6 @@
 [workspace]
 members = [".", "src/macros", "examples/orderbook"]
-default-members = [".", "examples/orderbook"]
+default-members = [".", "src/macros"]
 resolver = "2"
 
 [workspace.package]
@@ -12,6 +12,7 @@ homepage = "https://github.com/flashbots/mosaik"
 repository = "https://github.com/flashbots/mosaik"
 authors = ["Flashbots <info@flashbots.net>", "Karim Agha <karim@flashbots.net>"]
 exclude = [".github/"]
+publish = ["mosaik", "mosaik-macros"]
 
 [workspace.dependencies]
 mosaik = { path = "." }
@@ -69,7 +70,7 @@ anyhow.workspace = true
 rand.workspace = true
 blake3.workspace = true
 
-mosaik-macros = { path = "src/macros" }
+mosaik-macros = { version = "0.2.9", path = "src/macros" }
 
 thiserror = "2.0"
 postcard = "1.1.3"
