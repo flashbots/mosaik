@@ -9,18 +9,20 @@
 mod depq;
 mod map;
 mod primitives;
+mod register;
 mod set;
 mod sync;
 mod vec;
 mod when;
 
 pub use {
-	depq::PriorityQueue,
-	map::Map,
+	depq::{PriorityQueue, PriorityQueueReader, PriorityQueueWriter},
+	map::{Map, MapReader, MapWriter},
 	primitives::{StoreId, Version},
-	set::Set,
+	register::{Register, RegisterReader, RegisterWriter},
+	set::{Set, SetReader, SetWriter},
 	sync::Config as SyncConfig,
-	vec::Vec,
+	vec::{Vec, VecReader, VecWriter},
 	when::When,
 };
 

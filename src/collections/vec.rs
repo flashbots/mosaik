@@ -389,7 +389,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 		let data = machine.data();
 		let group = network
 			.groups()
-			.with_key(store_id.into())
+			.with_key(store_id)
 			.with_state_machine(machine)
 			.join();
 		let when = When::new(group.when().clone());

@@ -35,6 +35,7 @@ Gossip-based peer discovery and catalog synchronization. Nodes announce their pr
 
 - **Announcements** — real-time broadcast of peer presence and metadata changes via `iroh-gossip`, with signed entries and periodic re-announcements
 - **Catalog Sync** — full bidirectional catalog exchange for initial catch-up and on-demand synchronization
+- **Automatic Mainline DHT bootstrap** - nodes self-register their identities for the network 
 
 Discovery is largely transparent and ships with sensible defaults. To spin up a node on a given network, just provide a `NetworkId`:
 
@@ -197,6 +198,33 @@ assert!(!reader.contains(&7));
 assert_eq!(reader.len(), 3);
 ```
 
+### `Register<T>`
+
+Replicated single-value register. Holds at most one value at a time — writing replaces the previous value. This is the distributed equivalent of a `tokio::sync::watch` channel.
+
+```rust
+let store_id = StoreId::random();
+
+let reg = mosaik::collections::Register::<String>::new(&network, store_id);
+reg.when().online().await;
+
+reg.write("v1".into()).await?;
+assert_eq!(reg.read(), Some("v1".into()));
+
+// Overwrite replaces the previous value
+reg.write("v2".into()).await?;
+assert_eq!(reg.read(), Some("v2".into()));
+
+// On a reader node
+let reader = mosaik::collections::Register::<String>::reader(&network, store_id);
+reader.when().online().await;
+assert_eq!(reader.read(), Some("v2".into()));
+
+let ver = reg.clear().await?;
+reader.when().reaches(ver).await;
+assert!(reader.is_empty());
+```
+
 ### `PriorityQueue<P, K, V>`
 
 Replicated double-ended priority queue. Each entry has a priority, a unique key, and a value. Supports efficient min/max access, key-based lookups, priority updates, and range removals.
@@ -342,24 +370,24 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 │  │   Collections   │  │   Transport (iroh)  │  │
 │  │                 │  │                     │  │
 │  │ Map · Vec · Set │  │ QUIC · Relay · mDNS │  │
-│  │ PriorityQueue   │  │                     │  │
+│  │ Register · DEPQ │  │                     │  │
 │  └─────────────────┘  └─────────────────────┘  │
 └────────────────────────────────────────────────┘
 ```
 
 # Repository Layout
 
-| Path               | Description                                                           |
-| ------------------ | --------------------------------------------------------------------- |
-| `src/`             | Core library — all shared primitives, protocols, and APIs             |
-| `src/discovery/`   | Peer discovery, announcement, and catalog synchronization             |
-| `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria      |
-| `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines |
-| `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `PriorityQueue`      |
-| `src/network/`     | Transport layer, connection management, typed links                   |
-| `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues         |
-| `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)   |
-| `tests/`           | Integration tests organized by subsystem                              |
+| Path               | Description                                                                  |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `src/`             | Core library — all shared primitives, protocols, and APIs                    |
+| `src/discovery/`   | Peer discovery, announcement, and catalog synchronization                    |
+| `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria             |
+| `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines        |
+| `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Register`, `PriorityQueue` |
+| `src/network/`     | Transport layer, connection management, typed links                          |
+| `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues                |
+| `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)          |
+| `tests/`           | Integration tests organized by subsystem                                     |
 
 # Getting Started
 

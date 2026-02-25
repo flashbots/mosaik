@@ -5,19 +5,22 @@ structures that feel like local Rust collections but are automatically
 synchronized across all participating nodes using Raft consensus.
 
 ```text
-┌──────────────────────────────────────────────────────┐
-│                   Collections                        │
-│                                                      │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐  │
-│  │   Map    │ │   Vec    │ │   Set    │ │  DEPQ  │  │
-│  │ <K, V>   │ │ <T>      │ │ <T>      │ │<P,K,V> │  │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───┬────┘  │
-│       └─────────┬───┴───────┬────┘           │       │
-│            ┌────▼───────────▼────────────────▼──┐    │
-│            │    Groups (Raft Consensus)          │    │
-│            │    One group per collection         │    │
-│            └────────────────────────────────────┘    │
-└──────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                   Collections                                          │
+│                                                                        │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ ┌─────────────────┐ │
+│  │   Map    │ │   Vec    │ │   Set    │ │  DEPQ  │ │   Register <T>  │ │
+│  │ <K, V>   │ │ <T>      │ │ <T>      │ │<P,K,V> │ │                 │ │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───┬────┘ └────────┬────────┘ │
+│       └────────────┴────────────┴─┬─────────┴───────────────┘          │
+│                                   │                                    │
+│                                   │                                    │
+│                                   │                                    │
+│                  ┌────────────────▼───────────────────┐                │
+│                  │    Groups (Raft Consensus)         │                │
+│                  │    One group per collection        │                │
+│                  └────────────────────────────────────┘                │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 Each collection instance creates its own Raft consensus group. Different
@@ -50,10 +53,10 @@ assert_eq!(prices.get(&"ETH".into()), Some(3812.50));
 Every collection type offers two modes, distinguished at the **type level**
 using a const-generic boolean:
 
-| Mode       | Type alias                             | Can write? | Leadership priority |
-| ---------- | -------------------------------------- | ---------- | ------------------- |
-| **Writer** | `MapWriter<K,V>`, `VecWriter<T>`, etc. | Yes        | Normal              |
-| **Reader** | `MapReader<K,V>`, `VecReader<T>`, etc. | No         | Deprioritized       |
+| Mode       | Type alias                                                  | Can write? | Leadership priority |
+| ---------- | ----------------------------------------------------------- | ---------- | ------------------- |
+| **Writer** | `MapWriter<K,V>`, `VecWriter<T>`, `RegisterWriter<T>`, etc. | Yes        | Normal              |
+| **Reader** | `MapReader<K,V>`, `VecReader<T>`, `RegisterReader<T>`, etc. | No         | Deprioritized       |
 
 Both modes provide identical read access. Readers automatically use
 `deprioritize_leadership()` in their consensus configuration to reduce the
@@ -74,6 +77,7 @@ let r = Map::<String, u64>::reader(&network, store_id);
 | [`Map<K, V>`](collections/map.md)                         | Unordered key-value map             | `im::HashMap` (deterministic) |
 | [`Vec<T>`](collections/vec.md)                            | Ordered, index-addressable sequence | `im::Vector`                  |
 | [`Set<T>`](collections/set.md)                            | Unordered set of unique values      | `im::HashSet` (deterministic) |
+| [`Register<T>`](collections/register.md)                  | Single-value register               | `Option<T>`                   |
 | [`PriorityQueue<P, K, V>`](collections/priority-queue.md) | Double-ended priority queue         | `im::HashMap` + `im::OrdMap`  |
 
 All collections use the [`im` crate](https://docs.rs/im) for their internal

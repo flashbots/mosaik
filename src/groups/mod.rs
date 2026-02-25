@@ -166,8 +166,8 @@ impl Groups {
 	/// values for all the consensus-relevant parameters, otherwise they will
 	/// generate different group ids and will not be able to form a bond
 	/// connection with each other.
-	pub const fn with_key(&self, key: GroupKey) -> GroupBuilder<'_> {
-		GroupBuilder::new(self, key)
+	pub fn with_key(&self, key: impl Into<GroupKey>) -> GroupBuilder<'_> {
+		GroupBuilder::new(self, key.into())
 	}
 }
 

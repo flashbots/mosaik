@@ -295,7 +295,7 @@ impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
 		let data = machine.data();
 		let group = network
 			.groups()
-			.with_key(store_id.into())
+			.with_key(store_id)
 			.with_state_machine(machine)
 			.join();
 

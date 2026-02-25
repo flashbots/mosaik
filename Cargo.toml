@@ -6,7 +6,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.89"
-version = "0.2.6"
+version = "0.2.7"
 license = "MIT"
 homepage = "https://github.com/flashbots/mosaik"
 repository = "https://github.com/flashbots/mosaik"
@@ -22,7 +22,6 @@ serde = { version = "1.0", features = ["derive"] }
 futures = "0.3"
 anyhow = "1.0"
 rand = "0.9.2"
-
 
 [workspace.lints.rust]
 type_alias_bounds = "allow"

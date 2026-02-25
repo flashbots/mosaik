@@ -271,7 +271,7 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 		let data = machine.data();
 		let group = network
 			.groups()
-			.with_key(store_id.into())
+			.with_key(store_id)
 			.with_state_machine(machine)
 			.join();
 

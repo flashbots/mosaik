@@ -488,7 +488,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 		let data = machine.data();
 		let group = network
 			.groups()
-			.with_key(store_id.into())
+			.with_key(store_id)
 			.with_state_machine(machine)
 			.join();
 

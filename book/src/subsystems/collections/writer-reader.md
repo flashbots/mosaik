@@ -14,10 +14,10 @@ whether the instance has write access.
               │                       │
        IS_WRITER = true        IS_WRITER = false
        ┌──────────────┐       ┌──────────────┐
-       │    Writer     │       │    Reader     │
-       │ read + write  │       │  read-only   │
-       │ normal leader │       │ deprioritized │
-       │   priority    │       │   leader      │
+       │    Writer    │       │    Reader    │
+       │ read + write │       │  read-only   │
+       │ normal leader│       │ deprioritized│
+       │   priority   │       │   leader     │
        └──────────────┘       └──────────────┘
 ```
 
@@ -30,6 +30,7 @@ Each collection provides convenient type aliases:
 | `Map<K, V>`              | `MapWriter<K, V>`              | `MapReader<K, V>`              |
 | `Vec<T>`                 | `VecWriter<T>`                 | `VecReader<T>`                 |
 | `Set<T>`                 | `SetWriter<T>`                 | `SetReader<T>`                 |
+| `Register<T>`            | `RegisterWriter<T>`            | `RegisterReader<T>`            |
 | `PriorityQueue<P, K, V>` | `PriorityQueueWriter<P, K, V>` | `PriorityQueueReader<P, K, V>` |
 
 ## Construction
@@ -61,7 +62,7 @@ Internally, the const-generic boolean controls two things:
    etc.) are only implemented for `IS_WRITER = true`. This is enforced at
    compile time.
 
-2. **Leadership priority** — Readers return a `ConsensusConfig` with
+1. **Leadership priority** — Readers return a `ConsensusConfig` with
    `deprioritize_leadership()`, which increases their election timeout. This
    makes it less likely for a reader to become the Raft leader, keeping
    leadership on writer nodes where write operations are handled directly
