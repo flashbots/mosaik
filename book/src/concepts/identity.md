@@ -18,9 +18,16 @@ let id = UniqueId::from_bytes([0u8; 32]);
 // Random
 let id = UniqueId::random();
 
-// Compile-time constant from hex
+// Compile-time constants via the unique_id! macro
 use mosaik::unique_id;
-let id = unique_id!("a1b2c3d4e5f6...");  // 64 hex chars
+
+// From a 64-char hex string (decoded directly):
+const HEX_ID: UniqueId = unique_id!(
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+);
+
+// From any arbitrary string (blake3-hashed at compile time):
+const NAMED_ID: UniqueId = unique_id!("my-stream-name");
 
 // Deterministic derivation
 let derived = id.derive("sub-identifier");

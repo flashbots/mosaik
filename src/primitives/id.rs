@@ -290,55 +290,30 @@ impl Digest {
 	}
 }
 
-/// Converts a hex string literal into a `UniqueId` at compile time.
+/// Converts a string literal into a `UniqueId` at compile time.
 ///
-/// This macro accepts a 64-character hex string (representing 32 bytes) and
-/// produces a `UniqueId` that can be used in const contexts.
+/// This macro accepts either:
+/// - A 64-character hex string (representing 32 bytes), which is decoded
+///   directly.
+/// - Any other string, which is hashed using blake3 to produce the id (same
+///   behavior as `UniqueId::from`).
 ///
 /// # Examples
 ///
 /// ```
 /// use mosaik::unique_id;
 ///
-/// const MY_ID: UniqueId = unique_id!(
+/// // From a hex string:
+/// const HEX_ID: mosaik::UniqueId = unique_id!(
 /// 	"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 /// );
+///
+/// // From an arbitrary string (hashed with blake3):
+/// const NAMED_ID: mosaik::UniqueId = unique_id!("my-stream-name");
 /// ```
-///
-/// # Compile-time Errors
-///
-/// This macro will fail to compile if:
-/// - The hex string is not exactly 64 characters long
-/// - The hex string contains invalid hex characters
 #[macro_export]
 macro_rules! unique_id {
-	($hex:expr) => {{
-		const fn hex_char_to_nibble(c: u8) -> u8 {
-			match c {
-				b'0'..=b'9' => c - b'0',
-				b'a'..=b'f' => c - b'a' + 10,
-				b'A'..=b'F' => c - b'A' + 10,
-				_ => panic!("invalid hex character"),
-			}
-		}
-
-		const fn hex_to_bytes<const N: usize>(hex: &str) -> [u8; N] {
-			let hex = hex.as_bytes();
-			if hex.len() != N * 2 {
-				panic!("hex string must be exactly 64 characters for UniqueId");
-			}
-			let mut bytes = [0u8; N];
-			let mut i = 0;
-			while i < N {
-				let high = hex_char_to_nibble(hex[i * 2]);
-				let low = hex_char_to_nibble(hex[i * 2 + 1]);
-				bytes[i] = (high << 4) | low;
-				i += 1;
-			}
-			bytes
-		}
-
-		const BYTES: [u8; 32] = hex_to_bytes::<32>($hex);
-		$crate::primitives::UniqueId::from_bytes(BYTES)
-	}};
+	($s:expr) => {
+		$crate::primitives::UniqueId::from_bytes($crate::__unique_id_impl!($s))
+	};
 }

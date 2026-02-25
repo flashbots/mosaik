@@ -9,6 +9,8 @@ pub mod network;
 pub mod primitives;
 pub mod streams;
 
+#[doc(hidden)]
+pub use mosaik_macros::__unique_id_impl;
 pub use {
 	bytes::{Bytes, BytesMut},
 	collections::StoreId,
