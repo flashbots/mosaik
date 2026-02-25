@@ -141,6 +141,34 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 			.await
 	}
 
+	/// Compare and exchange a key-value pair in the map.
+	///
+	/// This will update the value for the given key to `new` if and only if the
+	/// current value matches `expected`. If the key does not exist, the current
+	/// value is considered to be `None`, so you can use this method to insert a
+	/// new key-value pair by setting `expected` to `None` and `new` to
+	/// `Some(value)`. Conversely, you can delete a key-value pair by setting
+	/// `expected` to `Some(value)` and `new` to `None`.
+	///
+	/// Time: O(log n)
+	pub async fn compare_exchange(
+		&self,
+		key: K,
+		expected: Option<V>,
+		new: Option<V>,
+	) -> Result<Version, Error<(K, Option<V>, Option<V>)>> {
+		self
+			.execute(MapCommand::CompareExchange { key, expected, new }, |cmd| {
+				match cmd {
+					MapCommand::CompareExchange { key, expected, new } => {
+						Error::Offline((key, expected, new))
+					}
+					_ => unreachable!(),
+				}
+			})
+			.await
+	}
+
 	/// Insert multiple key-value pairs into the map.
 	pub async fn extend(
 		&self,
@@ -409,6 +437,23 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 				MapCommand::Insert { key, value } => {
 					self.data.insert(key, value);
 				}
+				MapCommand::CompareExchange { key, expected, new } => {
+					match (self.data.get(&key), expected) {
+						(Some(current), Some(expected)) if current == &expected => {
+							if let Some(new) = new {
+								self.data.insert(key, new);
+							} else {
+								self.data.remove(&key);
+							}
+						}
+						(None, None) => {
+							if let Some(new) = new {
+								self.data.insert(key, new);
+							}
+						}
+						_ => {}
+					}
+				}
 				MapCommand::Remove { key } => {
 					self.data.remove(&key);
 				}
@@ -479,9 +524,21 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 #[serde(bound = "K: Key, V: Value")]
 enum MapCommand<K, V> {
 	Clear,
-	Insert { key: K, value: V },
-	Remove { key: K },
-	Extend { entries: Vec<(K, V)> },
+	Insert {
+		key: K,
+		value: V,
+	},
+	CompareExchange {
+		key: K,
+		expected: Option<V>,
+		new: Option<V>,
+	},
+	Remove {
+		key: K,
+	},
+	Extend {
+		entries: Vec<(K, V)>,
+	},
 	TakeSnapshot(SnapshotRequest),
 }
 

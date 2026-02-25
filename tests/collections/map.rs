@@ -649,3 +649,424 @@ async fn remove_all_entries() -> anyhow::Result<()> {
 
 	Ok(())
 }
+
+// compare_exchange succeeds when current value matches
+#[tokio::test]
+async fn compare_exchange_success() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert initial value
+	let ver = timeout_s(2, w.insert(1, 10)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(10));
+
+	// compare_exchange: current matches, so new value is written
+	let ver = timeout_s(2, w.compare_exchange(1, Some(10), Some(99))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(99));
+	assert_eq!(r.len(), 1); // still one entry
+
+	Ok(())
+}
+
+// compare_exchange inserts into empty map: None -> Some
+#[tokio::test]
+async fn compare_exchange_insert_new_key() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// map starts empty
+	assert!(r.is_empty());
+
+	// compare_exchange: None -> Some(10) inserts a new key
+	let ver = timeout_s(2, w.compare_exchange(1, None, Some(10))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(10));
+	assert_eq!(r.len(), 1);
+
+	Ok(())
+}
+
+// compare_exchange removes a key: Some -> None
+#[tokio::test]
+async fn compare_exchange_remove_key() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert initial values
+	let ver = timeout_s(2, w.extend(vec![(1, 10), (2, 20)])).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 2);
+
+	// compare_exchange: Some(10) -> None removes key 1
+	let ver = timeout_s(2, w.compare_exchange(1, Some(10), None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), None);
+	assert!(!r.contains_key(&1));
+	assert_eq!(r.len(), 1);
+	assert_eq!(r.get(&2), Some(20)); // other key untouched
+
+	Ok(())
+}
+
+// compare_exchange does not change value when expected doesn't match
+#[tokio::test]
+async fn compare_exchange_mismatch_no_change() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert initial value
+	let ver = timeout_s(2, w.insert(1, 10)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	// compare_exchange with wrong expected value — should NOT change
+	let ver = timeout_s(2, w.compare_exchange(1, Some(999), Some(200))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(10)); // unchanged
+
+	// compare_exchange with None expected on existing key — should NOT change
+	let ver = timeout_s(2, w.compare_exchange(1, None, Some(300))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(10)); // still unchanged
+
+	Ok(())
+}
+
+// compare_exchange mismatch on missing key (expected Some on absent key)
+#[tokio::test]
+async fn compare_exchange_mismatch_on_missing_key() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	assert!(r.is_empty());
+
+	// compare_exchange expecting Some on non-existent key — no insertion
+	let ver = timeout_s(2, w.compare_exchange(1, Some(42), Some(99))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_empty());
+	assert_eq!(r.get(&1), None);
+
+	Ok(())
+}
+
+// compare_exchange replicates to multiple readers
+#[tokio::test]
+async fn compare_exchange_replicates_to_readers() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n_w = Network::new(network_id).await?;
+	let n_r1 = Network::new(network_id).await?;
+	let n_r2 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n_w, &n_r1, &n_r2])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n_w, store_id);
+	let r1 = mosaik::collections::Map::<u64, u64>::reader(&n_r1, store_id);
+	let r2 = mosaik::collections::Map::<u64, u64>::reader(&n_r2, store_id);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r1.when().online()).await?;
+	timeout_s(10, r2.when().online()).await?;
+
+	// insert initial values
+	let ver = timeout_s(2, w.extend(vec![(1, 10), (2, 20)])).await??;
+	timeout_s(2, r1.when().reaches(ver)).await?;
+	timeout_s(2, r2.when().reaches(ver)).await?;
+
+	// compare_exchange replicates to all readers
+	let ver = timeout_s(2, w.compare_exchange(1, Some(10), Some(100))).await??;
+	timeout_s(2, r1.when().reaches(ver)).await?;
+	timeout_s(2, r2.when().reaches(ver)).await?;
+
+	assert_eq!(r1.get(&1), Some(100));
+	assert_eq!(r2.get(&1), Some(100));
+	// other key untouched
+	assert_eq!(r1.get(&2), Some(20));
+	assert_eq!(r2.get(&2), Some(20));
+
+	Ok(())
+}
+
+// compare_exchange chained: multiple sequential CAS operations on the same key
+#[tokio::test]
+async fn compare_exchange_chained() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// None -> Some(1) -> Some(2) -> Some(3) -> None chain on key 1
+	let ver = timeout_s(2, w.compare_exchange(1, None, Some(1))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(1));
+
+	let ver = timeout_s(2, w.compare_exchange(1, Some(1), Some(2))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(2));
+
+	let ver = timeout_s(2, w.compare_exchange(1, Some(2), Some(3))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(3));
+
+	let ver = timeout_s(2, w.compare_exchange(1, Some(3), None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), None);
+	assert!(r.is_empty());
+
+	Ok(())
+}
+
+// compare_exchange interleaved with regular insert, remove, and clear
+#[tokio::test]
+async fn compare_exchange_mixed_with_insert_remove() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// regular insert
+	let ver = timeout_s(2, w.insert(1, 10)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(10));
+
+	// compare_exchange after insert
+	let ver = timeout_s(2, w.compare_exchange(1, Some(10), Some(20))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(20));
+
+	// remove, then compare_exchange from None to re-insert
+	let ver = timeout_s(2, w.remove(&1)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), None);
+
+	let ver = timeout_s(2, w.compare_exchange(1, None, Some(30))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(30));
+
+	// clear, then compare_exchange on a fresh map
+	let ver = timeout_s(2, w.clear()).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_empty());
+
+	let ver = timeout_s(2, w.compare_exchange(1, None, Some(40))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(40));
+	assert_eq!(r.len(), 1);
+
+	// insert after compare_exchange
+	let ver = timeout_s(2, w.insert(2, 50)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 2);
+
+	Ok(())
+}
+
+// compare_exchange on multiple different keys
+#[tokio::test]
+async fn compare_exchange_multiple_keys() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert several keys
+	let ver = timeout_s(2, w.extend(vec![(1, 10), (2, 20), (3, 30)])).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	// compare_exchange on different keys independently
+	let ver = timeout_s(2, w.compare_exchange(1, Some(10), Some(100))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	let ver = timeout_s(2, w.compare_exchange(2, Some(20), None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	let ver = timeout_s(2, w.compare_exchange(4, None, Some(40))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	assert_eq!(r.get(&1), Some(100)); // updated
+	assert_eq!(r.get(&2), None); // removed
+	assert_eq!(r.get(&3), Some(30)); // untouched
+	assert_eq!(r.get(&4), Some(40)); // inserted
+	assert_eq!(r.len(), 3);
+
+	Ok(())
+}
+
+// compare_exchange None -> None on missing key is a no-op
+#[tokio::test]
+async fn compare_exchange_none_to_none() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// compare_exchange(key, None, None) on empty map — no-op
+	let ver = timeout_s(2, w.compare_exchange(1, None, None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_empty());
+
+	// subsequent operations still work
+	let ver = timeout_s(2, w.insert(1, 10)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(10));
+
+	Ok(())
+}
+
+// compare_exchange with late-joining reader catches up correctly
+#[tokio::test]
+async fn compare_exchange_catchup() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	timeout_s(10, w.when().online()).await?;
+
+	// build state with compare_exchange
+	let ver = timeout_s(2, w.compare_exchange(1, None, Some(10))).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+	let ver = timeout_s(2, w.compare_exchange(2, None, Some(20))).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+	let ver = timeout_s(2, w.compare_exchange(1, Some(10), Some(100))).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+
+	// late-joining reader
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, r.when().online()).await?;
+	timeout_s(10, r.when().reaches(ver)).await?;
+
+	// reader sees latest state
+	assert_eq!(r.get(&1), Some(100));
+	assert_eq!(r.get(&2), Some(20));
+	assert_eq!(r.len(), 2);
+
+	Ok(())
+}
+
+// compare_exchange with string keys and values
+#[tokio::test]
+async fn compare_exchange_string_keys() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<String, String>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<String, String>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert via compare_exchange
+	let ver = timeout_s(
+		2,
+		w.compare_exchange("key".into(), None, Some("value".into())),
+	)
+	.await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&"key".into()), Some("value".into()));
+
+	// update via compare_exchange
+	let ver = timeout_s(
+		2,
+		w.compare_exchange(
+			"key".into(),
+			Some("value".into()),
+			Some("updated".into()),
+		),
+	)
+	.await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&"key".into()), Some("updated".into()));
+
+	// delete via compare_exchange
+	let ver = timeout_s(
+		2,
+		w.compare_exchange("key".into(), Some("updated".into()), None),
+	)
+	.await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&"key".into()), None);
+	assert!(r.is_empty());
+
+	Ok(())
+}

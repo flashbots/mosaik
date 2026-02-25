@@ -995,3 +995,404 @@ async fn iter_ordering_after_mutations() -> anyhow::Result<()> {
 
 	Ok(())
 }
+
+// compare_exchange_value succeeds when current value matches
+#[tokio::test]
+async fn compare_exchange_value_success() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n0, store_id);
+	let r = collections::PriorityQueue::<u64, u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert initial entry
+	let ver = timeout_s(2, w.insert(10, 1, 100)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(100));
+	assert_eq!(r.get_priority(&1), Some(10));
+
+	// compare_exchange_value: expected matches, new value is written
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&1, 100, Some(200))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(200));
+	// priority should remain unchanged
+	assert_eq!(r.get_priority(&1), Some(10));
+	assert_eq!(r.len(), 1);
+
+	Ok(())
+}
+
+// compare_exchange_value removes entry when new is None
+#[tokio::test]
+async fn compare_exchange_value_remove() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n0, store_id);
+	let r = collections::PriorityQueue::<u64, u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert two entries
+	let ver = timeout_s(2, w.extend(vec![(10, 1, 100), (20, 2, 200)])).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 2);
+
+	// compare_exchange_value: Some(100) -> None removes key 1
+	let ver = timeout_s(2, w.compare_exchange_value(&1, 100, None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), None);
+	assert!(!r.contains_key(&1));
+	assert_eq!(r.len(), 1);
+	// other entry untouched
+	assert_eq!(r.get(&2), Some(200));
+
+	Ok(())
+}
+
+// compare_exchange_value does not change value when expected doesn't match
+#[tokio::test]
+async fn compare_exchange_value_mismatch() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n0, store_id);
+	let r = collections::PriorityQueue::<u64, u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert initial entry
+	let ver = timeout_s(2, w.insert(10, 1, 100)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	// compare_exchange_value with wrong expected value — no change
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&1, 999, Some(200))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(100)); // unchanged
+	assert_eq!(r.get_priority(&1), Some(10)); // priority unchanged
+
+	// mismatch removal attempt — no change
+	let ver = timeout_s(2, w.compare_exchange_value(&1, 999, None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(100)); // still unchanged
+	assert_eq!(r.len(), 1);
+
+	Ok(())
+}
+
+// compare_exchange_value on non-existent key is a no-op
+#[tokio::test]
+async fn compare_exchange_value_missing_key() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n0, store_id);
+	let r = collections::PriorityQueue::<u64, u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	assert!(r.is_empty());
+
+	// compare_exchange_value on non-existent key — no-op
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&1, 100, Some(200))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_empty());
+
+	// insert an entry, then try compare_exchange_value on a different key
+	let ver = timeout_s(2, w.insert(10, 1, 100)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&99, 100, Some(200))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 1);
+	assert_eq!(r.get(&99), None);
+
+	Ok(())
+}
+
+// compare_exchange_value replicates to multiple readers
+#[tokio::test]
+async fn compare_exchange_value_replicates_to_readers() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n_w = Network::new(network_id).await?;
+	let n_r1 = Network::new(network_id).await?;
+	let n_r2 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n_w, &n_r1, &n_r2])).await??;
+
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n_w, store_id);
+	let r1 = collections::PriorityQueue::<u64, u64, u64>::reader(&n_r1, store_id);
+	let r2 = collections::PriorityQueue::<u64, u64, u64>::reader(&n_r2, store_id);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r1.when().online()).await?;
+	timeout_s(10, r2.when().online()).await?;
+
+	// insert initial entries
+	let ver = timeout_s(2, w.extend(vec![(10, 1, 100), (20, 2, 200)])).await??;
+	timeout_s(2, r1.when().reaches(ver)).await?;
+	timeout_s(2, r2.when().reaches(ver)).await?;
+
+	// compare_exchange_value replicates to all readers
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&1, 100, Some(150))).await??;
+	timeout_s(2, r1.when().reaches(ver)).await?;
+	timeout_s(2, r2.when().reaches(ver)).await?;
+
+	assert_eq!(r1.get(&1), Some(150));
+	assert_eq!(r2.get(&1), Some(150));
+	// priority preserved
+	assert_eq!(r1.get_priority(&1), Some(10));
+	assert_eq!(r2.get_priority(&1), Some(10));
+
+	Ok(())
+}
+
+// compare_exchange_value chained: multiple sequential CAS operations
+#[tokio::test]
+async fn compare_exchange_value_chained() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n0, store_id);
+	let r = collections::PriorityQueue::<u64, u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert initial entry
+	let ver = timeout_s(2, w.insert(10, 1, 100)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	// chain: 100 -> 200 -> 300 -> remove
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&1, 100, Some(200))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(200));
+
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&1, 200, Some(300))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(300));
+
+	let ver = timeout_s(2, w.compare_exchange_value(&1, 300, None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), None);
+	assert!(r.is_empty());
+
+	Ok(())
+}
+
+// compare_exchange_value preserves priority and doesn't affect other entries
+#[tokio::test]
+async fn compare_exchange_value_preserves_priority() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n0, store_id);
+	let r = collections::PriorityQueue::<u64, u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert entries with different priorities
+	let ver =
+		timeout_s(2, w.extend(vec![(5, 1, 100), (10, 2, 200), (20, 3, 300)]))
+			.await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	// compare_exchange_value on the middle entry
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&2, 200, Some(250))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	// value changed, priority preserved
+	assert_eq!(r.get(&2), Some(250));
+	assert_eq!(r.get_priority(&2), Some(10));
+
+	// min/max unaffected (priorities unchanged)
+	assert_eq!(r.min_priority(), Some(5));
+	assert_eq!(r.max_priority(), Some(20));
+
+	// other entries untouched
+	assert_eq!(r.get(&1), Some(100));
+	assert_eq!(r.get(&3), Some(300));
+
+	// ordering preserved
+	let asc: Vec<u64> = r.iter_asc().map(|(p, _, _)| p).collect();
+	assert_eq!(asc, vec![5, 10, 20]);
+
+	Ok(())
+}
+
+// compare_exchange_value interleaved with other mutations
+#[tokio::test]
+async fn compare_exchange_value_mixed_with_mutations() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n0, store_id);
+	let r = collections::PriorityQueue::<u64, u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// regular insert
+	let ver = timeout_s(2, w.insert(10, 1, 100)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	// compare_exchange_value after insert
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&1, 100, Some(200))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(200));
+
+	// update_value, then compare_exchange_value
+	let ver = timeout_s(2, w.update_value(&1, 300)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(300));
+
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&1, 300, Some(400))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(400));
+
+	// update_priority, then compare_exchange_value (priority changes, value still
+	// matches)
+	let ver = timeout_s(2, w.update_priority(&1, 50)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get_priority(&1), Some(50));
+
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&1, 400, Some(500))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(500));
+	assert_eq!(r.get_priority(&1), Some(50)); // priority still 50
+
+	// remove via compare_exchange_value, then insert fresh
+	let ver = timeout_s(2, w.compare_exchange_value(&1, 500, None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_empty());
+
+	let ver = timeout_s(2, w.insert(1, 1, 10)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.get(&1), Some(10));
+	assert_eq!(r.len(), 1);
+
+	Ok(())
+}
+
+// compare_exchange_value with late-joining reader catches up correctly
+#[tokio::test]
+async fn compare_exchange_value_catchup() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n0, store_id);
+	timeout_s(10, w.when().online()).await?;
+
+	// build state with compare_exchange_value
+	let ver = timeout_s(2, w.insert(10, 1, 100)).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&1, 100, Some(200))).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+	let ver = timeout_s(2, w.insert(20, 2, 300)).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+	let ver =
+		timeout_s(2, w.compare_exchange_value(&2, 300, Some(400))).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+
+	// late-joining reader
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let r = collections::PriorityQueue::<u64, u64, u64>::reader(&n1, store_id);
+	timeout_s(10, r.when().online()).await?;
+	timeout_s(10, r.when().reaches(ver)).await?;
+
+	// reader sees latest state
+	assert_eq!(r.get(&1), Some(200));
+	assert_eq!(r.get_priority(&1), Some(10));
+	assert_eq!(r.get(&2), Some(400));
+	assert_eq!(r.get_priority(&2), Some(20));
+	assert_eq!(r.len(), 2);
+
+	Ok(())
+}
+
+// compare_exchange_value removal affects min/max correctly
+#[tokio::test]
+async fn compare_exchange_value_remove_affects_minmax() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n0, store_id);
+	let r = collections::PriorityQueue::<u64, u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// insert entries: key 1 has min priority, key 3 has max priority
+	let ver =
+		timeout_s(2, w.extend(vec![(5, 1, 100), (10, 2, 200), (20, 3, 300)]))
+			.await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	assert_eq!(r.min_priority(), Some(5));
+	assert_eq!(r.max_priority(), Some(20));
+
+	// remove min entry via compare_exchange_value
+	let ver = timeout_s(2, w.compare_exchange_value(&1, 100, None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	assert_eq!(r.min_priority(), Some(10)); // new min
+	assert_eq!(r.max_priority(), Some(20)); // unchanged
+	assert_eq!(r.len(), 2);
+
+	// remove max entry via compare_exchange_value
+	let ver = timeout_s(2, w.compare_exchange_value(&3, 300, None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	assert_eq!(r.min_priority(), Some(10)); // only entry left
+	assert_eq!(r.max_priority(), Some(10));
+	assert_eq!(r.len(), 1);
+
+	Ok(())
+}

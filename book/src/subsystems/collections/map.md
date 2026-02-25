@@ -61,12 +61,13 @@ for (key, value) in map.iter() {
 Only available on `MapWriter<K, V>`. All writes go through Raft consensus and
 return the `Version` at which the mutation will be committed.
 
-| Method                                                                            | Description                       |
-| --------------------------------------------------------------------------------- | --------------------------------- |
-| `insert(K, V) -> Result<Version, Error<(K, V)>>`                                  | Insert or update a key-value pair |
-| `remove(&K) -> Result<Version, Error<K>>`                                         | Remove a key                      |
-| `extend(impl IntoIterator<Item = (K, V)>) -> Result<Version, Error<Vec<(K, V)>>>` | Batch insert                      |
-| `clear() -> Result<Version, Error<()>>`                                           | Remove all entries                |
+| Method                                                                                           | Description                       |
+| ------------------------------------------------------------------------------------------------ | --------------------------------- |
+| `insert(K, V) -> Result<Version, Error<(K, V)>>`                                                 | Insert or update a key-value pair |
+| `compare_exchange(K, Option<V>, Option<V>) -> Result<Version, Error<(K, Option<V>, Option<V>)>>` | Atomic compare-and-swap for a key |
+| `remove(&K) -> Result<Version, Error<K>>`                                                        | Remove a key                      |
+| `extend(impl IntoIterator<Item = (K, V)>) -> Result<Version, Error<Vec<(K, V)>>>`                | Batch insert                      |
+| `clear() -> Result<Version, Error<()>>`                                                          | Remove all entries                |
 
 ```rust,ignore
 // Insert a single entry
@@ -84,9 +85,53 @@ map.when().reaches(v).await;
 // Remove
 map.remove(&"SOL".into()).await?;
 
+// Atomic compare-and-swap: update only if current value matches
+let v = map.compare_exchange(
+    "ETH".into(),
+    Some(3812),   // expected current value
+    Some(3900),   // new value
+).await?;
+map.when().reaches(v).await;
+
+// Compare-and-swap to insert a new key (expected = None)
+let v = map.compare_exchange(
+    "DOGE".into(),
+    None,          // key must not exist
+    Some(42),      // value to insert
+).await?;
+
+// Compare-and-swap to delete (new = None)
+let v = map.compare_exchange(
+    "DOGE".into(),
+    Some(42),      // expected current value
+    None,          // remove the key
+).await?;
+
 // Clear everything
 map.clear().await?;
 ```
+
+### Compare-and-swap semantics
+
+`compare_exchange` atomically checks the value associated with a key and only
+applies the mutation if it matches the `expected` parameter:
+
+- **`key`**: The key to operate on.
+- **`expected`**: The expected current value (`None` means the key must not
+  exist).
+- **`new`**: The value to write if the expectation holds (`None` removes the
+  key).
+
+| `expected`  | `new`       | Effect when matched         |
+| ----------- | ----------- | --------------------------- |
+| `None`      | `Some(v)`   | Insert a new key-value pair |
+| `Some(old)` | `Some(new)` | Update an existing value    |
+| `Some(old)` | `None`      | Remove the key              |
+| `None`      | `None`      | No-op (key must not exist)  |
+
+If the current value does not match `expected`, the operation is a **no-op** —
+it still commits to the Raft log (incrementing the version) but does not
+mutate the map.
 
 ## Error handling
 

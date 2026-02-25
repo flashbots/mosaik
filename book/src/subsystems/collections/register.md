@@ -58,11 +58,12 @@ if reg.is_empty() {
 
 Only available on `RegisterWriter<T>`.
 
-| Method                                  | Time | Description                                 |
-| --------------------------------------- | ---- | ------------------------------------------- |
-| `write(T) -> Result<Version, Error<T>>` | O(1) | Write a value (replaces any existing value) |
-| `set(T) -> Result<Version, Error<T>>`   | O(1) | Alias for `write()`                         |
-| `clear() -> Result<Version, Error<()>>` | O(1) | Remove the stored value                     |
+| Method                                                                                     | Time | Description                                 |
+| ------------------------------------------------------------------------------------------ | ---- | ------------------------------------------- |
+| `write(T) -> Result<Version, Error<T>>`                                                    | O(1) | Write a value (replaces any existing value) |
+| `set(T) -> Result<Version, Error<T>>`                                                      | O(1) | Alias for `write()`                         |
+| `compare_exchange(Option<T>, Option<T>) -> Result<Version, Error<(Option<T>, Option<T>)>>` | O(1) | Atomic compare-and-swap                     |
+| `clear() -> Result<Version, Error<()>>`                                                    | O(1) | Remove the stored value                     |
 
 ```rust,ignore
 // Write a value
@@ -75,10 +76,41 @@ reg.when().reaches(v).await;
 // Using the alias
 reg.set("v3".into()).await?;
 
+// Atomic compare-and-swap: only writes if current value matches expected
+let v = reg.compare_exchange(Some("v3".into()), Some("v4".into())).await?;
+reg.when().reaches(v).await;
+assert_eq!(reg.read(), Some("v4".to_string()));
+
+// Compare-and-swap from empty to a value
+reg.clear().await?;
+let v = reg.compare_exchange(None, Some("first".into())).await?;
+reg.when().reaches(v).await;
+
+// Compare-and-swap to remove (set to None)
+let v = reg.compare_exchange(Some("first".into()), None).await?;
+reg.when().reaches(v).await;
+assert!(reg.is_empty());
+
 // Clear back to empty
 reg.clear().await?;
 assert!(reg.is_empty());
 ```
+
+### Compare-and-swap semantics
+
+`compare_exchange` atomically checks the current value of the register and
+only applies the write if it matches the `current` parameter. This is useful
+for optimistic concurrency control — multiple writers can attempt a swap, and
+only the one whose expectation matches the actual state will succeed.
+
+- **`current`**: The expected current value (`None` means the register must be
+  empty).
+- **`new`**: The value to write if the expectation holds (`None` clears the
+  register).
+
+If the current value does not match `current`, the operation is a **no-op** —
+it still commits to the Raft log (incrementing the version) but does not
+change the stored value.
 
 ## Error handling
 

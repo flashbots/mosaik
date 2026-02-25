@@ -319,6 +319,31 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 			.await
 	}
 
+	/// Atomically update the value of an existing key, but only if its current
+	/// value matches the expected value. If the new value is `None`, the key is
+	/// removed instead.
+	///
+	/// If the key does not exist, this is a no-op that still commits to the log.
+	///
+	/// Time: O(log n)
+	pub async fn compare_exchange_value(
+		&self,
+		key: &K,
+		expected: V,
+		new: Option<V>,
+	) -> Result<Version, Error<K>> {
+		let key = key.clone();
+		self
+			.execute(
+				DepqCommand::CompareExchangeValue { key, expected, new },
+				|cmd| match cmd {
+					DepqCommand::CompareExchangeValue { key, .. } => Error::Offline(key),
+					_ => unreachable!(),
+				},
+			)
+			.await
+	}
+
 	/// Discard all entries from the priority queue.
 	///
 	/// This leaves you with an empty queue, and all entries that were previously
@@ -640,6 +665,19 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 				} => {
 					self.apply_insert(priority, key, value);
 				}
+				DepqCommand::CompareExchangeValue { key, expected, new } => {
+					if let Some((p, old_v)) = self.data.by_key.get(&key) {
+						if *old_v != expected {
+							continue;
+						}
+						let p = p.clone();
+						if let Some(new) = new {
+							self.apply_insert(p, key, new);
+						} else {
+							self.apply_remove(&key);
+						}
+					}
+				}
 				DepqCommand::Extend { entries } => {
 					for (priority, key, value) in entries {
 						self.apply_insert(priority, key, value);
@@ -768,6 +806,11 @@ enum DepqCommand<P, K, V> {
 	UpdateValue {
 		key: K,
 		value: V,
+	},
+	CompareExchangeValue {
+		key: K,
+		expected: V,
+		new: Option<V>,
 	},
 	Remove {
 		key: K,

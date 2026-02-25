@@ -95,6 +95,7 @@ Only available on `PriorityQueueWriter<P, K, V>`.
 | `extend(impl IntoIterator<Item = (P, K, V)>) -> Result<Version, Error<Vec<(P, K, V)>>>` | Batch insert                           |
 | `update_priority(&K, P) -> Result<Version, Error<K>>`                                   | Change priority of an existing key     |
 | `update_value(&K, V) -> Result<Version, Error<K>>`                                      | Change value of an existing key        |
+| `compare_exchange_value(&K, V, Option<V>) -> Result<Version, Error<K>>`                 | Atomic compare-and-swap on value       |
 | `remove(&K) -> Result<Version, Error<K>>`                                               | Remove by key                          |
 | `remove_range(impl RangeBounds<P>) -> Result<Version, Error<()>>`                       | Remove all entries in a priority range |
 | `clear() -> Result<Version, Error<()>>`                                                 | Remove all entries                     |
@@ -118,6 +119,20 @@ pq.update_priority(&"order-1".into(), 150).await?;
 
 // Update just the value
 pq.update_value(&"order-1".into(), new_order).await?;
+
+// Atomic compare-and-swap on value (priority is preserved)
+let v = pq.compare_exchange_value(
+    &"order-1".into(),
+    order1,        // expected current value
+    Some(updated), // new value
+).await?;
+
+// Compare-and-swap to remove: expected matches, new is None
+let v = pq.compare_exchange_value(
+    &"order-1".into(),
+    updated,       // expected current value
+    None,          // removes the entry
+).await?;
 
 // Remove a single entry
 pq.remove(&"order-2".into()).await?;
@@ -145,6 +160,26 @@ syntaxes work:
 | `lo..hi`    | Priorities in `[lo, hi)`        |
 | `lo..=hi`   | Priorities in `[lo, hi]`        |
 | `..`        | All (equivalent to `clear()`)   |
+
+### Compare-and-swap semantics
+
+`compare_exchange_value` atomically checks the value of an existing entry and
+only applies the mutation if it matches the `expected` parameter. Unlike
+`compare_exchange` on `Map` and `Register`, this method operates **only on the
+value** — the entry's priority is always preserved.
+
+- **`key`**: The key of the entry to operate on (must already exist).
+- **`expected`**: The expected current value (type `V`, not `Option<V>` — the
+  key must exist for the exchange to succeed).
+- **`new`**: The replacement value. `Some(v)` updates the value in-place;
+  `None` removes the entire entry.
+
+If the key does not exist or its current value does not match `expected`, the
+operation is a **no-op** — it commits to the Raft log but does not change the
+queue.
+
+> **Note:** The entry's priority is never changed by `compare_exchange_value`.
+> To atomically update priorities, use `update_priority` instead.
 
 ## Error handling
 

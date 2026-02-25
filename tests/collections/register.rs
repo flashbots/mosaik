@@ -444,6 +444,317 @@ async fn writer_reads_own_writes() -> anyhow::Result<()> {
 	Ok(())
 }
 
+// compare_exchange succeeds when current value matches
+#[tokio::test]
+async fn compare_exchange_success() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// write initial value
+	let ver = timeout_s(2, w.write(42)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(42));
+
+	// compare_exchange: current matches, so new value is written
+	let ver = timeout_s(2, w.compare_exchange(Some(42), Some(99))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(99));
+
+	Ok(())
+}
+
+// compare_exchange on empty register: None -> Some
+#[tokio::test]
+async fn compare_exchange_from_none() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// register starts empty
+	assert!(r.is_empty());
+
+	// compare_exchange: None -> Some(10)
+	let ver = timeout_s(2, w.compare_exchange(None, Some(10))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(10));
+
+	Ok(())
+}
+
+// compare_exchange to clear: Some -> None
+#[tokio::test]
+async fn compare_exchange_to_none() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// write initial value
+	let ver = timeout_s(2, w.write(42)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(42));
+
+	// compare_exchange: Some(42) -> None (acts like conditional clear)
+	let ver = timeout_s(2, w.compare_exchange(Some(42), None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_empty());
+
+	Ok(())
+}
+
+// compare_exchange does not change value when current doesn't match
+#[tokio::test]
+async fn compare_exchange_mismatch_no_change() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// write initial value
+	let ver = timeout_s(2, w.write(42)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	// compare_exchange with wrong expected value — should NOT change
+	let ver = timeout_s(2, w.compare_exchange(Some(100), Some(200))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(42)); // unchanged
+
+	// compare_exchange with None expected on non-empty — should NOT change
+	let ver = timeout_s(2, w.compare_exchange(None, Some(300))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(42)); // still unchanged
+
+	Ok(())
+}
+
+// compare_exchange mismatch on empty register
+#[tokio::test]
+async fn compare_exchange_mismatch_on_empty() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	assert!(r.is_empty());
+
+	// compare_exchange expecting Some on empty register — no change
+	let ver = timeout_s(2, w.compare_exchange(Some(42), Some(99))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_empty());
+
+	Ok(())
+}
+
+// compare_exchange replicates to multiple readers
+#[tokio::test]
+async fn compare_exchange_replicates_to_readers() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n_w = Network::new(network_id).await?;
+	let n_r1 = Network::new(network_id).await?;
+	let n_r2 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n_w, &n_r1, &n_r2])).await??;
+
+	let w = mosaik::collections::Register::<u64>::writer(&n_w, store_id);
+	let r1 = mosaik::collections::Register::<u64>::reader(&n_r1, store_id);
+	let r2 = mosaik::collections::Register::<u64>::reader(&n_r2, store_id);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r1.when().online()).await?;
+	timeout_s(10, r2.when().online()).await?;
+
+	// write initial value
+	let ver = timeout_s(2, w.write(1)).await??;
+	timeout_s(2, r1.when().reaches(ver)).await?;
+	timeout_s(2, r2.when().reaches(ver)).await?;
+
+	// compare_exchange replicates to all readers
+	let ver = timeout_s(2, w.compare_exchange(Some(1), Some(2))).await??;
+	timeout_s(2, r1.when().reaches(ver)).await?;
+	timeout_s(2, r2.when().reaches(ver)).await?;
+
+	assert_eq!(r1.read(), Some(2));
+	assert_eq!(r2.read(), Some(2));
+
+	Ok(())
+}
+
+// compare_exchange chained: multiple sequential CAS operations
+#[tokio::test]
+async fn compare_exchange_chained() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// None -> Some(1) -> Some(2) -> Some(3) -> None chain
+	let ver = timeout_s(2, w.compare_exchange(None, Some(1))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(1));
+
+	let ver = timeout_s(2, w.compare_exchange(Some(1), Some(2))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(2));
+
+	let ver = timeout_s(2, w.compare_exchange(Some(2), Some(3))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(3));
+
+	let ver = timeout_s(2, w.compare_exchange(Some(3), None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_empty());
+
+	Ok(())
+}
+
+// compare_exchange interleaved with regular write and clear
+#[tokio::test]
+async fn compare_exchange_mixed_with_write_clear() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// regular write
+	let ver = timeout_s(2, w.write(10)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(10));
+
+	// compare_exchange after write
+	let ver = timeout_s(2, w.compare_exchange(Some(10), Some(20))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(20));
+
+	// clear, then compare_exchange from None
+	let ver = timeout_s(2, w.clear()).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_empty());
+
+	let ver = timeout_s(2, w.compare_exchange(None, Some(30))).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(30));
+
+	// write after compare_exchange
+	let ver = timeout_s(2, w.write(40)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(40));
+
+	Ok(())
+}
+
+// compare_exchange None -> None on empty is a no-op
+#[tokio::test]
+async fn compare_exchange_none_to_none() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// empty -> compare_exchange(None, None) — still empty
+	let ver = timeout_s(2, w.compare_exchange(None, None)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_empty());
+
+	// subsequent operations still work
+	let ver = timeout_s(2, w.write(1)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.read(), Some(1));
+
+	Ok(())
+}
+
+// compare_exchange with late-joining reader catches up correctly
+#[tokio::test]
+async fn compare_exchange_catchup() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	timeout_s(10, w.when().online()).await?;
+
+	// build state with compare_exchange
+	let ver = timeout_s(2, w.compare_exchange(None, Some(1))).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+	let ver = timeout_s(2, w.compare_exchange(Some(1), Some(2))).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+	let ver = timeout_s(2, w.compare_exchange(Some(2), Some(3))).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+
+	// late-joining reader
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	timeout_s(10, r.when().online()).await?;
+	timeout_s(10, r.when().reaches(ver)).await?;
+
+	// reader sees only the latest value
+	assert_eq!(r.read(), Some(3));
+
+	Ok(())
+}
+
 // Write, clear, write cycle multiple times
 #[tokio::test]
 async fn write_clear_cycle() -> anyhow::Result<()> {

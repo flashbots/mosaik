@@ -26,7 +26,10 @@ use {
 			StateMachine,
 		},
 	},
-	core::{any::type_name, ops::Range},
+	core::{
+		any::type_name,
+		ops::{Deref, Range},
+	},
 	serde::{Deserialize, Serialize},
 	tokio::sync::watch,
 };
@@ -79,6 +82,20 @@ impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
 		self.data.borrow().is_none()
 	}
 
+	/// Test whether the register contains a value.
+	///
+	/// Time: O(1)
+	pub fn is_none(&self) -> bool {
+		self.is_empty()
+	}
+
+	/// Test whether the register contains a value.
+	///
+	/// Time: O(1)
+	pub fn is_some(&self) -> bool {
+		!self.is_empty()
+	}
+
 	/// Returns an observer of the register's state, which can be used to wait
 	/// for the register to reach a certain state version before performing an
 	/// action or knowing when it is online or offline.
@@ -112,6 +129,28 @@ impl<T: Value> RegisterWriter<T> {
 	/// Time: O(1)
 	pub async fn set(&self, value: T) -> Result<Version, Error<T>> {
 		self.write(value).await
+	}
+
+	/// Compare the current value of the register with an expected value, and if
+	/// they match, replace it with a new value. If the current value does not
+	/// match the expected value, no write occurs.
+	///
+	/// Time: O(1)
+	pub async fn compare_exchange(
+		&self,
+		current: Option<T>,
+		new: Option<T>,
+	) -> Result<Version, Error<(Option<T>, Option<T>)>> {
+		self
+			.execute(RegisterCommand::CompareExchange { current, new }, |cmd| {
+				match cmd {
+					RegisterCommand::CompareExchange { current, new } => {
+						Error::Offline((current, new))
+					}
+					_ => unreachable!(),
+				}
+			})
+			.await
 	}
 
 	/// Clear the register, removing the stored value.
@@ -329,6 +368,11 @@ impl<T: Value> StateMachine for RegisterStateMachine<T> {
 				RegisterCommand::Write { value } => {
 					self.data = Some(value);
 				}
+				RegisterCommand::CompareExchange { current, new } => {
+					if self.data == current {
+						self.data = new;
+					}
+				}
 				RegisterCommand::Clear => {
 					self.data = None;
 				}
@@ -409,6 +453,7 @@ impl<T: Value> SnapshotStateMachine for RegisterStateMachine<T> {
 #[serde(bound = "T: Value")]
 enum RegisterCommand<T> {
 	Write { value: T },
+	CompareExchange { current: Option<T>, new: Option<T> },
 	Clear,
 	TakeSnapshot(SnapshotRequest),
 }
