@@ -860,10 +860,10 @@ async fn writer_reads_own_writes() -> anyhow::Result<()> {
 	timeout_s(2, w.when().reaches(ver)).await?;
 
 	assert_eq!(w.len(), 1);
-	assert_eq!(w.get(&"hello".into()), Some("world".into()));
-	assert_eq!(w.get_priority(&"hello".into()), Some(10));
-	assert!(w.contains_key(&"hello".into()));
-	assert!(!w.contains_key(&"missing".into()));
+	assert_eq!(w.get("hello"), Some("world".into()));
+	assert_eq!(w.get_priority("hello"), Some(10));
+	assert!(w.contains_key("hello"));
+	assert!(!w.contains_key("missing"));
 
 	let ver = timeout_s(2, w.insert(20, "foo".into(), "bar".into())).await??;
 	timeout_s(2, w.when().reaches(ver)).await?;

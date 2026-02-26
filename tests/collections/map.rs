@@ -587,9 +587,9 @@ async fn writer_reads_own_writes() -> anyhow::Result<()> {
 	timeout_s(2, w.when().reaches(ver)).await?;
 
 	assert_eq!(w.len(), 1);
-	assert_eq!(w.get(&"hello".into()), Some("world".into()));
-	assert!(w.contains_key(&"hello".into()));
-	assert!(!w.contains_key(&"missing".into()));
+	assert_eq!(w.get("hello"), Some("world".into()));
+	assert!(w.contains_key("hello"));
+	assert!(!w.contains_key("missing"));
 
 	let ver = timeout_s(2, w.insert("foo".into(), "bar".into())).await??;
 	timeout_s(2, w.when().reaches(ver)).await?;
@@ -1043,7 +1043,7 @@ async fn compare_exchange_string_keys() -> anyhow::Result<()> {
 	)
 	.await??;
 	timeout_s(2, r.when().reaches(ver)).await?;
-	assert_eq!(r.get(&"key".into()), Some("value".into()));
+	assert_eq!(r.get("key"), Some("value".into()));
 
 	// update via compare_exchange
 	let ver = timeout_s(
@@ -1056,7 +1056,7 @@ async fn compare_exchange_string_keys() -> anyhow::Result<()> {
 	)
 	.await??;
 	timeout_s(2, r.when().reaches(ver)).await?;
-	assert_eq!(r.get(&"key".into()), Some("updated".into()));
+	assert_eq!(r.get("key"), Some("updated".into()));
 
 	// delete via compare_exchange
 	let ver = timeout_s(
@@ -1065,7 +1065,7 @@ async fn compare_exchange_string_keys() -> anyhow::Result<()> {
 	)
 	.await??;
 	timeout_s(2, r.when().reaches(ver)).await?;
-	assert_eq!(r.get(&"key".into()), None);
+	assert_eq!(r.get("key"), None);
 	assert!(r.is_empty());
 
 	Ok(())

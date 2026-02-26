@@ -104,6 +104,25 @@ impl Handle {
 			}
 		});
 	}
+
+	/// Performs a full catalog synchronization with the specified peer.
+	///
+	/// This async method resolves when the sync is complete or fails.
+	pub fn sync_with(
+		&self,
+		peer_addr: impl Into<EndpointAddr>,
+	) -> impl Future<Output = Result<(), Error>> + Send + Sync + 'static {
+		let peer_addr = peer_addr.into();
+		let commands_tx = self.commands.clone();
+
+		async move {
+			let (tx, rx) = oneshot::channel();
+			commands_tx
+				.send(WorkerCommand::SyncWith(peer_addr, tx))
+				.map_err(|_| Error::Cancelled)?;
+			rx.await.map_err(|_| Error::Cancelled)?
+		}
+	}
 }
 
 /// Discovery background worker loop
@@ -159,7 +178,6 @@ impl WorkerLoop {
 		let (events_tx, events_rx) = broadcast::channel(config.events_backlog);
 
 		let sync = CatalogSync::new(local.clone(), catalog.clone());
-		let bootstrap = DhtBootstrap::new(&local, &config, catalog.subscribe());
 		let announce = Announce::new(local.clone(), &config, catalog.subscribe());
 		let announce_interval = interval(config.announce_interval);
 		let purge_interval = interval(config.purge_after);
@@ -170,6 +188,12 @@ impl WorkerLoop {
 			events: events_rx,
 			commands: commands_tx,
 		});
+
+		let bootstrap = DhtBootstrap::new(
+			Arc::clone(&handle),
+			&config,
+			handle.catalog.subscribe(),
+		);
 
 		let worker = Self {
 			config,

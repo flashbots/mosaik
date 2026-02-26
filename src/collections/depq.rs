@@ -28,6 +28,8 @@ use {
 	},
 	core::{
 		any::type_name,
+		borrow::Borrow,
+		hash::Hash,
 		ops::{Range, RangeBounds},
 	},
 	serde::{Deserialize, Serialize},
@@ -84,14 +86,22 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	/// Test whether the priority queue contains a given key.
 	///
 	/// Time: O(log n)
-	pub fn contains_key(&self, key: &K) -> bool {
+	pub fn contains_key<Q>(&self, key: &Q) -> bool
+	where
+		K: Borrow<Q>,
+		Q: Hash + Eq + ?Sized,
+	{
 		self.data.borrow().clone().by_key.contains_key(key)
 	}
 
 	/// Get the value for a given key, if it exists.
 	///
 	/// Time: O(log n)
-	pub fn get(&self, key: &K) -> Option<V> {
+	pub fn get<Q>(&self, key: &Q) -> Option<V>
+	where
+		K: Borrow<Q>,
+		Q: Hash + Eq + ?Sized,
+	{
 		self
 			.data
 			.borrow()
@@ -104,7 +114,11 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	/// Get the priority for a given key, if it exists.
 	///
 	/// Time: O(log n)
-	pub fn get_priority(&self, key: &K) -> Option<P> {
+	pub fn get_priority<Q>(&self, key: &Q) -> Option<P>
+	where
+		K: Borrow<Q>,
+		Q: Hash + Eq + ?Sized,
+	{
 		self
 			.data
 			.borrow()

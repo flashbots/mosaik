@@ -2,6 +2,7 @@ use {
 	crate::primitives::Short,
 	core::{convert::Infallible, fmt, str::FromStr},
 	derive_more::Deref,
+	iroh::SecretKey,
 	serde::{Deserialize, Deserializer, Serialize, de},
 };
 
@@ -85,6 +86,12 @@ impl From<Digest> for [u8; 32] {
 impl From<&Digest> for [u8; 32] {
 	fn from(id: &Digest) -> Self {
 		*id.0.as_bytes()
+	}
+}
+
+impl From<Digest> for SecretKey {
+	fn from(val: Digest) -> Self {
+		Self::from_bytes(val.0.as_bytes())
 	}
 }
 

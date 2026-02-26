@@ -592,8 +592,8 @@ async fn writer_reads_own_writes() -> anyhow::Result<()> {
 	timeout_s(2, w.when().reaches(ver)).await?;
 
 	assert_eq!(w.len(), 1);
-	assert!(w.contains(&"hello".into()));
-	assert!(!w.contains(&"missing".into()));
+	assert!(w.contains("hello"));
+	assert!(!w.contains("missing"));
 
 	let ver = timeout_s(2, w.insert("foo".into())).await??;
 	timeout_s(2, w.when().reaches(ver)).await?;

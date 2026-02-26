@@ -26,7 +26,7 @@ use {
 			StateMachine,
 		},
 	},
-	core::{any::type_name, ops::Range},
+	core::{any::type_name, borrow::Borrow, hash::Hash, ops::Range},
 	serde::{Deserialize, Serialize},
 	std::hash::BuildHasherDefault,
 	tokio::sync::watch,
@@ -66,7 +66,11 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 	/// Test whether the set contains a given value.
 	///
 	/// Time: O(log n)
-	pub fn contains(&self, value: &T) -> bool {
+	pub fn contains<Q>(&self, value: &Q) -> bool
+	where
+		T: Borrow<Q>,
+		Q: Hash + Eq + ?Sized,
+	{
 		self.data.borrow().clone().contains(value)
 	}
 

@@ -27,7 +27,7 @@ use {
 			StateMachine,
 		},
 	},
-	core::any::type_name,
+	core::{any::type_name, borrow::Borrow, hash::Hash},
 	serde::{Deserialize, Serialize},
 	std::hash::BuildHasherDefault,
 	tokio::sync::watch,
@@ -68,15 +68,23 @@ impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
 	/// Test whether the map contains a given key.
 	///
 	/// Time: O(log n)
-	pub fn contains_key(&self, key: &K) -> bool {
+	pub fn contains_key<Q>(&self, key: &Q) -> bool
+	where
+		K: Borrow<Q>,
+		Q: Hash + Eq + ?Sized,
+	{
 		self.data.borrow().contains_key(key)
 	}
 
 	/// Get the value for a given key, if it exists.
 	///
 	/// Time: O(log n)
-	pub fn get(&self, key: &K) -> Option<V> {
-		self.data.borrow().get(key).cloned()
+	pub fn get<Q>(&self, key: &Q) -> Option<V>
+	where
+		K: Borrow<Q>,
+		Q: Hash + Eq + ?Sized,
+	{
+		self.data.borrow().get(key.borrow()).cloned()
 	}
 
 	/// Get an iterator over the key-value pairs in the map.

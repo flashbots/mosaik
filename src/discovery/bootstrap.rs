@@ -4,20 +4,19 @@ use {
 		NetworkId,
 		PeerId,
 		discovery::Catalog,
-		network::LocalNode,
 		primitives::{FmtIter, Short, UnboundedChannel},
 	},
 	arrayvec::ArrayVec,
-	core::time::Duration,
-	futures::{StreamExt, TryStreamExt, stream::SelectAll},
-	iroh::{KeyParsingError, address_lookup::AddressLookup},
+	core::{iter::once, time::Duration},
+	futures::{StreamExt, TryFutureExt, stream::FuturesUnordered},
+	iroh::KeyParsingError,
 	pkarr::{
 		dns::{Name, ResourceRecord, rdata::TXT},
 		errors::SignedPacketBuildError,
 		*,
 	},
 	rand::prelude::SliceRandom,
-	std::collections::HashSet,
+	std::{collections::HashSet, sync::Arc},
 	tokio::{
 		sync::{
 			mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
@@ -30,12 +29,12 @@ use {
 /// Maximum number of retries when a CAS (compare-and-swap) conflict occurs
 /// during DHT publish. This prevents infinite retry loops when many nodes are
 /// racing to update the same record.
-const MAX_CAS_RETRIES: usize = 3;
+const MAX_CAS_RETRIES: usize = 5;
 
 /// Delay between CAS retries when a publish conflict occurs. This gives some
 /// time for the competing publisher to finish and reduces the likelihood of
 /// repeated conflicts.
-const CAS_ATTEMPT_DELAY: Duration = Duration::from_secs(5);
+const CAS_ATTEMPT_DELAY: Duration = Duration::from_secs(3);
 
 /// Interval for polling the DHT for peer records when the catalog has at least
 /// one known peer.
@@ -71,7 +70,7 @@ pub struct DhtBootstrap {
 
 impl DhtBootstrap {
 	pub(super) fn new(
-		local: &LocalNode,
+		handle: Arc<super::Handle>,
 		config: &Config,
 		catalog: watch::Receiver<Catalog>,
 	) -> Self {
@@ -81,23 +80,23 @@ impl DhtBootstrap {
 
 		if config.no_auto_bootstrap {
 			tracing::debug!(
-				network = %local.network_id(),
+				network = %handle.local.network_id(),
 				"DHT auto bootstrap is disabled"
 			);
 		} else {
 			let events_tx = events.sender().clone();
 
 			let worker = WorkerLoop {
+				handle,
 				events_tx,
 				catalog,
 				healthy_rx,
 				unhealthy_rx,
-				local: local.clone(),
 				healthy_peers: HashSet::new(),
 				unhealthy_peers: HashSet::new(),
 			};
 
-			let cancel = local.termination().child_token();
+			let cancel = worker.handle.local.termination().child_token();
 			tokio::spawn(cancel.run_until_cancelled_owned(worker.run()));
 		}
 
@@ -122,7 +121,7 @@ impl DhtBootstrap {
 }
 
 struct WorkerLoop {
-	local: LocalNode,
+	handle: Arc<super::Handle>,
 	events_tx: UnboundedSender<PeerId>,
 	healthy_rx: UnboundedReceiver<PeerId>,
 	unhealthy_rx: UnboundedReceiver<PeerId>,
@@ -149,7 +148,7 @@ impl WorkerLoop {
 			.inspect_err(|e| {
 				tracing::warn!(
 					error = %e,
-					network = %self.local.network_id(),
+					network = %self.handle.local.network_id(),
 					"failed to initialize DHT bootstrap client"
 				);
 			})
@@ -157,9 +156,9 @@ impl WorkerLoop {
 			return;
 		};
 
-		self.mark_healthy(self.local.id());
+		self.mark_healthy(self.handle.local.id());
 
-		let network_record = NetworkRecord::new(*self.local.network_id());
+		let network_record = NetworkRecord::new(*self.handle.local.network_id());
 		let mut publish_tick = interval(with_jitter(PUBLISH_INTERVAL));
 		publish_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
@@ -243,7 +242,9 @@ impl WorkerLoop {
 			// peer ids from the healthy set until we reach capacity.
 			let mut healthy: Vec<_> = self.healthy_peers.iter().copied().collect();
 			healthy.shuffle(&mut rand::rng());
-			modified |= existing.try_populate(healthy.into_iter());
+
+			modified |= existing
+				.try_populate(once(self.handle.local.id()).chain(healthy.into_iter()));
 
 			if modified {
 				match existing.publish(client, network).await {
@@ -310,16 +311,20 @@ impl WorkerLoop {
 		peers: impl Iterator<Item = PeerId>,
 	) -> impl Iterator<Item = PeerId> + 'static {
 		let mut healthy = HashSet::<PeerId>::new();
-		let mut merged = SelectAll::new();
+		let mut syncs = FuturesUnordered::new();
 		for peer in peers {
-			if let Some(resolver) =
-				self.local.endpoint().address_lookup().resolve(peer)
-			{
-				merged.push(resolver.map_ok(move |_| peer).map_err(move |_| peer));
+			if peer != self.handle.local.id() {
+				syncs.push(
+					self
+						.handle
+						.sync_with(peer)
+						.map_ok(move |()| peer)
+						.map_err(move |_| peer),
+				);
 			}
 		}
 
-		while let Some(result) = merged.next().await {
+		while let Some(result) = syncs.next().await {
 			match result {
 				Ok(peer_id) => {
 					if !self.healthy_peers.contains(&peer_id) {
@@ -345,7 +350,7 @@ impl WorkerLoop {
 	/// `BootstrapSet` published to the DHT and making it a candidate for eviction
 	/// if it is already present there.
 	fn mark_unhealthy(&mut self, peer_id: PeerId) {
-		if peer_id != self.local.id() {
+		if peer_id != self.handle.local.id() {
 			self.healthy_peers.remove(&peer_id);
 			self.unhealthy_peers.insert(peer_id);
 		}

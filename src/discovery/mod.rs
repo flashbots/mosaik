@@ -19,7 +19,7 @@ use {
 	},
 	std::sync::Arc,
 	sync::CatalogSync,
-	tokio::sync::{broadcast, mpsc::UnboundedSender, oneshot, watch},
+	tokio::sync::{broadcast, mpsc::UnboundedSender, watch},
 	worker::{Handle, WorkerLoop},
 };
 
@@ -101,16 +101,7 @@ impl Discovery {
 		&self,
 		peer_addr: impl Into<EndpointAddr>,
 	) -> impl Future<Output = Result<(), Error>> + Send + Sync + 'static {
-		let peer_addr = peer_addr.into();
-		let commands_tx = self.0.commands.clone();
-
-		async move {
-			let (tx, rx) = oneshot::channel();
-			commands_tx
-				.send(WorkerCommand::SyncWith(peer_addr, tx))
-				.map_err(|_| Error::Cancelled)?;
-			rx.await.map_err(|_| Error::Cancelled)?
-		}
+		self.0.sync_with(peer_addr)
 	}
 
 	/// Feeds the discovery system with a signed peer entry outside of the normal
