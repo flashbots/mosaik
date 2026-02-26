@@ -471,6 +471,11 @@ impl WorkerLoop {
 	/// purposes.
 	fn broadcast_self_info(&self) {
 		let entry = self.catalog.borrow().local().clone();
+		let entry = entry
+			.into_unsigned()
+			.increment_version()
+			.sign(self.local.secret_key())
+			.expect("failed to sign local peer entry update");
 
 		tracing::trace!(
 			peer_info = ?Pretty(&entry),

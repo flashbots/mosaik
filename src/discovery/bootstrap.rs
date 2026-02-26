@@ -5,49 +5,41 @@ use {
 		PeerId,
 		discovery::Catalog,
 		network::LocalNode,
-		primitives::{Short, UnboundedChannel},
+		primitives::{FmtIter, Short, UnboundedChannel},
 	},
+	arrayvec::ArrayVec,
 	core::time::Duration,
+	futures::{StreamExt, TryStreamExt, stream::SelectAll},
+	iroh::{KeyParsingError, address_lookup::AddressLookup},
 	pkarr::{
-		Client,
-		Keypair,
-		PublicKey,
-		SignedPacket,
-		Timestamp,
-		dns::{
-			Name,
-			ResourceRecord,
-			rdata::{RData, TXT},
-		},
+		dns::{Name, ResourceRecord, rdata::TXT},
+		errors::SignedPacketBuildError,
+		*,
 	},
 	rand::prelude::SliceRandom,
-	std::time::Instant,
+	std::collections::HashSet,
 	tokio::{
 		sync::{
-			mpsc::{UnboundedReceiver, UnboundedSender},
+			mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
 			watch,
 		},
-		time::sleep,
+		time::{MissedTickBehavior, interval, sleep},
 	},
 };
-
-/// Maximum number of peer entries to maintain in a single DHT bootstrap record.
-///
-/// Individual Mainline DHT records are capped at 1000 bytes total (including
-/// DNS headers, all resource records, and pkarr framing). Each peer entry is a
-/// TXT record whose name is the base58-encoded peer ID (~44 chars), with DNS
-/// label encoding and type/class/TTL/rdlength overhead adding up to ~58–100
-/// bytes per entry.
-///
-/// A cap of 10 leaves sufficient headroom (~200 bytes) below the 1000-byte
-/// limit to avoid encoding-related edge cases, while still providing more than
-/// enough peers for any node to bootstrap from.
-const MAX_BOOTSTRAP_PEERS: usize = 10;
 
 /// Maximum number of retries when a CAS (compare-and-swap) conflict occurs
 /// during DHT publish. This prevents infinite retry loops when many nodes are
 /// racing to update the same record.
-const MAX_CAS_RETRIES: usize = 10;
+const MAX_CAS_RETRIES: usize = 3;
+
+/// Delay between CAS retries when a publish conflict occurs. This gives some
+/// time for the competing publisher to finish and reduces the likelihood of
+/// repeated conflicts.
+const CAS_ATTEMPT_DELAY: Duration = Duration::from_secs(5);
+
+/// Interval for polling the DHT for peer records when the catalog has at least
+/// one known peer.
+const RELAXED_POLL_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Poll interval used when the local catalog has no known peers.
 ///
@@ -55,6 +47,12 @@ const MAX_CAS_RETRIES: usize = 10;
 /// the configured [`Config::dht_poll_interval`]. If peers later disconnect and
 /// the catalog empties again, polling switches back to this aggressive rate.
 const AGGRESSIVE_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Interval for publishing the local peer's presence to the DHT.
+const PUBLISH_INTERVAL: Duration = Duration::from_secs(300);
+
+/// TTL for a peer record in the DHT - 1h.
+const PEER_RECORD_TTL: Duration = Duration::from_secs(3600);
 
 /// Automatic bootstrap mechanism for Mosaik networks.
 ///
@@ -67,6 +65,8 @@ const AGGRESSIVE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// hardcode any peer ids or address.
 pub struct DhtBootstrap {
 	events: UnboundedChannel<PeerId>,
+	healthy_tx: UnboundedSender<PeerId>,
+	unhealthy_tx: UnboundedSender<PeerId>,
 }
 
 impl DhtBootstrap {
@@ -76,47 +76,59 @@ impl DhtBootstrap {
 		catalog: watch::Receiver<Catalog>,
 	) -> Self {
 		let events = UnboundedChannel::default();
+		let (healthy_tx, healthy_rx) = unbounded_channel();
+		let (unhealthy_tx, unhealthy_rx) = unbounded_channel();
 
-		let publish_interval = config.dht_publish_interval;
-		let poll_interval = config.dht_poll_interval;
-
-		if publish_interval.is_some() || poll_interval.is_some() {
+		if config.no_auto_bootstrap {
+			tracing::debug!(
+				network = %local.network_id(),
+				"DHT auto bootstrap is disabled"
+			);
+		} else {
 			let events_tx = events.sender().clone();
 
 			let worker = WorkerLoop {
 				events_tx,
 				catalog,
-				publish_interval,
-				poll_interval,
-				local_id: local.id(),
-				network_id: *local.network_id(),
+				healthy_rx,
+				unhealthy_rx,
+				local: local.clone(),
+				healthy_peers: HashSet::new(),
+				unhealthy_peers: HashSet::new(),
 			};
 
 			let cancel = local.termination().child_token();
 			tokio::spawn(cancel.run_until_cancelled_owned(worker.run()));
 		}
 
-		Self { events }
+		Self {
+			events,
+			healthy_tx,
+			unhealthy_tx,
+		}
 	}
 
 	pub const fn events(&mut self) -> &mut UnboundedReceiver<PeerId> {
 		self.events.receiver()
 	}
+
+	pub fn note_healthy(&self, peer_id: PeerId) {
+		let _ = self.healthy_tx.send(peer_id);
+	}
+
+	pub fn note_unhealthy(&self, peer_id: PeerId) {
+		let _ = self.unhealthy_tx.send(peer_id);
+	}
 }
 
 struct WorkerLoop {
-	publish_interval: Option<Duration>,
-	poll_interval: Option<Duration>,
-	local_id: PeerId,
-	network_id: NetworkId,
+	local: LocalNode,
 	events_tx: UnboundedSender<PeerId>,
+	healthy_rx: UnboundedReceiver<PeerId>,
+	unhealthy_rx: UnboundedReceiver<PeerId>,
 	catalog: watch::Receiver<Catalog>,
-}
-
-/// Result of resolving the current DHT record and building an updated packet.
-struct ResolvedRecord {
-	packet: SignedPacket,
-	cas: Option<Timestamp>,
+	healthy_peers: HashSet<PeerId>,
+	unhealthy_peers: HashSet<PeerId>,
 }
 
 impl WorkerLoop {
@@ -129,85 +141,57 @@ impl WorkerLoop {
 	///   no peers, and relaxes to [`Config::dht_poll_interval`] once connectivity
 	///   is established. Automatically switches back to aggressive polling if all
 	///   peers disconnect.
-	async fn run(self) {
-		let local_id_encoded = b58::encode(self.local_id.as_bytes());
-		let local_record_name = Name::new_unchecked(&local_id_encoded);
-		let keypair = Keypair::from_secret_key(self.network_id.as_bytes());
-		let public_key = keypair.public_key();
-		let network_suffix = format!(".{public_key}");
-
-		let Some(client) = self.init_client() else {
+	async fn run(mut self) {
+		let Ok(client) = Client::builder()
+			.no_relays()
+			.cache_size(0)
+			.build()
+			.inspect_err(|e| {
+				tracing::warn!(
+					error = %e,
+					network = %self.local.network_id(),
+					"failed to initialize DHT bootstrap client"
+				);
+			})
+		else {
 			return;
 		};
 
-		let mut publish_tick = self
-			.publish_interval
-			.map(|d| tokio::time::interval(with_jitter(d)));
+		self.mark_healthy(self.local.id());
 
-		// Stagger the initial publish across nodes to reduce CAS contention
-		// when many nodes start simultaneously.
-		let startup_jitter = Duration::from_millis(rand::random_range(0..3000));
-		sleep(startup_jitter).await;
+		let network_record = NetworkRecord::new(*self.local.network_id());
+		let mut publish_tick = interval(with_jitter(PUBLISH_INTERVAL));
+		publish_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
-		// Initial publish before entering the loop, so we don't have to wait for
-		// the first publish interval to elapse before announcing ourselves to other
-		// nodes.
-		self
-			.publish_cycle(
-				&client,
-				&keypair,
-				&public_key,
-				&local_record_name,
-				&network_suffix,
-				true, // no_retries: skip retries on startup to publish faster
-			)
-			.await;
-
-		// Initial poll to discover any existing peers before the first poll
-		// interval elapses.
-		self
-			.poll_cycle(&client, &public_key, &local_record_name, &network_suffix)
-			.await;
+		// start with an initial publish to announce our presence and poll
+		// existing peers as soon as possible.
+		self.publish_cycle(&client, &network_record).await;
 
 		loop {
-			let poll_delay = self.next_poll_delay();
-
 			tokio::select! {
-				() = tick(&mut publish_tick) => {
-					self.publish_cycle(
-						&client,
-						&keypair,
-						&public_key,
-						&local_record_name,
-						&network_suffix,
-						false
-					).await;
+				// periodically update the dht record with the current set
+				// of known healthy peers.
+				_ = publish_tick.tick() => {
+					self.publish_cycle(&client, &network_record).await;
 				}
-				() = sleep_or_pending(poll_delay) => {
-					self.poll_cycle(
-						&client,
-						&public_key,
-						&local_record_name,
-						&network_suffix,
-					).await;
+
+				// Periodically poll new entries from the DHT bootstrap set
+				// and feed them into the local discovery subsystem.
+				() = sleep(self.next_poll_delay()) => {
+					self.poll_cycle(&client, &network_record).await;
 				}
-			}
-		}
-	}
 
-	/// Initializes the pkarr DHT client. Returns `None` if initialization
-	/// fails, in which case the bootstrap mechanism is silently disabled.
-	fn init_client(&self) -> Option<Client> {
-		match Client::builder().no_relays().build() {
-			Ok(client) => Some(client),
-			Err(err) => {
-				tracing::warn!(
-					error = %err,
-					network = %self.network_id,
-					"failed to initialize DHT bootstrap client"
-				);
+				// Received a signal from other parts of the discovery subsystem that
+				// a peer has successfully been reached and is healthy.
+				Some(peer_id) = self.healthy_rx.recv() => {
+					self.mark_healthy(peer_id);
+				}
 
-				None
+				// Received a signal from other parts of the discovery subsystem that
+				// there was a failure to reach this peer.
+				Some(peer_id) = self.unhealthy_rx.recv() => {
+					self.mark_unhealthy(peer_id);
+				}
 			}
 		}
 	}
@@ -215,238 +199,156 @@ impl WorkerLoop {
 	/// Returns the delay until the next poll cycle. Uses aggressive polling
 	/// when the catalog has no known peers, otherwise falls back to the
 	/// configured poll interval.
-	fn next_poll_delay(&self) -> Option<Duration> {
-		self.poll_interval?;
-
-		if self.catalog.borrow().peers_count() == 0 {
-			Some(AGGRESSIVE_POLL_INTERVAL)
+	fn next_poll_delay(&self) -> Duration {
+		if self.catalog.borrow().signed_peers_count() == 0 {
+			// We want to find a peer asap, poll aggressively.
+			// This is most often the case when the whole network is instantiated at
+			// the same time during a deployment or similar event.
+			AGGRESSIVE_POLL_INTERVAL
 		} else {
-			self.poll_interval
+			// normal operating conditions, poll at reduced frequency just to keep the
+			// local discovery subsystem updated with any new peers that may have
+			// appeared in the DHT.
+			RELAXED_POLL_INTERVAL
 		}
 	}
 
-	// ---- Poll cycle --------------------------------------------------------
+	/// Called periodically to publish the local peer's presence to the DHT and
+	/// garbage collect unhealthy peers. This also implicitly fetches the latest
+	/// version of the bootstrap set.
+	///
+	/// This fetches the current bootstrap set from the DHT, validates all the
+	/// peers in it, removes any unhealthy peers, and adds the local peer if
+	/// there's room in the set.
+	async fn publish_cycle(&mut self, client: &Client, network: &NetworkRecord) {
+		for _ in 0..MAX_CAS_RETRIES {
+			let mut existing = BootstrapSet::fetch(client, network).await;
 
-	/// Resolves the current DHT record and emits discovery events for any
-	/// peers found.
-	async fn poll_cycle(
-		&self,
-		client: &Client,
-		public_key: &PublicKey,
-		local_record_name: &Name<'_>,
-		network_suffix: &str,
-	) {
-		let Some(packet) = client.resolve_most_recent(public_key).await else {
-			return;
-		};
+			tracing::info!(
+				network = %network.network_id,
+				peers = %FmtIter::<Short<_>, _>::new(existing.peers().collect::<Vec<_>>()),
+				"current bootstrap set in DHT",
+			);
 
-		self.observe_existing_peers(&packet, local_record_name, network_suffix);
-	}
-
-	/// Feeds the currently observed peers in the resolved record into the
-	/// discovery events, so they can be added to the catalog if not already
-	/// present.
-	fn observe_existing_peers(
-		&self,
-		packet: &SignedPacket,
-		local_record_name: &Name<'_>,
-		network_suffix: &str,
-	) {
-		for record in packet.all_resource_records() {
-			if record.name != *local_record_name {
-				self.observe_peer_record(&record.name.to_string(), network_suffix);
-			}
-		}
-	}
-
-	// ---- Publish cycle -----------------------------------------------------
-
-	/// Resolves the current DHT record, merges in the local peer's entry,
-	/// and publishes the updated record. Retries on CAS conflicts up to
-	/// [`MAX_CAS_RETRIES`] times.
-	async fn publish_cycle(
-		&self,
-		client: &Client,
-		keypair: &Keypair,
-		public_key: &PublicKey,
-		local_record_name: &Name<'_>,
-		network_suffix: &str,
-		no_retries: bool,
-	) {
-		let retries = if no_retries { 0 } else { MAX_CAS_RETRIES };
-
-		for attempt in 0..=retries {
-			let existing = client.resolve_most_recent(public_key).await;
-
-			if let Some(ref packet) = existing {
-				self.observe_existing_peers(packet, local_record_name, network_suffix);
+			// feed all newly discovered healthy peers into the local discovery
+			// subsystem so they can be dialed and added to the local catalog.
+			for peer in self.validate_peers(existing.peers()).await {
+				let _ = self.events_tx.send(peer).ok();
 			}
 
-			let resolved = match self.build_record(
-				existing.as_ref(),
-				keypair,
-				local_record_name,
-				network_suffix,
-			) {
-				Ok(resolved) => resolved,
-				Err(err) => {
-					tracing::warn!(
-						error = %err,
-						network = %self.network_id,
-						"failed to build DHT bootstrap record"
-					);
-					return;
-				}
-			};
+			// remove any unhealthy peers from the bootstrap set
+			let mut modified = existing.remove_all(&self.unhealthy_peers);
 
-			let publish_start = Instant::now();
-			match client.publish(&resolved.packet, resolved.cas).await {
-				Ok(()) => {
-					tracing::trace!(
-						network = %self.network_id,
-						duration = ?publish_start.elapsed(),
-						"published DHT bootstrap record"
-					);
-					return;
-				}
-				Err(err) => {
-					if matches!(err, pkarr::errors::PublishError::Concurrency(_)) {
-						tracing::trace!(
-							attempt,
-							network = %self.network_id,
-							"CAS conflict, retrying DHT bootstrap publish"
+			// If there's room in the bootstrap set, populate it with
+			// peer ids from the healthy set until we reach capacity.
+			let mut healthy: Vec<_> = self.healthy_peers.iter().copied().collect();
+			healthy.shuffle(&mut rand::rng());
+			modified |= existing.try_populate(healthy.into_iter());
+
+			if modified {
+				match existing.publish(client, network).await {
+					Ok(()) => {
+						// successfully published the updated bootstrap set to the DHT.
+						tracing::info!(
+							network = %network.network_id,
+							peers = %FmtIter::<Short<_>, _>::new(existing.peers().collect::<Vec<_>>()),
+							"published updated bootstrap set to Mainline DHT"
 						);
-						sleep(with_jitter(AGGRESSIVE_POLL_INTERVAL)).await;
-						continue;
+						return;
 					}
+					Err(PublishError::PublishError(
+						pkarr::errors::PublishError::Concurrency(_),
+					)) => {
+						// lost the race to update the DHT record, retry publishing up to
+						// the max number of retries.
+						tracing::debug!(
+							network = %network.network_id,
+							"publishing bootstrap set to DHT failed due to concurrent modification, retrying..."
+						);
 
-					tracing::trace!(
-						error = %err,
-						network = %self.network_id,
-						"failed to publish DHT bootstrap record"
-					);
-					return;
+						sleep(with_jitter(CAS_ATTEMPT_DELAY)).await;
+					}
+					Err(e) => {
+						// unrecoverable error, skip this publish cycle and try again at the
+						// next interval.
+						tracing::warn!(
+							error = %e,
+							network = %network.network_id,
+							"failed to publish bootstrap set to DHT",
+						);
+						return;
+					}
 				}
 			}
 		}
 	}
 
-	/// Builds an updated signed packet that includes the local peer.
-	/// Applies capacity management: if the record already contains
-	/// [`MAX_BOOTSTRAP_PEERS`] entries, one existing entry is randomly
-	/// evicted to make room for the local peer.
-	fn build_record(
-		&self,
-		existing: Option<&SignedPacket>,
-		keypair: &Keypair,
-		local_record_name: &Name<'_>,
-		network_suffix: &str,
-	) -> Result<ResolvedRecord, pkarr::errors::SignedPacketBuildError> {
-		let ttl_secs = self
-			.publish_interval
-			.expect("publish_cycle called without publish_interval")
-			.as_secs() as u32;
-		let cas;
+	/// Periodically polls the most recent version of the `BootstrapSet` from the
+	/// DHT and feeds any new entries into the local discovery subsystem.
+	///
+	/// Polling has two frequencies: when the local catalog has no known peers,
+	/// polling is more aggressive to facilitate faster bootstrapping. Once at
+	/// least one peer is known, polling relaxes to the configured interval to
+	/// reduce load on the DHT and avoid unnecessary churn.
+	async fn poll_cycle(&mut self, client: &Client, network: &NetworkRecord) {
+		let dht_set = BootstrapSet::fetch(client, network).await;
 
-		let mut builder = SignedPacket::builder();
+		// feed all newly discovered healthy peers into the local discovery
+		// subsystem so they can be dialed and added to the local catalog.
+		for peer in self.validate_peers(dht_set.peers()).await {
+			let _ = self.events_tx.send(peer).ok();
+		}
+	}
 
-		if let Some(most_recent) = existing {
-			cas = Some(most_recent.timestamp());
+	/// Validates the given peer id by checking if we are able to resolve its
+	/// address from its `PeerId`.
+	///
+	/// Returns an iterator of the newly discovered healthy peers that were
+	/// validated successfully and not previously marked as healthy.
+	async fn validate_peers(
+		&mut self,
+		peers: impl Iterator<Item = PeerId>,
+	) -> impl Iterator<Item = PeerId> + 'static {
+		let mut healthy = HashSet::<PeerId>::new();
+		let mut merged = SelectAll::new();
+		for peer in peers {
+			if let Some(resolver) =
+				self.local.endpoint().address_lookup().resolve(peer)
+			{
+				merged.push(resolver.map_ok(move |_| peer).map_err(move |_| peer));
+			}
+		}
 
-			// Collect existing peer records (excluding our own).
-			let mut peer_records: Vec<&ResourceRecord<'_>> = most_recent
-				.all_resource_records()
-				.filter(|r| r.name != *local_record_name)
-				.collect();
-
-			// Apply capacity management: if the record is full, evict the
-			// least-connected peer (lowest self-reported catalog size) to
-			// make room for ourselves, and dial into it so it doesn't get
-			// stranded.
-			if peer_records.len() >= MAX_BOOTSTRAP_PEERS {
-				// Shuffle first so that peers with equal counts are evicted
-				// randomly rather than always picking the same victim in
-				// the (common) case where many peers report the same count.
-				peer_records.shuffle(&mut rand::rng());
-				peer_records.sort_by_key(|r| peer_count_from_record(r));
-				let evicted = peer_records.remove(0);
-
-				tracing::trace!(
-					evicted = %evicted.name,
-					peer_count = peer_count_from_record(evicted),
-					total = peer_records.len() + 1,
-					network = %self.network_id,
-					"DHT bootstrap record at capacity, evicting least-connected peer"
-				);
-
-				// Dial into the evicted peer so it can still join the network
-				// even though it's been removed from the shared record.
-				let evicted_name = evicted.name.to_string();
-				if let Some(peer_id) = parse_peer_id(&evicted_name, network_suffix)
-					.filter(|id| *id != self.local_id)
-				{
-					let _ = self.events_tx.send(peer_id);
+		while let Some(result) = merged.next().await {
+			match result {
+				Ok(peer_id) => {
+					if !self.healthy_peers.contains(&peer_id) {
+						healthy.insert(peer_id);
+					}
+					self.mark_healthy(peer_id);
 				}
+				Err(peer_id) => self.mark_unhealthy(peer_id),
 			}
-
-			for record in peer_records {
-				builder = builder.record(record.clone());
-			}
-		} else {
-			cas = None;
 		}
 
-		// Always insert our own entry with the current catalog peer count
-		// so other nodes know how well-connected we are.
-		let peers_attr = format!("peers={}", self.catalog.borrow().peers_count());
-		let txt = TXT::new()
-			.with_string(&peers_attr)
-			.expect("peer count fits in TXT character string");
-
-		let packet = builder
-			.txt(local_record_name.clone(), txt, ttl_secs)
-			.sign(keypair)?;
-
-		Ok(ResolvedRecord { packet, cas })
+		healthy.into_iter()
 	}
 
-	/// Attempts to decode a peer ID from a DNS record name and emits a
-	/// discovery event if successful. Silently ignores malformed records and
-	/// the local peer's own record.
-	fn observe_peer_record(&self, record_name: &str, network_suffix: &str) {
-		let Some(peer_id) = parse_peer_id(record_name, network_suffix) else {
-			return;
-		};
+	/// Marks a peer as healthy, making it a viable candidate to be included in
+	/// the `BootstrapSet` published to the DHT.
+	fn mark_healthy(&mut self, peer_id: PeerId) {
+		self.healthy_peers.insert(peer_id);
+		self.unhealthy_peers.remove(&peer_id);
+	}
 
-		if peer_id == self.local_id {
-			return;
+	/// Marks a peer as unhealthy, preventing it from being included in the
+	/// `BootstrapSet` published to the DHT and making it a candidate for eviction
+	/// if it is already present there.
+	fn mark_unhealthy(&mut self, peer_id: PeerId) {
+		if peer_id != self.local.id() {
+			self.healthy_peers.remove(&peer_id);
+			self.unhealthy_peers.insert(peer_id);
 		}
-
-		tracing::trace!(
-			peer_id = %Short(&peer_id),
-			network = %self.network_id,
-			"discovered peer via DHT bootstrap"
-		);
-		let _ = self.events_tx.send(peer_id);
-	}
-}
-
-/// Waits for the next tick of an optional interval. If the interval is
-/// `None`, the returned future never completes.
-async fn tick(interval: &mut Option<tokio::time::Interval>) {
-	match interval.as_mut() {
-		Some(i) => {
-			i.tick().await;
-		}
-		None => std::future::pending().await,
-	}
-}
-
-/// Sleeps for the given duration, or pends forever if `None`.
-async fn sleep_or_pending(delay: Option<Duration>) {
-	match delay {
-		Some(d) => tokio::time::sleep(d).await,
-		None => std::future::pending().await,
 	}
 }
 
@@ -458,32 +360,258 @@ fn with_jitter(base: Duration) -> Duration {
 	base + jitter
 }
 
-/// Extracts the self-reported peer count from a TXT resource record.
-///
-/// Expects the TXT data to contain a `peers=N` attribute. Returns `0` if the
-/// record has no TXT data or the attribute is missing/malformed (which also
-/// covers records written by older versions without peer count info).
-fn peer_count_from_record(record: &ResourceRecord<'_>) -> usize {
-	if let RData::TXT(ref txt) = record.rdata {
-		txt
-			.attributes()
-			.get("peers")
-			.and_then(|v| v.as_ref())
-			.and_then(|s| s.parse().ok())
-			.unwrap_or(0)
-	} else {
-		0
+/// Represents one network's record in the DHT, which includes the network ID
+/// and the keypair used to sign the record.
+struct NetworkRecord {
+	network_id: NetworkId,
+	keypair: Keypair,
+	record_suffix: String,
+	public_key: PublicKey,
+}
+
+impl NetworkRecord {
+	/// Creates a new `NetworkRecord` for the given network ID, deriving the
+	/// keypair from the network ID bytes.
+	pub fn new(network_id: NetworkId) -> Self {
+		let keypair = Keypair::from_secret_key(network_id.as_bytes());
+		let public_key = keypair.public_key();
+		let record_suffix = format!(".{public_key}");
+
+		Self {
+			network_id,
+			keypair,
+			record_suffix,
+			public_key,
+		}
+	}
+
+	/// Returns the public key corresponding to this network record, which is used
+	/// as the DHT record key for bootstrapping this network.
+	pub const fn public_key(&self) -> &PublicKey {
+		&self.public_key
+	}
+
+	pub const fn keypair(&self) -> &Keypair {
+		&self.keypair
+	}
+
+	/// Returns the expected suffix of peer record names for this network.
+	///
+	/// Peer records in the DHT have the format
+	/// `<base58-peer-id>.<network-public-key>`.
+	pub const fn record_suffix(&self) -> &str {
+		self.record_suffix.as_str()
 	}
 }
 
-/// Parses a peer ID from a DNS record name of the form
-/// `<base58-peer-id>.<network-public-key>`.
+/// Represents a single peer record in the DHT bootstrap set.
 ///
-/// Returns `None` if the name doesn't match the expected format or contains
-/// an invalid peer ID.
-fn parse_peer_id(record_name: &str, network_suffix: &str) -> Option<PeerId> {
-	let peer_id_str = record_name.strip_suffix(network_suffix)?;
-	let peer_id_bytes = b58::decode(peer_id_str).ok()?;
-	let peer_id_bytes: [u8; 32] = peer_id_bytes.try_into().ok()?;
-	PeerId::from_bytes(&peer_id_bytes).ok()
+/// This is represented as a TXT record in the DHT.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+struct PeerRecord {
+	peer_id: PeerId,
+}
+
+impl PeerRecord {
+	/// Parses a `PeerRecord` from a DNS TXT entry.
+	///
+	/// Expects the name to be of the form
+	/// `<base58-peer-id>.<network-public-key>`.
+	pub fn parse(
+		record: &ResourceRecord<'_>,
+		network: &NetworkRecord,
+	) -> Result<Self, ParseError> {
+		let name = record.name.to_string();
+
+		let peer_id_b58 = name
+			.strip_suffix(network.record_suffix())
+			.ok_or(ParseError::InvalidSuffix)?;
+
+		let peer_id_bytes = b58::decode(peer_id_b58)?;
+		let peer_id_bytes: [u8; 32] = peer_id_bytes
+			.try_into()
+			.map_err(|bytes: Vec<u8>| ParseError::InvalidPeerIdLen(bytes.len()))?;
+
+		let peer_id = PeerId::from_bytes(&peer_id_bytes)?;
+
+		Ok(Self { peer_id })
+	}
+
+	/// Encode the peer id as base58 so it fits within the TXT record length limit
+	/// of 63 characters. The resulting txt record will have the format
+	/// `<base58-peer-id>.<network-public-key>`.
+	pub fn encoded_name(&self) -> String {
+		b58::encode(self.peer_id.as_bytes())
+	}
+}
+
+/// This is the final set of peers that are published in the DHT record under
+/// this `NetworkId`.
+///
+/// The Mainline DHT has a maximum record size of 1000 bytes, so we need to
+/// chose peers that are well-connected and purge disconnected peers. Note that
+/// every member of the network has the same view and write permissions to the
+/// DHT record.
+///
+/// TODO:
+/// consider a two-tier approach where `NetworkId` is the public key of an
+/// ed25519 keypair and only nodes possessing the private key may write to the
+/// DHT record, currently the DHT record's public key is derived from the
+/// publicly known `NetworkId`.
+struct BootstrapSet {
+	records: ArrayVec<PeerRecord, { Self::MAX_RECORDS }>,
+	timestamp: Option<Timestamp>,
+}
+
+impl BootstrapSet {
+	/// Maximum number of peer entries to maintain in a single DHT bootstrap
+	/// record.
+	///
+	/// Individual Mainline DHT records are capped at 1000 bytes total (including
+	/// DNS headers, all resource records, and pkarr framing). Each peer entry is
+	/// a TXT record whose name is the base58-encoded peer ID (~44 chars), with
+	/// DNS label encoding and type/class/TTL/rdlength overhead adding up to
+	/// ~58–100 bytes per entry.
+	///
+	/// A cap of 10 leaves sufficient headroom (~200 bytes) below the 1000-byte
+	/// limit to avoid encoding-related edge cases, while still providing more
+	/// than enough peers for any node to bootstrap from.
+	const MAX_RECORDS: usize = 10;
+
+	/// Returns `true` if this bootstrap set has reached the maximum number of
+	/// peer records and cannot accommodate any more.
+	pub const fn is_full(&self) -> bool {
+		self.records.len() >= Self::MAX_RECORDS
+	}
+
+	/// Returns an iterator over the peer IDs in this bootstrap set.
+	pub fn peers(&self) -> impl Iterator<Item = PeerId> {
+		self.records.iter().map(|r| r.peer_id)
+	}
+
+	/// Removes multiple peers from the bootstrap set.
+	///
+	/// Returns `true` if any peer was removed, or `false` if the set was not
+	/// modified.
+	pub fn remove_all(&mut self, peer_ids: &HashSet<PeerId>) -> bool {
+		let prev_len = self.records.len();
+		self.records.retain(|r| !peer_ids.contains(&r.peer_id));
+		prev_len != self.records.len()
+	}
+
+	/// Attempts to insert a peer into the bootstrap set. Returns `true` if the
+	/// peer was inserted, or `false` the set was not modified.
+	pub fn try_insert(&mut self, peer_id: PeerId) -> bool {
+		if self.is_full() {
+			// no more room for new peers.
+			return false;
+		}
+
+		if self.records.iter().any(|r| r.peer_id == peer_id) {
+			// already present, no need to insert again.
+			return false;
+		}
+
+		self.records.push(PeerRecord { peer_id });
+		true
+	}
+
+	/// Attempts to fill the bootstrap set with the given peers until it reaches
+	/// capacity.
+	///
+	/// Returns `true` if any peer was inserted, or `false` if the set was not
+	/// modified.
+	pub fn try_populate(&mut self, peers: impl Iterator<Item = PeerId>) -> bool {
+		let mut modified = false;
+		for peer_id in peers {
+			if self.is_full() {
+				break;
+			}
+
+			if self.try_insert(peer_id) {
+				modified = true;
+			}
+		}
+
+		modified
+	}
+
+	/// Fetches the current bootstrap set from the DHT.
+	///
+	/// If there is no existing record returns an empty set.
+	pub async fn fetch(client: &Client, network: &NetworkRecord) -> Self {
+		let mut timestamp = None;
+		let mut records = ArrayVec::new();
+
+		if let Some(packet) = client.resolve_most_recent(network.public_key()).await
+		{
+			for (pos, record) in packet.all_resource_records().enumerate() {
+				let Ok(parsed) = PeerRecord::parse(record, network).inspect_err(|e| {
+					tracing::debug!(
+						error = %e,
+						position = pos,
+						network = %network.network_id,
+						"skipping malformed DHT peer record",
+					);
+				}) else {
+					continue;
+				};
+
+				if records.try_push(parsed).is_err() {
+					// seems like some node added more entries than the configured
+					// maximum, skip the rest of the records.
+					break;
+				}
+			}
+
+			timestamp = Some(packet.timestamp());
+		}
+
+		Self { records, timestamp }
+	}
+
+	/// Publishes this bootstrap set to the DHT, replacing all existing records.
+	pub async fn publish(
+		&self,
+		client: &Client,
+		network: &NetworkRecord,
+	) -> Result<(), PublishError> {
+		let mut builder = SignedPacket::builder();
+		for record in &self.records {
+			builder = builder.txt(
+				Name::new_unchecked(&record.encoded_name()),
+				TXT::new(),
+				PEER_RECORD_TTL.as_secs() as u32,
+			);
+		}
+
+		let packet = builder.sign(network.keypair())?;
+		client.publish(&packet, self.timestamp).await?;
+
+		Ok(())
+	}
+}
+
+#[derive(Debug, thiserror::Error)]
+enum ParseError {
+	#[error("Peer record is malformed: {0}")]
+	Bs58DecodeError(#[from] b58::DecodeError),
+
+	#[error("Peer TXT record has invalid network id suffix")]
+	InvalidSuffix,
+
+	#[error("PeerId has invalid length: expected 32 bytes, got {0}")]
+	InvalidPeerIdLen(usize),
+
+	#[error("PeerId is invalid: {0}")]
+	InvalidPeerId(#[from] KeyParsingError),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum PublishError {
+	#[error("Failed to build DHT record packet: {0}")]
+	BuildError(#[from] SignedPacketBuildError),
+
+	#[error("Failed to publish to DHT: {0}")]
+	PublishError(#[from] pkarr::errors::PublishError),
 }

@@ -6,7 +6,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.89"
-version = "0.2.9"
+version = "0.2.10"
 license = "MIT"
 homepage = "https://github.com/flashbots/mosaik"
 repository = "https://github.com/flashbots/mosaik"
@@ -98,6 +98,7 @@ iroh = { version = "0.96.1", features = [
 iroh-gossip = "0.96.0"
 pkarr = "5.0"
 b58 = "0.1"
+arrayvec = "0.7"
 
 [dev-dependencies]
 anyhow.workspace = true

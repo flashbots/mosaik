@@ -45,14 +45,9 @@ pub struct Config {
 	#[builder(default = "0.5")]
 	pub announce_jitter: f32,
 
-	/// The interval at which to publish this node's presence to the DHT under
-	/// the network's namespace.
-	#[builder(default = "Some(Duration::from_secs(300))")]
-	pub dht_publish_interval: Option<Duration>,
-
-	/// The interval at which to poll the DHT for bootstrap peer records.
-	#[builder(default = "Some(Duration::from_secs(60))")]
-	pub dht_poll_interval: Option<Duration>,
+	/// Disables the DHT auto bootstrap mechanism.
+	#[builder(default = "false")]
+	pub no_auto_bootstrap: bool,
 
 	/// The duration the announcement protocol will wait for the graceful
 	/// departure gossip message to propagate before shutting down.
@@ -105,8 +100,7 @@ impl ConfigBuilder {
 	/// API user.
 	#[must_use]
 	pub const fn no_auto_bootstrap(mut self) -> Self {
-		self.dht_publish_interval = None;
-		self.dht_poll_interval = None;
+		self.no_auto_bootstrap = Some(true);
 		self
 	}
 }

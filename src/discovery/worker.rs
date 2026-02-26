@@ -133,7 +133,7 @@ pub(super) struct WorkerLoop {
 	events: broadcast::Sender<Event>,
 
 	/// Ongoing catalog sync tasks.
-	syncs: JoinSet<Result<(), (Error, PeerId)>>,
+	syncs: JoinSet<Result<PeerId, (Error, PeerId)>>,
 
 	/// Incoming commands from the public API.
 	commands: UnboundedReceiver<WorkerCommand>,
@@ -252,15 +252,9 @@ impl WorkerLoop {
 					self.on_external_command(command).await?;
 				}
 
-				// Completed catalog sync tasks
-				Some(result) = self.syncs.join_next() => {
-					if let Err(e) = result {
-						tracing::warn!(
-							error = %e,
-							network = %self.handle.local.network_id(),
-							"discovery catalog sync failed"
-						);
-					}
+				// Drive catalog sync tasks
+				Some(Ok(result)) = self.syncs.join_next() => {
+					self.on_catalog_sync_complete(result);
 				}
 
 				// observe local transport-level address changes
@@ -334,10 +328,12 @@ impl WorkerLoop {
 	fn on_announce_event(&mut self, event: announce::Event) {
 		match event {
 			announce::Event::PeerEntryReceived(signed_peer_entry) => {
+				self.bootstrap.note_healthy(*signed_peer_entry.id());
 				self.on_peer_entry_received(signed_peer_entry);
 			}
 
 			announce::Event::PeerDeparted(peer_id, entry_version) => {
+				self.bootstrap.note_unhealthy(peer_id);
 				self.on_peer_departed(peer_id, entry_version);
 			}
 		}
@@ -379,6 +375,7 @@ impl WorkerLoop {
 						self
 							.sync
 							.sync_with(peer_entry.address().clone())
+							.map_ok(move |()| peer_id)
 							.map_err(move |e| (e, peer_id)),
 					);
 
@@ -501,7 +498,7 @@ impl WorkerLoop {
 			match sync_fut.await {
 				Ok(()) => {
 					let _ = done.send(Ok(()));
-					Ok(())
+					Ok(peer_id)
 				}
 				Err(e) => {
 					let wrapped = io::Error::other(e.to_string());
@@ -510,6 +507,23 @@ impl WorkerLoop {
 				}
 			}
 		});
+	}
+
+	fn on_catalog_sync_complete(&self, result: Result<PeerId, (Error, PeerId)>) {
+		match result {
+			Ok(peer_id) => {
+				self.bootstrap.note_healthy(peer_id);
+			}
+			Err((e, peer_id)) => {
+				tracing::trace!(
+					error = %e,
+					peer_id = %Short(&peer_id),
+					network = %self.handle.local.network_id(),
+					"catalog sync failed"
+				);
+				self.bootstrap.note_unhealthy(peer_id);
+			}
+		}
 	}
 
 	/// Periodically increment the local peer entry version and re-announce it
