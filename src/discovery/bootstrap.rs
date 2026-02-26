@@ -224,7 +224,7 @@ impl WorkerLoop {
 		for _ in 0..MAX_CAS_RETRIES {
 			let mut existing = BootstrapSet::fetch(client, network).await;
 
-			tracing::info!(
+			tracing::debug!(
 				network = %network.network_id,
 				peers = %FmtIter::<Short<_>, _>::new(existing.peers().collect::<Vec<_>>()),
 				"current bootstrap set in DHT",
@@ -249,7 +249,7 @@ impl WorkerLoop {
 				match existing.publish(client, network).await {
 					Ok(()) => {
 						// successfully published the updated bootstrap set to the DHT.
-						tracing::info!(
+						tracing::debug!(
 							network = %network.network_id,
 							peers = %FmtIter::<Short<_>, _>::new(existing.peers().collect::<Vec<_>>()),
 							"published updated bootstrap set to Mainline DHT"
