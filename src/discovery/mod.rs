@@ -6,6 +6,7 @@ use {
 		discovery::{
 			announce::Announce,
 			catalog::UpsertResult,
+			ping::Ping,
 			worker::WorkerCommand,
 		},
 		network::{LocalNode, PeerId, link::Protocol},
@@ -30,6 +31,7 @@ mod config;
 mod entry;
 mod error;
 mod event;
+pub(crate) mod ping;
 mod sync;
 mod worker;
 
@@ -225,9 +227,16 @@ impl crate::network::ProtocolProvider for Discovery {
 			tx: self.0.commands.clone(),
 		};
 
+		let ping = Acceptor {
+			name: Ping::ALPN,
+			variant_fn: WorkerCommand::AcceptPing,
+			tx: self.0.commands.clone(),
+		};
+
 		protocols
 			.accept(announce.name, announce)
 			.accept(catalog_sync.name, catalog_sync)
+			.accept(ping.name, ping)
 	}
 }
 

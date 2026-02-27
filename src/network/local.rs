@@ -3,12 +3,15 @@ use {
 	crate::{
 		PeerId,
 		SecretKey,
+		discovery::{SignedPeerEntry, ping::Ping},
 		network::{
 			NetworkId,
-			link::{OpenError, Protocol},
+			Success,
+			link::{LinkError, OpenError, Protocol},
 		},
-		primitives::IntoIterOrSingle,
+		primitives::{IntoIterOrSingle, Short},
 	},
+	core::time::Duration,
 	iroh::{Endpoint, EndpointAddr, address_lookup::AddressLookup},
 	std::{fmt, sync::Arc},
 	tokio::sync::SetOnce,
@@ -152,6 +155,64 @@ impl LocalNode {
 				.endpoint()
 				.address_lookup()
 				.publish(&addr.clone().into());
+		}
+	}
+
+	/// Sends a ping request to the given peer and waits for the response.
+	///
+	/// This is used to quickly check if a peer is online and responsive without
+	/// doing a full catalog sync.
+	pub(crate) fn ping(
+		&self,
+		peer: impl Into<EndpointAddr>,
+		timeout: Option<std::time::Duration>,
+	) -> impl Future<Output = Result<SignedPeerEntry, LinkError>> + Send + 'static
+	{
+		let peer = peer.into();
+		let local = self.clone();
+		let timeout = timeout.unwrap_or_else(|| Duration::from_secs(5));
+
+		async move {
+			let peer_id = peer.id;
+			let mut link = tokio::time::timeout(timeout, local.connect::<Ping>(peer))
+				.await?
+				.inspect_err(|e| {
+					tracing::debug!(
+						error = %e,
+						network = %local.network_id(),
+						peer = %Short(&peer_id),
+						"ping failed"
+					);
+				})?;
+
+			link.send(&()).await.inspect_err(|e| {
+				tracing::debug!(
+					error = %e,
+					network = %local.network_id(),
+					peer = %Short(&peer_id),
+					"failed to send ping query"
+				);
+			})?;
+
+			let entry = link.recv::<SignedPeerEntry>().await.inspect_err(|e| {
+				tracing::debug!(
+					error = %e,
+					network = %local.network_id(),
+					peer = %Short(&peer_id),
+					"failed to receive ping response"
+				);
+			})?;
+
+			link.close(Success).await.inspect_err(|e| {
+				tracing::debug!(
+					error = %e,
+					network = %local.network_id(),
+					peer = %Short(&peer_id),
+					"failed to close ping link"
+				);
+			})?;
+
+			Ok(entry)
 		}
 	}
 }

@@ -11,7 +11,12 @@ use {
 	},
 	crate::{
 		PeerId,
-		discovery::{PeerEntryVersion, SignedPeerEntry, bootstrap::DhtBootstrap},
+		discovery::{
+			PeerEntryVersion,
+			SignedPeerEntry,
+			bootstrap::DhtBootstrap,
+			ping::Ping,
+		},
 		network::LocalNode,
 		primitives::{IntoIterOrSingle, Pretty, Short},
 	},
@@ -145,6 +150,9 @@ pub(super) struct WorkerLoop {
 	/// Peer gossip announcement protocol handler.
 	announce: Announce,
 
+	/// Ping protocol handler
+	ping: Ping,
+
 	/// Automatic DHT bootstrap system
 	bootstrap: DhtBootstrap,
 
@@ -195,11 +203,14 @@ impl WorkerLoop {
 			handle.catalog.subscribe(),
 		);
 
+		let status = Ping::new(&handle);
+
 		let worker = Self {
 			config,
 			handle: Arc::clone(&handle),
 			sync,
 			announce,
+			ping: status,
 			bootstrap,
 			events: events_tx,
 			syncs: JoinSet::new(),
@@ -260,8 +271,8 @@ impl WorkerLoop {
 				}
 
 				// Automatic DHT bootstrap peer discovered
-				Some(peer_id) = self.bootstrap.events().recv() => {
-					self.on_dht_discovery(peer_id).await;
+				Some(peer_addr) = self.bootstrap.events().recv() => {
+					self.on_dht_discovery(peer_addr);
 				}
 
 				// Catalog sync protocol events
@@ -277,9 +288,7 @@ impl WorkerLoop {
 				}
 
 				// Drive catalog sync tasks
-				Some(Ok(result)) = self.syncs.join_next() => {
-					self.on_catalog_sync_complete(result);
-				}
+				Some(_) = self.syncs.join_next() => { }
 
 				// observe local transport-level address changes
 				Some(addr) = addr_change.next() => {
@@ -334,9 +343,20 @@ impl WorkerLoop {
 				if let Err(e) = self.announce.protocol().accept(connection).await {
 					tracing::trace!(
 						error = %e,
-						peer_id = %peer_id,
+						peer_id = %Short(&peer_id),
 						network = %self.handle.local.network_id(),
 						"Failed to accept announce connection"
+					);
+				}
+			}
+			WorkerCommand::AcceptPing(connection) => {
+				let peer_id = connection.remote_id();
+				if let Err(e) = self.ping.protocol().accept(connection).await {
+					tracing::trace!(
+						error = %e,
+						peer_id = %Short(&peer_id),
+						network = %self.handle.local.network_id(),
+						"Failed to accept status query connection"
 					);
 				}
 			}
@@ -352,27 +372,33 @@ impl WorkerLoop {
 	fn on_announce_event(&mut self, event: announce::Event) {
 		match event {
 			announce::Event::PeerEntryReceived(signed_peer_entry) => {
-				self.bootstrap.note_healthy(*signed_peer_entry.id());
 				self.on_peer_entry_received(signed_peer_entry);
 			}
 
 			announce::Event::PeerDeparted(peer_id, entry_version) => {
-				self.bootstrap.note_unhealthy(peer_id);
 				self.on_peer_departed(peer_id, entry_version);
 			}
 		}
 	}
 
 	/// Handles peers discovered via the Mainline DHT bootstrap mechanism.
-	async fn on_dht_discovery(&self, peer_id: PeerId) {
-		if self.handle.catalog.borrow().get(&peer_id).is_none() {
+	fn on_dht_discovery(&mut self, peer_addr: EndpointAddr) {
+		if self.handle.catalog.borrow().get(&peer_addr.id).is_none() {
 			tracing::trace!(
-				peer_id = %Short(&peer_id),
+				peer_id = %Short(&peer_addr.id),
 				network = %self.handle.local.network_id(),
 				"peer discovered via DHT auto bootstrap"
 			);
 
-			self.announce.dial(peer_id).await;
+			let peer_id = peer_addr.id;
+
+			self.syncs.spawn(
+				self
+					.sync
+					.sync_with(peer_addr)
+					.map_ok(move |()| peer_id)
+					.map_err(move |e| (e, peer_id)),
+			);
 		}
 	}
 
@@ -533,23 +559,6 @@ impl WorkerLoop {
 		});
 	}
 
-	fn on_catalog_sync_complete(&self, result: Result<PeerId, (Error, PeerId)>) {
-		match result {
-			Ok(peer_id) => {
-				self.bootstrap.note_healthy(peer_id);
-			}
-			Err((e, peer_id)) => {
-				tracing::trace!(
-					error = %e,
-					peer_id = %Short(&peer_id),
-					network = %self.handle.local.network_id(),
-					"catalog sync failed"
-				);
-				self.bootstrap.note_unhealthy(peer_id);
-			}
-		}
-	}
-
 	/// Periodically increment the local peer entry version and re-announce it
 	/// to ensure peers are aware of our continued presence on the network.
 	fn on_periodic_announce_tick(&mut self) {
@@ -629,6 +638,9 @@ pub(super) enum WorkerCommand {
 
 	/// Accept an incoming `Announce` protocol connection from a remote peer
 	AcceptAnnounce(Connection),
+
+	/// Accept an incoming `Ping` protocol connection from a remote peer
+	AcceptPing(Connection),
 
 	/// Initiates a catalog sync with the given `PeerId`
 	SyncWith(EndpointAddr, oneshot::Sender<Result<(), Error>>),

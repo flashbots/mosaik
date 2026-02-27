@@ -790,6 +790,12 @@ impl From<ConnectionError> for OpenError {
 	}
 }
 
+impl From<tokio::time::error::Elapsed> for LinkError {
+	fn from(_: tokio::time::error::Elapsed) -> Self {
+		Self::Cancelled
+	}
+}
+
 impl OpenError {
 	/// If the connection was closed with an application-level close frame,
 	/// returns the associated `ApplicationClose` reason. Otherwise returns

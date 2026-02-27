@@ -17,7 +17,9 @@ async fn auto_bootstrap(#[case] num_nodes: usize) -> anyhow::Result<()> {
 
 	let mut nodes = Vec::with_capacity(num_nodes);
 	for _ in 0..num_nodes {
-		nodes.push(Network::new(network_id).await?);
+		let network = Network::new(network_id).await?;
+		tracing::info!("started node with ID {}", network.local().id());
+		nodes.push(network);
 	}
 
 	// every node should have discovered all other nodes within the network
