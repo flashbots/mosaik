@@ -30,8 +30,8 @@ const RELAXED_POLL_INTERVAL: Duration = Duration::from_secs(60);
 /// the catalog empties again, polling switches back to this aggressive rate.
 const AGGRESSIVE_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-/// TTL for a peer record in the DHT - 1h.
-const PEER_RECORD_TTL: Duration = Duration::from_secs(3600);
+/// TTL for a peer record in the DHT - 4 minutes.
+const PEER_RECORD_TTL: Duration = Duration::from_secs(240);
 
 /// Automatic bootstrap mechanism for Mosaik networks.
 ///
@@ -187,7 +187,6 @@ impl WorkerLoop {
 							addrs = ?self.handle.local.addr().addrs,
 							"published local peer as bootstrap record to Mainline DHT"
 						);
-						next_poll_relaxed = true;
 					}
 					Err(PublishError::PublishError(
 						pkarr::errors::PublishError::Concurrency(_),

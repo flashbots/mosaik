@@ -19,6 +19,10 @@ pub enum Error<D> {
 	/// consumer.
 	#[error("Producer is temporarily offline")]
 	Offline(D),
+
+	/// An error occurred while trying to serialize the datum.
+	#[error("Datum serialization error")]
+	Encoding(D, postcard::Error),
 }
 
 impl<D: PartialEq> PartialEq for Error<D> {
@@ -39,6 +43,7 @@ impl<D: Clone> Clone for Error<D> {
 			Self::Closed(d) => Self::Closed(d.clone()),
 			Self::Full(d) => Self::Full(d.clone()),
 			Self::Offline(d) => Self::Offline(d.clone()),
+			Self::Encoding(d, e) => Self::Encoding(d.clone(), e.clone()),
 		}
 	}
 }

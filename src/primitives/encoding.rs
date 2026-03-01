@@ -14,6 +14,12 @@ pub fn serialize<T: Serialize>(value: &T) -> Bytes {
 		.into()
 }
 
+pub fn try_serialize<T: Serialize>(
+	value: &T,
+) -> Result<Bytes, postcard::Error> {
+	postcard::to_allocvec(value).map(Bytes::from)
+}
+
 pub fn serialize_to_writer<T: Serialize>(
 	value: &T,
 	writer: impl std::io::Write,

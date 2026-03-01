@@ -12,8 +12,11 @@ use {core::time::Duration, mosaik::*, rstest::rstest};
 #[case(35)]
 #[tokio::test]
 async fn auto_bootstrap(#[case] num_nodes: usize) -> anyhow::Result<()> {
-	tracing::info!("starting auto bootstrap test with {num_nodes} nodes");
 	let network_id = NetworkId::random();
+	tracing::info!(
+		"starting auto bootstrap test with {num_nodes} nodes on network \
+		 {network_id:?}"
+	);
 
 	let mut nodes = Vec::with_capacity(num_nodes);
 	for _ in 0..num_nodes {

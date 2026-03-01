@@ -17,7 +17,7 @@ pub use id::{Digest, Tag, UniqueId};
 /// Internal primitives.
 pub(crate) use {
 	channel::UnboundedChannel,
-	encoding::{deserialize, serialize, serialize_to_writer},
+	encoding::{deserialize, serialize, serialize_to_writer, try_serialize},
 	fut::BoxPinFut,
 	fut::InternalFutureExt,
 	iter::IntoIterOrSingle,

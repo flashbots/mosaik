@@ -30,7 +30,7 @@ use {
 		protocol::DynProtocolHandler,
 	},
 	rand::Rng,
-	std::{io, sync::Arc},
+	std::{collections::HashSet, io, sync::Arc},
 	tokio::{
 		sync::{
 			broadcast,
@@ -173,6 +173,10 @@ pub(super) struct WorkerLoop {
 	/// Interval timer for periodic purging of stale peer entries from the
 	/// discovery catalog.
 	purge_interval: tokio::time::Interval,
+
+	/// Set of peer ids that the local node synced its catalog with at least
+	/// once.
+	seen: HashSet<PeerId>,
 }
 
 impl WorkerLoop {
@@ -213,6 +217,7 @@ impl WorkerLoop {
 			ping: status,
 			bootstrap,
 			events: events_tx,
+			seen: HashSet::new(),
 			syncs: JoinSet::new(),
 			commands: commands_rx,
 			announce_interval,
@@ -272,7 +277,7 @@ impl WorkerLoop {
 
 				// Automatic DHT bootstrap peer discovered
 				Some(peer_addr) = self.bootstrap.events().recv() => {
-					self.on_dht_discovery(peer_addr);
+					self.on_dht_discovery(&peer_addr);
 				}
 
 				// Catalog sync protocol events
@@ -288,7 +293,9 @@ impl WorkerLoop {
 				}
 
 				// Drive catalog sync tasks
-				Some(_) = self.syncs.join_next() => { }
+				Some(Ok(Ok(peer_id))) = self.syncs.join_next() => {
+					self.on_peer_observed(&peer_id.into());
+				}
 
 				// observe local transport-level address changes
 				Some(addr) = addr_change.next() => {
@@ -324,6 +331,10 @@ impl WorkerLoop {
 	) -> Result<(), Error> {
 		match command {
 			WorkerCommand::DialPeers(peers, resp) => {
+				for peer in &peers {
+					self.on_peer_observed(peer);
+				}
+
 				self.announce.dial(peers).await;
 				let _ = resp.send(());
 			}
@@ -382,22 +393,13 @@ impl WorkerLoop {
 	}
 
 	/// Handles peers discovered via the Mainline DHT bootstrap mechanism.
-	fn on_dht_discovery(&mut self, peer_addr: EndpointAddr) {
-		if self.handle.catalog.borrow().get(&peer_addr.id).is_none() {
+	fn on_dht_discovery(&mut self, peer_addr: &EndpointAddr) {
+		let peer_id = peer_addr.id;
+		if self.on_peer_observed(peer_addr) {
 			tracing::trace!(
-				peer_id = %Short(&peer_addr.id),
+				peer_id = %Short(&peer_id),
 				network = %self.handle.local.network_id(),
 				"peer discovered via DHT auto bootstrap"
-			);
-
-			let peer_id = peer_addr.id;
-
-			self.syncs.spawn(
-				self
-					.sync
-					.sync_with(peer_addr)
-					.map_ok(move |()| peer_id)
-					.map_err(move |e| (e, peer_id)),
 			);
 		}
 	}
@@ -407,6 +409,7 @@ impl WorkerLoop {
 	/// and triggers appropriate actions based on whether the entry is new,
 	/// updated, or rejected.
 	fn on_peer_entry_received(&mut self, peer_entry: SignedPeerEntry) {
+		self.on_peer_observed(peer_entry.address());
 		let modified = self.handle.catalog.send_if_modified(|catalog| {
 			match catalog.upsert_signed(peer_entry) {
 				UpsertResult::New(peer_entry) => {
@@ -488,7 +491,12 @@ impl WorkerLoop {
 	/// protocol. Marks the peer as departed in the local catalog if the last
 	/// known version is equal or newer than the current entry and the timestamp
 	/// of the departure message is recent enough.
-	fn on_peer_departed(&self, peer_id: PeerId, entry_version: PeerEntryVersion) {
+	fn on_peer_departed(
+		&mut self,
+		peer_id: PeerId,
+		entry_version: PeerEntryVersion,
+	) {
+		self.seen.remove(&peer_id);
 		let Some(last_known_version) = self
 			.handle
 			.catalog
@@ -525,9 +533,11 @@ impl WorkerLoop {
 		match event {
 			Event::PeerDiscovered(entry) | Event::PeerUpdated(entry) => {
 				self.announce.observe(entry);
-				self.handle.local.observe(entry.address());
+				self.on_peer_observed(entry.address());
 			}
-			Event::PeerDeparted(_) => {}
+			Event::PeerDeparted(peer_id) => {
+				self.seen.remove(peer_id);
+			}
 		}
 
 		let purge_in = self.next_purge_deadline();
@@ -603,6 +613,30 @@ impl WorkerLoop {
 
 		let next_purge_in = self.next_purge_deadline();
 		self.purge_interval.reset_after(next_purge_in);
+	}
+
+	/// Invoked when a new peer is discovered via any protocol (e.g. announce
+	/// gossip, DHT bootstrap, catalog sync) to trigger a catalog sync with the
+	/// peer if it hasn't been synced with before.
+	///
+	/// Returns `true` if the peer has not been seen before.
+	fn on_peer_observed(&mut self, peer_addr: &EndpointAddr) -> bool {
+		if self.seen.insert(peer_addr.id) {
+			let peer_id = peer_addr.id;
+			let peer_addr = peer_addr.clone();
+			self.handle.local.observe(&peer_addr);
+			self.syncs.spawn(
+				self
+					.sync
+					.sync_with(peer_addr)
+					.map_ok(move |()| peer_id)
+					.map_err(move |e| (e, peer_id)),
+			);
+
+			return true;
+		}
+
+		false
 	}
 
 	/// Calculates the next deadline for purging stale entries from the catalog by

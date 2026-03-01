@@ -57,8 +57,16 @@ rust-version.workspace = true
 [lib]
 doctest = false
 
+[[bin]]
+name = "mosaik"
+path = "src/main.rs"
+required-features = ["cli"]
+
 [lints]
 workspace = true
+
+[features]
+cli = ["clap"]
 
 [dependencies]
 tokio.workspace = true
@@ -99,6 +107,14 @@ iroh-gossip = "0.96.0"
 pkarr = "5.0"
 b58 = "0.1"
 arrayvec = "0.7"
+
+# CLI-specific dependencies
+clap = { version = "4.5", features = [
+  "derive",
+  "env",
+  "unicode",
+  "wrap_help",
+], optional = true }
 
 [dev-dependencies]
 anyhow.workspace = true
