@@ -12,7 +12,14 @@ use {
 	},
 	crate::{
 		Digest,
-		primitives::{Bytes, Short, deserialize, serialize},
+		primitives::{
+			Bytes,
+			DecodeError,
+			EncodeError,
+			Short,
+			deserialize,
+			serialize,
+		},
 	},
 	core::{fmt, marker::PhantomData},
 	futures::{FutureExt, SinkExt, StreamExt},
@@ -527,7 +534,7 @@ pub enum RecvError {
 	/// This error indicates that the data was read successfully but failed to
 	/// deserialize it into a typed structure as set in [`Link::recv_as`].
 	#[error("{0}")]
-	Decode(#[from] postcard::Error),
+	Decode(#[from] DecodeError),
 
 	#[error("{0}")]
 	Unknown(#[from] io::Error),
@@ -540,7 +547,7 @@ pub enum RecvError {
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
 	#[error("{0}")]
-	Encode(#[from] postcard::Error),
+	Encode(#[from] EncodeError),
 
 	#[error("{0}")]
 	Io(#[from] WriteError),

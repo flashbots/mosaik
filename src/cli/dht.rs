@@ -3,7 +3,7 @@ use {
 	core::{net::SocketAddr, str::FromStr, time::Duration},
 	futures::{SinkExt, StreamExt},
 	iroh::{Endpoint, EndpointAddr, RelayUrl},
-	mosaik::{NetworkId, PeerId, discovery::SignedPeerEntry},
+	mosaik::{NetworkId, PeerId, discovery::SignedPeerEntry, primitives},
 	pkarr::{
 		Client,
 		Keypair,
@@ -149,7 +149,7 @@ async fn check_status(
 	// send an empty ping request and wait for a peer entry response
 	timeout(
 		Duration::from_secs(timeout_secs),
-		sender.send(postcard::to_allocvec(&())?.into()),
+		sender.send(primitives::encoding::serialize(&())),
 	)
 	.await
 	.map_err(|e| {
@@ -167,5 +167,5 @@ async fn check_status(
 			anyhow::anyhow!("peer did not respond to ping request within timeout")
 		})??;
 
-	Ok(postcard::from_bytes(&response)?)
+	Ok(primitives::encoding::deserialize(&response)?)
 }

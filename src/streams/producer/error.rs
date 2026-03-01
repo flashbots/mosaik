@@ -1,3 +1,5 @@
+use crate::primitives::EncodeError;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error<D> {
 	/// The producer sink is closed and cannot accept new datums.
@@ -22,7 +24,7 @@ pub enum Error<D> {
 
 	/// An error occurred while trying to serialize the datum.
 	#[error("Datum serialization error")]
-	Encoding(D, postcard::Error),
+	Encoding(D, EncodeError),
 }
 
 impl<D: PartialEq> PartialEq for Error<D> {
@@ -39,11 +41,14 @@ impl<D: PartialEq> PartialEq for Error<D> {
 
 impl<D: Clone> Clone for Error<D> {
 	fn clone(&self) -> Self {
+		use serde::ser::Error as _;
 		match self {
 			Self::Closed(d) => Self::Closed(d.clone()),
 			Self::Full(d) => Self::Full(d.clone()),
 			Self::Offline(d) => Self::Offline(d.clone()),
-			Self::Encoding(d, e) => Self::Encoding(d.clone(), e.clone()),
+			Self::Encoding(d, e) => {
+				Self::Encoding(d.clone(), EncodeError::custom(e.to_string()))
+			}
 		}
 	}
 }

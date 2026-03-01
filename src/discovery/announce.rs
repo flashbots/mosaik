@@ -174,6 +174,11 @@ impl Announce {
 		&mut self.events
 	}
 
+	/// Returns a reference to the neighbors count atomic tracker.
+	pub const fn neighbors_count(&self) -> &Arc<AtomicUsize> {
+		&self.neighbors_count
+	}
+
 	/// Dials the given peer address to initiate a discovery exchange.
 	pub async fn dial<V>(&self, peers: impl IntoIterOrSingle<EndpointAddr, V>) {
 		let (tx, rx) = oneshot::channel::<()>();
@@ -289,8 +294,13 @@ impl WorkerLoop {
 	/// This joins an iroh-gossip topic based on the network ID.
 	async fn join_gossip_topic(&self) -> Result<GossipTopic, Error> {
 		let topic_id = self.local.network_id().into();
-		let bootstrap = self.config.bootstrap_peers_ids();
-		let topic = self.gossip.subscribe(topic_id, bootstrap).await?;
+		let mut peers = self.config.bootstrap_peers_ids();
+		for peer in self.catalog.borrow().peers() {
+			if *peer.id() != self.local.id() {
+				peers.push(*peer.id());
+			}
+		}
+		let topic = self.gossip.subscribe(topic_id, peers).await?;
 		Ok(topic)
 	}
 
@@ -313,7 +323,6 @@ impl WorkerLoop {
 					network = %self.local.network_id(),
 					"announcement gossip network connection lost, attempting to re-join"
 				);
-				self.neighbors_count.store(0, Ordering::SeqCst);
 				self.rejoin_topic(topic_tx, topic_rx).await?;
 			}
 			Some(Err(e)) => {
@@ -322,11 +331,10 @@ impl WorkerLoop {
 					network = %self.local.network_id(),
 					"announcement gossip network down"
 				);
-				self.neighbors_count.store(0, Ordering::SeqCst);
 				self.rejoin_topic(topic_tx, topic_rx).await?;
 			}
 			Some(Ok(event)) => {
-				self.on_gossip_event(event);
+				self.on_gossip_event(event, topic_tx).await;
 			}
 		}
 
@@ -337,10 +345,10 @@ impl WorkerLoop {
 	///
 	/// This method handles the happy-path gossip events, such as new neighbors
 	/// joining and messages being received.
-	fn on_gossip_event(&self, event: GossipEvent) {
+	async fn on_gossip_event(&self, event: GossipEvent, topic_tx: &GossipSender) {
 		match event {
 			GossipEvent::NeighborUp(id) => {
-				self.neighbors_count.fetch_add(1, Ordering::SeqCst);
+				self.increment_neighbor_count();
 				tracing::trace!(
 					network = %self.local.network_id(),
 					peer_id = %Short(&id),
@@ -352,7 +360,7 @@ impl WorkerLoop {
 				self.broadcast_self_info();
 			}
 			GossipEvent::NeighborDown(id) => {
-				self.neighbors_count.fetch_sub(1, Ordering::SeqCst);
+				self.decrement_neighbor_count(topic_tx).await;
 				tracing::trace!(
 					network = %self.local.network_id(),
 					peer_id = %Short(&id),
@@ -375,7 +383,7 @@ impl WorkerLoop {
 			GossipEvent::Lagged => {
 				// we lost track of some updates, put the system in a safe state
 				// and re-sync the catalog with the next peer interaction
-				self.neighbors_count.store(0, Ordering::SeqCst);
+				self.set_neighbor_count(0, topic_tx).await;
 			}
 		}
 	}
@@ -532,8 +540,9 @@ impl WorkerLoop {
 			}
 		} else {
 			// successfully broadcasted the message, update neighbors stats
-			let neighbor_count = topic_rx.neighbors().count();
-			self.neighbors_count.store(neighbor_count, Ordering::SeqCst);
+			self
+				.set_neighbor_count(topic_rx.neighbors().count(), topic_tx)
+				.await;
 		}
 
 		Ok(())
@@ -572,6 +581,7 @@ impl WorkerLoop {
 		topic_tx: &mut GossipSender,
 		topic_rx: &mut GossipReceiver,
 	) -> Result<(), Error> {
+		self.neighbors_count.store(0, Ordering::SeqCst);
 		let (new_topic_tx, new_topic_rx) = self.join_gossip_topic().await?.split();
 		*topic_tx = new_topic_tx;
 		*topic_rx = new_topic_rx;
@@ -614,6 +624,42 @@ impl WorkerLoop {
 				// disconnecting from the gossip topic
 				tokio::time::sleep(self.config.graceful_departure_window).await;
 			}
+		}
+	}
+
+	fn increment_neighbor_count(&self) {
+		self.neighbors_count.fetch_add(1, Ordering::SeqCst);
+	}
+
+	async fn decrement_neighbor_count(&self, topic_tx: &GossipSender) {
+		if self.neighbors_count.fetch_sub(1, Ordering::SeqCst) == 1 {
+			// if we are left with no neighbors, attempt connect to all known peers in
+			// the catalog to re-establish connectivity
+			let mut peers = Vec::with_capacity(self.catalog.borrow().peers_count());
+			for peer in self.catalog.borrow().peers() {
+				if *peer.id() != self.local.id() {
+					self.local.observe(peer.address());
+					peers.push(*peer.id());
+				}
+			}
+			topic_tx.join_peers(peers).await.ok();
+		}
+	}
+
+	async fn set_neighbor_count(&self, count: usize, topic_tx: &GossipSender) {
+		self.neighbors_count.store(count, Ordering::SeqCst);
+
+		if count == 0 {
+			// if we are left with no neighbors, attempt connect to all known peers in
+			// the catalog to re-establish connectivity
+			let mut peers = Vec::with_capacity(self.catalog.borrow().peers_count());
+			for peer in self.catalog.borrow().peers() {
+				if *peer.id() != self.local.id() {
+					self.local.observe(peer.address());
+					peers.push(*peer.id());
+				}
+			}
+			topic_tx.join_peers(peers).await.ok();
 		}
 	}
 }

@@ -15,14 +15,10 @@ use {
 	tokio::sync::watch,
 };
 
-/// Node Status Protocol
+/// Node Status Ping Protocol
 ///
-/// This protocol is responsible for answering queries about this node's current
-/// status such as its uptime, current peer entry and other diagnostic discovery
-/// information.
-///
-/// It is used by other peers and the `mosaik` CLI tool to query the status
-/// of this node for debugging and monitoring purposes.
+/// This protocol is responsible for testing the liveness of a peer and
+/// retrieving its current discovery information.
 pub struct Ping {
 	local: LocalNode,
 	catalog: watch::Sender<Catalog>,

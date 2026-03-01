@@ -40,19 +40,20 @@ impl Default for PeerEntryVersion {
 
 impl core::fmt::Debug for PeerEntryVersion {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-		write!(f, "{}:{}", self.0, self.1)
+		write!(f, "{}.{}", self.0, self.1)
 	}
 }
 
 impl core::fmt::Display for PeerEntryVersion {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-		write!(f, "{}:{}", self.0, self.1)
+		write!(f, "{}.{}", self.0, self.1)
 	}
 }
 
 impl core::fmt::Display for Short<PeerEntryVersion> {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-		write!(f, "{}", self.0.1)
+		const MILLIS_PER_WEEK: i64 = 7 * 86_400_000;
+		write!(f, "{}", self.0.1 % MILLIS_PER_WEEK)
 	}
 }
 

@@ -21,7 +21,7 @@ use {
 		primitives::{IntoIterOrSingle, Pretty, Short},
 	},
 	chrono::Utc,
-	core::time::Duration,
+	core::{sync::atomic::AtomicUsize, time::Duration},
 	futures::{StreamExt, TryFutureExt},
 	iroh::{
 		EndpointAddr,
@@ -55,6 +55,7 @@ pub(super) struct Handle {
 	pub catalog: watch::Sender<Catalog>,
 	pub events: broadcast::Receiver<Event>,
 	pub commands: UnboundedSender<WorkerCommand>,
+	pub neighbors_count: Arc<AtomicUsize>,
 }
 
 impl Handle {
@@ -69,45 +70,6 @@ impl Handle {
 			))
 			.ok();
 		let _ = rx.await;
-	}
-
-	/// Updates the local peer entry using the provided update function.
-	///
-	/// If the update results in a change to the local entry contents, it is
-	/// re-signed and broadcasted to the network which respectively updates their
-	/// catalogues.
-	///
-	/// This api is not intended to be used directly by users of the discovery
-	/// system, but rather by higher-level abstractions that manage the local
-	/// peer's state.
-	pub(crate) fn update_local_entry(
-		&self,
-		update: impl FnOnce(PeerEntry) -> PeerEntry + Send + 'static,
-	) {
-		self.catalog.send_if_modified(|catalog| {
-			let local_entry = catalog.local().clone();
-			let prev_version = local_entry.update_version();
-			let updated_entry = update(local_entry.into());
-			if updated_entry.update_version() > prev_version {
-				let signed_updated_entry = updated_entry
-					.sign(self.local.secret_key())
-					.expect("signing updated local peer entry failed.");
-
-				tracing::trace!(
-					peer_info = %Short(&signed_updated_entry),
-					network = %self.local.network_id(),
-					"updated local",
-				);
-
-				assert!(
-					catalog.upsert_signed(signed_updated_entry).is_ok(),
-					"local peer info versioning error. this is a bug."
-				);
-				true
-			} else {
-				false
-			}
-		});
 	}
 
 	/// Performs a full catalog synchronization with the specified peer.
@@ -127,6 +89,47 @@ impl Handle {
 				.map_err(|_| Error::Cancelled)?;
 			rx.await.map_err(|_| Error::Cancelled)?
 		}
+	}
+
+	/// Returns the current number of neighbors that the announce protocol is
+	/// connected to in the p2p gossip layer.
+	pub fn neighbors_count(&self) -> usize {
+		self
+			.neighbors_count
+			.load(core::sync::atomic::Ordering::SeqCst)
+	}
+
+	/// Updates the local peer entry using the provided update function.
+	///
+	/// If the update results in a change to the local entry contents, it is
+	/// re-signed and broadcasted to the network which respectively updates their
+	/// catalogues.
+	///
+	/// This api is not intended to be used directly by users of the discovery
+	/// system, but rather by higher-level abstractions that manage the local
+	/// peer's state.
+	pub fn update_local_entry(
+		&self,
+		update: impl FnOnce(PeerEntry) -> PeerEntry + Send + 'static,
+	) {
+		self.catalog.send_if_modified(|catalog| {
+			let local_entry = catalog.local().clone();
+			let prev_version = local_entry.update_version();
+			let updated_entry = update(local_entry.into());
+			if updated_entry.update_version() > prev_version {
+				let signed_updated_entry = updated_entry
+					.sign(self.local.secret_key())
+					.expect("signing updated local peer entry failed.");
+
+				assert!(
+					catalog.upsert_signed(signed_updated_entry).is_ok(),
+					"local peer info versioning error. this is a bug."
+				);
+				true
+			} else {
+				false
+			}
+		});
 	}
 }
 
@@ -193,28 +196,25 @@ impl WorkerLoop {
 		let announce = Announce::new(local.clone(), &config, catalog.subscribe());
 		let announce_interval = interval(config.announce_interval);
 		let purge_interval = interval(config.purge_after);
+		let neighbors_count = Arc::clone(announce.neighbors_count());
 
 		let handle = Arc::new(Handle {
 			local,
 			catalog,
 			events: events_rx,
 			commands: commands_tx,
+			neighbors_count,
 		});
 
-		let bootstrap = DhtBootstrap::new(
-			Arc::clone(&handle),
-			&config,
-			handle.catalog.subscribe(),
-		);
-
-		let status = Ping::new(&handle);
+		let ping = Ping::new(&handle);
+		let bootstrap = DhtBootstrap::new(Arc::clone(&handle), &config);
 
 		let worker = Self {
 			config,
 			handle: Arc::clone(&handle),
 			sync,
 			announce,
-			ping: status,
+			ping,
 			bootstrap,
 			events: events_tx,
 			seen: HashSet::new(),
@@ -276,13 +276,12 @@ impl WorkerLoop {
 				}
 
 				// Automatic DHT bootstrap peer discovered
-				Some(peer_addr) = self.bootstrap.events().recv() => {
+				Some(peer_addr) = self.bootstrap.updates().recv() => {
 					self.on_dht_discovery(&peer_addr);
 				}
 
 				// Catalog sync protocol events
 				Some(event) = self.sync.events().recv() => {
-					tracing::trace!(event = %Short(&event), "catalog sync event");
 					self.on_catalog_sync_event(&event);
 					self.events.send(event).ok();
 				}
@@ -440,12 +439,6 @@ impl WorkerLoop {
 					true
 				}
 				UpsertResult::Updated(peer_entry) => {
-					tracing::trace!(
-						peer_info = %Short(peer_entry),
-						network = %self.handle.local.network_id(),
-						"updated"
-					);
-
 					// Publish the new peer entry to the static provider
 					self.handle.local.observe(peer_entry.address());
 					self.events.send(Event::PeerUpdated(peer_entry.into())).ok();
@@ -453,8 +446,8 @@ impl WorkerLoop {
 				}
 				UpsertResult::Outdated(peer_entry) => {
 					tracing::trace!(
-						peer_info = %Short(peer_entry.as_ref()),
-						network = %self.handle.local.network_id(),
+						peer_id = %Short(peer_entry.id()),
+						network = %Short(self.handle.local.network_id()),
 						"rejected outdated"
 					);
 					false
@@ -462,10 +455,11 @@ impl WorkerLoop {
 				UpsertResult::Rejected { rejected, existing } => {
 					if rejected.update_version() < existing.update_version() {
 						tracing::trace!(
-							update = %Short(rejected.as_ref()),
-							existing = %Short(existing),
-							network = %self.handle.local.network_id(),
-							"rejected stale peer"
+							peer = %Short(rejected.id()),
+							known = %Short(existing.update_version()),
+							incoming = %Short(rejected.update_version()),
+							network = %Short(self.handle.local.network_id()),
+							"ignoring stale"
 						);
 					}
 					false

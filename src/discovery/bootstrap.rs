@@ -3,18 +3,14 @@ use {
 	crate::{
 		NetworkId,
 		PeerId,
-		discovery::Catalog,
-		primitives::UnboundedChannel,
+		primitives::{Short, UnboundedChannel},
 	},
 	core::{net::SocketAddr, str::FromStr, time::Duration},
 	iroh::{EndpointAddr, RelayUrl, TransportAddr},
 	pkarr::{dns::rdata::RData, errors::SignedPacketBuildError, *},
 	std::sync::Arc,
 	tokio::{
-		sync::{
-			mpsc::{UnboundedReceiver, UnboundedSender},
-			watch,
-		},
+		sync::mpsc::{UnboundedReceiver, UnboundedSender},
 		time::sleep,
 	},
 };
@@ -43,16 +39,12 @@ const PEER_RECORD_TTL: Duration = Duration::from_secs(240);
 /// first join the network, without having to run dedicated bootstrap nodes or
 /// hardcode any peer ids or address.
 pub struct DhtBootstrap {
-	events: UnboundedChannel<EndpointAddr>,
+	updates: UnboundedChannel<EndpointAddr>,
 }
 
 impl DhtBootstrap {
-	pub(super) fn new(
-		handle: Arc<super::Handle>,
-		config: &Config,
-		catalog: watch::Receiver<Catalog>,
-	) -> Self {
-		let events = UnboundedChannel::default();
+	pub(super) fn new(handle: Arc<super::Handle>, config: &Config) -> Self {
+		let updates = UnboundedChannel::default();
 
 		if config.no_auto_bootstrap {
 			tracing::debug!(
@@ -60,30 +52,23 @@ impl DhtBootstrap {
 				"DHT auto bootstrap is disabled"
 			);
 		} else {
-			let events_tx = events.sender().clone();
-
-			let worker = WorkerLoop {
-				handle,
-				events_tx,
-				catalog,
-			};
-
+			let updates_tx = updates.sender().clone();
+			let worker = WorkerLoop { handle, updates_tx };
 			let cancel = worker.handle.local.termination().child_token();
 			tokio::spawn(cancel.run_until_cancelled_owned(worker.run()));
 		}
 
-		Self { events }
+		Self { updates }
 	}
 
-	pub const fn events(&mut self) -> &mut UnboundedReceiver<EndpointAddr> {
-		self.events.receiver()
+	pub const fn updates(&mut self) -> &mut UnboundedReceiver<EndpointAddr> {
+		self.updates.receiver()
 	}
 }
 
 struct WorkerLoop {
 	handle: Arc<super::Handle>,
-	events_tx: UnboundedSender<EndpointAddr>,
-	catalog: watch::Receiver<Catalog>,
+	updates_tx: UnboundedSender<EndpointAddr>,
 }
 
 impl WorkerLoop {
@@ -117,17 +102,8 @@ impl WorkerLoop {
 		loop {
 			let mut publish_self = false;
 			let mut cas_timestamp = None;
-			let mut next_poll_relaxed =
-				self.catalog.borrow().signed_peers_count() != 0;
 
 			if let Some((addr, timestamp)) = self.fetch(&client, &network).await {
-				tracing::trace!(
-					network = %network.network_id,
-					peer_id = %addr.id,
-					addrs = ?addr.addrs,
-					"fetched bootstrap peer record from DHT"
-				);
-
 				// The mainline DHT record for this network already exists
 				if addr.id == self.handle.local.id() {
 					// the DHT record refers to this local node, ensure that the record
@@ -135,8 +111,8 @@ impl WorkerLoop {
 					// set of known transport addresses for this node.
 					if addr.addrs != self.handle.local.addr().addrs {
 						tracing::trace!(
-							network = %network.network_id,
-							peer_id = %addr.id,
+							network = %Short(network.network_id),
+							peer_id = %Short(addr.id),
 							addrs = ?addr.addrs,
 							"DHT record has stale addresses, updating"
 						);
@@ -150,7 +126,7 @@ impl WorkerLoop {
 				{
 					// healthy bootstrap peer in mainline DHT, no need to replace it.
 					// feed the entry to the rest of the discovery system.
-					let _ = self.events_tx.send(peer_entry.address().clone());
+					let _ = self.updates_tx.send(peer_entry.address().clone());
 				} else {
 					// The bootstrap peer in the DHT is not responding to pings, consider
 					// it unhealthy and replace it with ourselves.
@@ -158,8 +134,8 @@ impl WorkerLoop {
 					cas_timestamp = Some(timestamp);
 
 					tracing::trace!(
-						network = %network.network_id,
-						peer_id = %addr.id,
+						network = %Short(network.network_id),
+						peer_id = %Short(addr.id),
 						addrs = ?addr.addrs,
 						"DHT bootstrap peer unhealthy, replacing with local peer"
 					);
@@ -170,7 +146,7 @@ impl WorkerLoop {
 				publish_self = true;
 
 				tracing::trace!(
-					network = %network.network_id,
+					network = %Short(network.network_id),
 					"no DHT bootstrap record found, publishing local peer"
 				);
 			}
@@ -182,8 +158,8 @@ impl WorkerLoop {
 				match self.publish_self(&client, &network, cas_timestamp).await {
 					Ok(()) => {
 						tracing::debug!(
-							network = %network.network_id,
-							peer_id = %self.handle.local.id(),
+							network = %Short(network.network_id),
+							peer_id = %Short(self.handle.local.id()),
 							addrs = ?self.handle.local.addr().addrs,
 							"published local peer as bootstrap record to Mainline DHT"
 						);
@@ -193,7 +169,7 @@ impl WorkerLoop {
 					)) => {
 						// lost the race to update the DHT record, retry,
 						tracing::trace!(
-							network = %network.network_id,
+							network = %Short(network.network_id),
 							"DHT publish race lost, retrying..."
 						);
 						continue;
@@ -201,22 +177,16 @@ impl WorkerLoop {
 					Err(e) => {
 						// unrecoverable error, skip this publish cycle and try again at
 						// the next interval.
-						tracing::warn!(
+						tracing::debug!(
 							error = %e,
-							network = %network.network_id,
+							network = %Short(network.network_id),
 							"failed to overwrite unhealthy bootstrap peer in Mainline DHT",
 						);
-						next_poll_relaxed = false;
 					}
 				}
 			}
 
-			sleep(with_jitter(if next_poll_relaxed {
-				RELAXED_POLL_INTERVAL
-			} else {
-				AGGRESSIVE_POLL_INTERVAL
-			}))
-			.await;
+			sleep(self.next_poll_interval()).await;
 		}
 	}
 
@@ -240,7 +210,7 @@ impl WorkerLoop {
 			.ok()?
 		} else {
 			tracing::debug!(
-				network = %network.network_id,
+				network = %Short(network.network_id),
 				"bootstrap record in DHT has invalid format: missing TXT record for peer id"
 			);
 			return None;
@@ -308,13 +278,29 @@ impl WorkerLoop {
 		let packet = packet.sign(network.keypair())?;
 		Ok(client.publish(&packet, cas_timestamp).await?)
 	}
+
+	/// Determines the interval to wait before querying the DHT for bootstrap
+	/// peers again.
+	///
+	/// When the current node is not connected to any peers on the gossip layer,
+	/// it will poll the DHT at a more aggressive rate to quickly discover
+	/// changes to the bootstrap peer record and connect to the first healthy peer
+	/// as soon as it is published.
+	fn next_poll_interval(&self) -> Duration {
+		with_jitter(if self.handle.neighbors_count() == 0 {
+			AGGRESSIVE_POLL_INTERVAL
+		} else {
+			RELAXED_POLL_INTERVAL
+		})
+	}
 }
 
 /// Adds random jitter (up to 1/3 of the base duration) to desynchronize
 /// concurrent publishers.
 fn with_jitter(base: Duration) -> Duration {
-	let max_jitter_secs = base.as_secs() / 3 + 1;
-	let jitter = Duration::from_secs(rand::random_range(0..max_jitter_secs));
+	let max_jitter_millis = base.as_millis() / 3 + 1;
+	let jitter = rand::random_range(0..max_jitter_millis);
+	let jitter = Duration::from_millis(jitter as u64);
 	base + jitter
 }
 
