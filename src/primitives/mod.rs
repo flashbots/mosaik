@@ -1,6 +1,7 @@
 //! Traits, helpers and types used across the SDK
 
 mod channel;
+mod datum;
 mod fmt;
 mod fut;
 mod id;
@@ -12,6 +13,7 @@ pub mod encoding;
 
 /// Public API re-exported byte types.
 pub use bytes::{Bytes, BytesMut};
+pub use datum::Datum;
 #[doc(hidden)]
 pub use fmt::*;
 /// Public API re-exported primitives.
@@ -19,14 +21,7 @@ pub use id::{Digest, Tag, UniqueId};
 /// Internal primitives.
 pub(crate) use {
 	channel::UnboundedChannel,
-	encoding::{
-		DecodeError,
-		EncodeError,
-		deserialize,
-		serialize,
-		serialize_to_writer,
-		try_serialize,
-	},
+	encoding::{EncodeError, deserialize, serialize, serialize_to_writer},
 	fut::BoxPinFut,
 	fut::InternalFutureExt,
 	iter::IntoIterOrSingle,

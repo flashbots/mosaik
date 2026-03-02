@@ -11,21 +11,14 @@ use {
 		},
 	},
 	crate::{
+		Datum,
 		Digest,
-		primitives::{
-			Bytes,
-			DecodeError,
-			EncodeError,
-			Short,
-			deserialize,
-			serialize,
-		},
+		primitives::{Bytes, Short},
 	},
 	core::{fmt, marker::PhantomData},
 	futures::{FutureExt, SinkExt, StreamExt},
 	iroh::{EndpointAddr, endpoint::*, protocol::AcceptError as IrohAcceptError},
 	n0_error::Meta,
-	serde::{Serialize, de::DeserializeOwned},
 	std::io,
 	tokio_util::{
 		codec::{FramedRead, FramedWrite, LengthDelimitedCodec},
@@ -269,14 +262,14 @@ impl<P: Protocol> Link<P> {
 
 	/// Receives the next framed message and deserializes it into the given
 	/// data type `D` using postcard deserialization.
-	pub async fn recv<D: DeserializeOwned>(&mut self) -> Result<D, RecvError> {
+	pub async fn recv<D: Datum>(&mut self) -> Result<D, RecvError> {
 		self.recv_with_size().await.map(|(d, _)| d)
 	}
 
 	/// Receives the next framed message and deserializes it into the given data
 	/// type `D`, returning a deserialized value along with the size of the
 	/// message in bytes.
-	pub async fn recv_with_size<D: DeserializeOwned>(
+	pub async fn recv_with_size<D: Datum>(
 		&mut self,
 	) -> Result<(D, usize), RecvError> {
 		let Some(frame) =
@@ -305,11 +298,11 @@ impl<P: Protocol> Link<P> {
 
 		// deserialize the received bytes into the expected data type, if
 		// deserialization fails, close the connection with protocol violation
-		let decoded = match deserialize(&bytes) {
+		let decoded = match D::decode(&bytes) {
 			Ok(datum) => datum,
 			Err(err) => {
 				close_connection(&self.connection, ProtocolViolation).await;
-				return Err(RecvError::Decode(err));
+				return Err(RecvError::Decode(Box::new(err)));
 			}
 		};
 
@@ -323,13 +316,17 @@ impl<P: Protocol> Link<P> {
 	///
 	/// If the serialization fails, the link is closed with a [`UnexpectedClose`].
 	/// Returns the number of bytes sent on success.
-	pub async fn send<D: Serialize>(
+	pub async fn send<D: Datum>(
 		&mut self,
-		datum: D,
+		datum: &D,
 	) -> Result<usize, SendError> {
 		// SAFETY: the bytes written into the writer are guaranteed to be
 		// well-formed postcard serialized `D`.
-		unsafe { self.send_raw(serialize(&datum)).await }
+		unsafe {
+			self
+				.send_raw(datum.encode().map_err(|e| SendError::Encode(Box::new(e)))?)
+				.await
+		}
 	}
 
 	/// Sends raw bytes over the link without serialization.
@@ -534,7 +531,7 @@ pub enum RecvError {
 	/// This error indicates that the data was read successfully but failed to
 	/// deserialize it into a typed structure as set in [`Link::recv_as`].
 	#[error("{0}")]
-	Decode(#[from] DecodeError),
+	Decode(Box<dyn std::error::Error + Send + Sync + 'static>),
 
 	#[error("{0}")]
 	Unknown(#[from] io::Error),
@@ -547,7 +544,7 @@ pub enum RecvError {
 #[derive(Debug, thiserror::Error)]
 pub enum SendError {
 	#[error("{0}")]
-	Encode(#[from] EncodeError),
+	Encode(Box<dyn std::error::Error + Send + Sync + 'static>),
 
 	#[error("{0}")]
 	Io(#[from] WriteError),
@@ -875,13 +872,17 @@ impl<P: Protocol> LinkSender<P> {
 	///
 	/// If the serialization fails, the link is closed with a [`UnexpectedClose`].
 	/// Returns the number of bytes sent on success.
-	pub async fn send<D: Serialize>(
+	pub async fn send<D: Datum>(
 		&mut self,
-		datum: D,
+		datum: &D,
 	) -> Result<usize, SendError> {
 		// SAFETY: the bytes written into the writer are guaranteed to be
 		// well-formed postcard serialized `D`.
-		unsafe { self.send_raw(serialize(&datum)).await }
+		unsafe {
+			self
+				.send_raw(datum.encode().map_err(|e| SendError::Encode(Box::new(e)))?)
+				.await
+		}
 	}
 
 	/// Sends raw bytes over the link without serialization.
@@ -925,14 +926,14 @@ pub struct LinkReceiver<P: Protocol> {
 impl<P: Protocol> LinkReceiver<P> {
 	/// Receives the next framed message and deserializes it into the given
 	/// data type `D` using postcard deserialization.
-	pub async fn recv<D: DeserializeOwned>(&mut self) -> Result<D, RecvError> {
+	pub async fn recv<D: Datum>(&mut self) -> Result<D, RecvError> {
 		self.recv_with_size().await.map(|(d, _)| d)
 	}
 
 	/// Receives the next framed message and deserializes it into the given data
 	/// type `D`, returning a deserialized value along with the size of the
 	/// message in bytes.
-	pub async fn recv_with_size<D: DeserializeOwned>(
+	pub async fn recv_with_size<D: Datum>(
 		&mut self,
 	) -> Result<(D, usize), RecvError> {
 		let Some(frame) =
@@ -961,11 +962,11 @@ impl<P: Protocol> LinkReceiver<P> {
 
 		// deserialize the received bytes into the expected data type, if
 		// deserialization fails, close the connection with protocol violation
-		let decoded = match deserialize(&bytes) {
+		let decoded = match D::decode(&bytes) {
 			Ok(datum) => datum,
 			Err(err) => {
 				close_connection(&self.connection, ProtocolViolation).await;
-				return Err(RecvError::Decode(err));
+				return Err(RecvError::Decode(Box::new(err)));
 			}
 		};
 

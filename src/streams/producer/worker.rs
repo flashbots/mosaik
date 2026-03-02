@@ -11,7 +11,7 @@ use {
 		PeerId,
 		discovery::PeerEntry,
 		network::{GracefulShutdown, link::Link},
-		primitives::{Bytes, Digest, EncodeError, Short, try_serialize},
+		primitives::{Bytes, Digest, Short},
 		streams::{
 			TooSlow,
 			status::{ActiveChannelsMap, ChannelConditions},
@@ -229,12 +229,12 @@ impl<D: Datum> WorkerLoop<D> {
 	/// - If a consumer is lagging behind and its channel is full, it may be
 	///   disconnected based on the producer configuration.
 	fn fanout(&self, item: D) {
-		let mut bytes = OnceCell::<Result<Bytes, EncodeError>>::new();
+		let mut bytes = OnceCell::<Result<Bytes, D::EncodeError>>::new();
 		for (_, subscription) in &self.active {
 			if subscription.criteria.matches(&item) {
 				// Serialize the datum only once for all matching consumers,
 				// if there is at least one consumer with criteria that matches.
-				let bytes = match bytes.get_or_init(|| try_serialize(&item)) {
+				let bytes = match bytes.get_or_init(|| item.encode()) {
 					Ok(bytes) => bytes,
 					Err(e) => {
 						tracing::error!(

@@ -123,9 +123,13 @@ impl<D: Datum> Consumer<D> {
 	/// Asynchronously receives the next datum from the stream.
 	///
 	/// Returns `None` if the consumer has been closed and all data has been
-	/// received.
+	/// received. Blocks until data is available.
 	///
-	/// Blocks until data is available.
+	/// # Cancel Safety
+	///
+	/// This method is cancel safe. If recv is used as the event in a
+	/// `tokio::select!` statement and some other branch completes first, it is
+	/// guaranteed that no messages were received on this channel.
 	pub async fn recv(&mut self) -> Option<D> {
 		match self.chan.recv().await {
 			Some((datum, bytes_len)) => {

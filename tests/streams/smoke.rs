@@ -1,8 +1,10 @@
 use {
 	super::*,
-	crate::utils::timeout_s,
+	crate::utils::{discover_all, timeout_s},
+	core::convert::Infallible,
 	futures::{SinkExt, StreamExt, join},
 	mosaik::*,
+	std::string::FromUtf8Error,
 	tokio::sync::watch,
 };
 
@@ -171,6 +173,49 @@ async fn custom_stream_id() -> anyhow::Result<()> {
 		.await?
 		.expect("expected message from c1_2");
 	assert_eq!(msg1, Data1("hello5678".into()));
+
+	Ok(())
+}
+
+#[tokio::test]
+async fn custom_datum_encoding() -> anyhow::Result<()> {
+	struct CustomData(String);
+
+	impl Datum for CustomData {
+		type DecodeError = FromUtf8Error;
+		type EncodeError = Infallible;
+
+		fn encode(&self) -> Result<Bytes, Self::EncodeError> {
+			Ok(Bytes::copy_from_slice(self.0.as_bytes()))
+		}
+
+		fn decode(bytes: &[u8]) -> Result<Self, Self::DecodeError> {
+			let mut string = String::from_utf8(bytes.to_vec())?;
+			string.push_str("-custom-decode");
+			Ok(Self(string))
+		}
+	}
+
+	let network_id = NetworkId::random();
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+
+	let mut p0 = n0.streams().produce::<CustomData>();
+	let mut c1 = n1.streams().consume::<CustomData>();
+	discover_all([&n0, &n1]).await?;
+
+	timeout_s(3, c1.when().subscribed()).await?;
+	timeout_s(3, p0.when().subscribed()).await?;
+
+	p0.send(CustomData("hello custom encoding".into()))
+		.await
+		.map_err(|_| anyhow::anyhow!("infallible"))?;
+
+	let msg = timeout_s(3, c1.next())
+		.await?
+		.expect("expected message from c1");
+
+	assert_eq!(msg.0, "hello custom encoding-custom-decode".to_string());
 
 	Ok(())
 }

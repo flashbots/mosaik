@@ -24,6 +24,6 @@ pub use {
 	},
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},
-	primitives::{Digest, Tag, UniqueId},
-	streams::{Criteria, Datum, StreamId},
+	primitives::{Datum, Digest, Tag, UniqueId},
+	streams::{Criteria, StreamId},
 };
