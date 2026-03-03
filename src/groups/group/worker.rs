@@ -10,13 +10,19 @@ use {
 			StateMachine,
 			Storage,
 			When,
-			bond::{BondEvent, HandshakeStart},
+			bond::BondEvent,
 			config::GroupConfig,
 			error::AlreadyBonded,
 			raft::Raft,
-			state::{GroupHandle, WorkerBondCommand, WorkerRaftCommand, WorkerState},
+			state::{
+				AcceptRequest,
+				GroupHandle,
+				WorkerBondCommand,
+				WorkerRaftCommand,
+				WorkerState,
+			},
 		},
-		network::{Cancelled, link::Link},
+		network::Cancelled,
 		primitives::{AsyncWorkQueue, Short},
 	},
 	core::{any::TypeId, future::poll_fn, pin::Pin},
@@ -24,10 +30,7 @@ use {
 	im::ordmap::Entry,
 	iroh::protocol::AcceptError,
 	std::sync::Arc,
-	tokio::sync::{
-		mpsc::{UnboundedReceiver, unbounded_channel},
-		oneshot,
-	},
+	tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel},
 	tokio_stream::wrappers::UnboundedReceiverStream,
 };
 
@@ -47,6 +50,9 @@ where
 	/// The internal state of the worker loop that is shared between the main
 	/// long-running task and the external world.
 	state: Arc<WorkerState<M>>,
+
+	/// Receiver for incoming bond connection attempts from the protocol handler.
+	accepts: UnboundedReceiver<AcceptRequest>,
 
 	/// Receiver for commands sent from the external world to the worker loop.
 	bonds_cmd_rx: UnboundedReceiver<WorkerBondCommand>,
@@ -92,6 +98,7 @@ where
 		storage: S,
 		state_machine: M,
 	) -> Arc<GroupHandle> {
+		let (accepts_tx, accepts_rx) = unbounded_channel();
 		let (bonds_cmd_tx, bonds_cmd_rx) = unbounded_channel();
 		let (raft_cmd_tx, raft_cmd_rx) = unbounded_channel();
 
@@ -99,6 +106,7 @@ where
 			config,
 			raft_cmd_tx,
 			bonds_cmd_tx,
+			accepts: accepts_tx,
 			global_config: Arc::clone(&groups.config),
 			local: groups.local.clone(),
 			discovery: groups.discovery.clone(),
@@ -111,6 +119,7 @@ where
 		let worker_instance = Self {
 			raft_cmd_rx,
 			bonds_cmd_rx,
+			accepts: accepts_rx,
 			state: Arc::clone(&worker_state),
 			bond_events: SelectAll::default(),
 			work_queue: AsyncWorkQueue::default(),
@@ -163,6 +172,10 @@ where
 				// Triggered when any peer bond emits an event
 				Some((event, peer_id)) = self.bond_events.next() => {
 					self.on_bond_event(event, peer_id);
+				}
+
+				Some(request) = self.accepts.recv() => {
+					self.accept_bond(request);
 				}
 
 				// handles external commands sent to the worker loop
@@ -314,13 +327,9 @@ where
 	/// Handles incoming external commands sent to the worker loop.
 	fn on_worker_command(&mut self, command: WorkerBondCommand) {
 		match command {
-			// Begins the process of accepting an incoming connection for this
-			WorkerBondCommand::Accept(link, peer, handshake, result_tx) => {
-				self.accept_bond(*link, peer, handshake, result_tx);
-			}
 			// Attempts to create a new bond connection to the specified peer.
 			WorkerBondCommand::Connect(peer_entry) => {
-				self.create_bond(peer_entry);
+				self.create_bond(*peer_entry);
 			}
 			// Subscribes to bond events from a newly created bond
 			WorkerBondCommand::SubscribeToBond(events_rx, peer_id) => {
@@ -422,13 +431,14 @@ where
 
 	/// Given an incoming link and decoded handshake, begins the process of
 	/// accepting the bond connection for this group. See [`Handle::accept`].
-	fn accept_bond(
-		&self,
-		link: Link<Groups>,
-		peer: SignedPeerEntry,
-		handshake: HandshakeStart,
-		result_tx: oneshot::Sender<Result<(), AcceptError>>,
-	) {
+	fn accept_bond(&self, request: AcceptRequest) {
+		let AcceptRequest {
+			link,
+			peer,
+			handshake,
+			result_tx,
+		} = request;
+
 		let peer_id = link.remote_id();
 		assert_eq!(peer.id(), &peer_id);
 

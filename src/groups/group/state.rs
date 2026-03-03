@@ -33,20 +33,19 @@ use {
 	tokio_util::sync::CancellationToken,
 };
 
+/// A type-erased handle to a joined group that can be stored in homogenous
+/// registers of groups alongside other groups with different state machine and
+/// storage implementations.
 #[derive(Debug)]
 pub struct GroupHandle {
 	state: Arc<dyn Any + Send + Sync + 'static>,
-	bonds_cmd_tx: UnboundedSender<WorkerBondCommand>,
+	accepts: UnboundedSender<AcceptRequest>,
 }
 
 impl GroupHandle {
 	pub(crate) fn new<M: StateMachine>(state: Arc<WorkerState<M>>) -> Self {
-		let bonds_cmd_tx = state.bonds_cmd_tx.clone();
-
-		Self {
-			state,
-			bonds_cmd_tx,
-		}
+		let accepts = state.accepts.clone();
+		Self { state, accepts }
 	}
 
 	/// Accepts an incoming bond connection for this group.
@@ -68,19 +67,23 @@ impl GroupHandle {
 		handshake: HandshakeStart,
 	) -> Result<(), AcceptError> {
 		let (result_tx, result_rx) = oneshot::channel();
-		let command =
-			WorkerBondCommand::Accept(link.into(), peer, handshake, result_tx);
 
 		// handoff the accept process to the background worker loop
-		self
-			.bonds_cmd_tx
-			.send(command)
-			.map_err(AcceptError::from_err)?;
+		let request = AcceptRequest {
+			link,
+			peer,
+			handshake,
+			result_tx,
+		};
+
+		self.accepts.send(request).map_err(AcceptError::from_err)?;
 
 		// wait for the worker loop to process the accept request
 		result_rx.await.map_err(AcceptError::from_err)?
 	}
 
+	/// Returns a public-api handle to this group with the specified state machine
+	/// type.
 	pub fn public_handle<M: StateMachine>(
 		&self,
 		groups: &Arc<DashMap<GroupId, Arc<Self>>>,
@@ -96,7 +99,7 @@ impl GroupHandle {
 
 /// Manages an instance of a joined group worker loop.
 #[derive(Debug)]
-pub struct WorkerState<M: StateMachine> {
+pub(in crate::groups) struct WorkerState<M: StateMachine> {
 	/// Configuration settings for this group, such as the group key and the
 	/// consensus configuration. Those values must be identical across all
 	/// members of the group, any difference will render a different group id and
@@ -133,6 +136,9 @@ pub struct WorkerState<M: StateMachine> {
 
 	/// Used to signal changes to the group's state, such as leadership changes.
 	pub when: When,
+
+	/// Handles incoming bond connection attempts from remote peers.
+	pub accepts: UnboundedSender<AcceptRequest>,
 
 	/// Channel for sending external commands to the worker loop, such as
 	/// forwarding incoming bond connection attempts that are routed to this
@@ -203,7 +209,9 @@ impl<M: StateMachine> WorkerState<M> {
 	/// Initiates the process of forming a bond connection with the specified
 	/// peer.
 	pub fn bond_with(&self, peer: SignedPeerEntry) {
-		let _ = self.bonds_cmd_tx.send(WorkerBondCommand::Connect(peer));
+		let _ = self
+			.bonds_cmd_tx
+			.send(WorkerBondCommand::Connect(Box::new(peer)));
 	}
 
 	/// Returns a public-api handle to this group.
@@ -221,18 +229,8 @@ impl<M: StateMachine> WorkerState<M> {
 
 /// Bond-related commands sent to the group worker loop.
 pub enum WorkerBondCommand {
-	/// Accepts an incoming connection for this group.
-	/// Connections that are routed here have already passed preliminary
-	/// validation such as network id and group id checks.
-	Accept(
-		Box<Link<Groups>>,
-		SignedPeerEntry,
-		HandshakeStart,
-		oneshot::Sender<Result<(), AcceptError>>,
-	),
-
 	/// Attempts to create a new bond connection to the specified peer.
-	Connect(SignedPeerEntry),
+	Connect(Box<SignedPeerEntry>),
 
 	/// When a bond is created, its event receiver is sent to the worker loop to
 	/// be added to the aggregated stream of bond events that the worker loop
@@ -256,4 +254,11 @@ pub(in crate::groups) enum WorkerRaftCommand<M: StateMachine> {
 		Consistency,
 		oneshot::Sender<Result<CommittedQueryResult<M>, QueryError<M>>>,
 	),
+}
+
+pub(in crate::groups) struct AcceptRequest {
+	pub link: Link<Groups>,
+	pub peer: SignedPeerEntry,
+	pub handshake: HandshakeStart,
+	pub result_tx: oneshot::Sender<Result<(), AcceptError>>,
 }
