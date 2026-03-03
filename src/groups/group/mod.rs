@@ -11,7 +11,7 @@ use {
 			When,
 			config::GroupConfig,
 			error::{CommandError, QueryError},
-			state::WorkerRaftCommand,
+			state::{GroupHandle, WorkerRaftCommand},
 		},
 		primitives::Short,
 	},
@@ -21,10 +21,7 @@ use {
 	serde::{Deserialize, Serialize},
 	state::WorkerState,
 	std::sync::Arc,
-	tokio::sync::{
-		mpsc::{UnboundedSender, error::SendError},
-		oneshot,
-	},
+	tokio::sync::{mpsc::error::SendError, oneshot},
 };
 
 pub(in crate::groups) mod state;
@@ -69,11 +66,11 @@ pub struct CommittedQueryResult<M: StateMachine> {
 /// long-running worker loop that runs in the background and is associated with
 /// the `GroupId` of this group.
 pub struct Group<M: StateMachine> {
-	state: Arc<WorkerState>,
+	state: Arc<WorkerState<M>>,
 
 	/// A reference to the global map of all active groups in the local node,
 	/// which is used when the group is dropped to remove itself from the map.
-	groups: Arc<DashMap<GroupId, Arc<WorkerState>>>,
+	groups: Arc<DashMap<GroupId, Arc<GroupHandle>>>,
 
 	#[doc(hidden)]
 	_p: PhantomData<M>,
@@ -102,7 +99,7 @@ impl<M: StateMachine> Group<M> {
 
 	/// Returns the list of all group members that are currently bonded and
 	/// connected to the local node.
-	pub fn bonds(&self) -> Bonds {
+	pub fn bonds(&self) -> Bonds<M> {
 		self.state.bonds.clone()
 	}
 
@@ -212,13 +209,6 @@ impl<M: StateMachine> Group<M> {
 		&self,
 		commands: impl IntoIterator<Item = M::Command>,
 	) -> Result<IndexRange, CommandError<M>> {
-		#[allow(clippy::missing_panics_doc)]
-		let sender = self
-			.state
-			.raft_cmd_tx
-			.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
-			.expect("invalid raft_tx type. this is a bug.");
-
 		let commands: Vec<_> = commands.into_iter().collect();
 
 		if commands.is_empty() {
@@ -226,8 +216,10 @@ impl<M: StateMachine> Group<M> {
 		}
 
 		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Feed(_, _))) =
-			sender.send(WorkerRaftCommand::Feed(commands, result_tx))
+		if let Err(SendError(WorkerRaftCommand::Feed(_, _))) = self
+			.state
+			.raft_cmd_tx
+			.send(WorkerRaftCommand::Feed(commands, result_tx))
 		{
 			return Err(CommandError::GroupTerminated);
 		}
@@ -256,16 +248,11 @@ impl<M: StateMachine> Group<M> {
 		query: M::Query,
 		consistency: Consistency,
 	) -> Result<CommittedQueryResult<M>, QueryError<M>> {
-		#[allow(clippy::missing_panics_doc)]
-		let sender = self
+		let (result_tx, result_rx) = oneshot::channel();
+		if let Err(SendError(WorkerRaftCommand::Query(_, _, _))) = self
 			.state
 			.raft_cmd_tx
-			.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
-			.expect("invalid raft_tx type. this is a bug.");
-
-		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Query(_, _, _))) =
-			sender.send(WorkerRaftCommand::Query(query, consistency, result_tx))
+			.send(WorkerRaftCommand::Query(query, consistency, result_tx))
 		{
 			return Err(QueryError::GroupTerminated);
 		}
@@ -325,8 +312,8 @@ where
 // Internal APIs
 impl<M: StateMachine> Group<M> {
 	pub(super) const fn new(
-		state: Arc<WorkerState>,
-		groups: Arc<DashMap<GroupId, Arc<WorkerState>>>,
+		state: Arc<WorkerState<M>>,
+		groups: Arc<DashMap<GroupId, Arc<GroupHandle>>>,
 	) -> Self {
 		Self {
 			state,

@@ -14,7 +14,7 @@ use {
 			config::GroupConfig,
 			error::AlreadyBonded,
 			raft::Raft,
-			state::{WorkerBondCommand, WorkerRaftCommand, WorkerState},
+			state::{GroupHandle, WorkerBondCommand, WorkerRaftCommand, WorkerState},
 		},
 		network::{Cancelled, link::Link},
 		primitives::{AsyncWorkQueue, Short},
@@ -46,7 +46,7 @@ where
 {
 	/// The internal state of the worker loop that is shared between the main
 	/// long-running task and the external world.
-	state: Arc<WorkerState>,
+	state: Arc<WorkerState<M>>,
 
 	/// Receiver for commands sent from the external world to the worker loop.
 	bonds_cmd_rx: UnboundedReceiver<WorkerBondCommand>,
@@ -91,14 +91,14 @@ where
 		config: GroupConfig,
 		storage: S,
 		state_machine: M,
-	) -> Arc<WorkerState> {
+	) -> Arc<GroupHandle> {
 		let (bonds_cmd_tx, bonds_cmd_rx) = unbounded_channel();
 		let (raft_cmd_tx, raft_cmd_rx) = unbounded_channel();
 
 		let worker_state = Arc::new(WorkerState {
 			config,
+			raft_cmd_tx,
 			bonds_cmd_tx,
-			raft_cmd_tx: Box::new(raft_cmd_tx),
 			global_config: Arc::clone(&groups.config),
 			local: groups.local.clone(),
 			discovery: groups.discovery.clone(),
@@ -120,7 +120,7 @@ where
 
 		tokio::spawn(worker_instance.run());
 
-		worker_state
+		Arc::new(GroupHandle::new(worker_state))
 	}
 }
 

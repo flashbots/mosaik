@@ -314,7 +314,7 @@ impl<M: StateMachine> Role<M> {
 
 		let bonds = shared.group.bonds.clone();
 		let vote_with = |vote: Vote| {
-			bonds.send_raft_to::<M>(
+			bonds.send_raft_to(
 				&Message::RequestVoteResponse(RequestVoteResponse {
 					vote,
 					term: request.term,

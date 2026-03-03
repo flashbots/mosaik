@@ -113,8 +113,7 @@ pub enum BondEvent {
 pub type BondEvents = UnboundedReceiver<BondEvent>;
 
 /// Handle to a bond with another peer in a group.
-#[derive(Clone)]
-pub struct Bond {
+pub struct Bond<M: StateMachine> {
 	/// A unique identifier for this bond connection.
 	///
 	/// This value is identical on both sides of the bond connection.
@@ -129,9 +128,22 @@ pub struct Bond {
 
 	/// Watch channel for observing updates to the remote peer's discovery entry.
 	peer: watch::Receiver<SignedPeerEntry>,
+	_p: core::marker::PhantomData<M>,
 }
 
-impl fmt::Debug for Bond {
+impl<M: StateMachine> Clone for Bond<M> {
+	fn clone(&self) -> Self {
+		Self {
+			id: self.id,
+			commands_tx: self.commands_tx.clone(),
+			terminated_rx: self.terminated_rx.clone(),
+			peer: self.peer.clone(),
+			_p: core::marker::PhantomData,
+		}
+	}
+}
+
+impl<M: StateMachine> fmt::Debug for Bond<M> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		f.debug_struct("Bond")
 			.field("id", &self.id)
@@ -140,7 +152,7 @@ impl fmt::Debug for Bond {
 	}
 }
 
-impl fmt::Display for Bond {
+impl<M: StateMachine> fmt::Display for Bond<M> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
@@ -152,7 +164,7 @@ impl fmt::Display for Bond {
 }
 
 /// Public API
-impl Bond {
+impl<M: StateMachine> Bond<M> {
 	/// Closes the bond connection to the remote peer with the provided
 	/// application-level close reason and waits for the bond worker to terminate.
 	pub async fn close(self, reason: impl CloseReason) {
@@ -195,7 +207,7 @@ impl Bond {
 }
 
 /// Internal API for creating and accepting bonds
-impl Bond {
+impl<M: StateMachine> Bond<M> {
 	/// Initiates the process of creating a new bond connection to a remote
 	/// peer in the group.
 	///
@@ -203,7 +215,7 @@ impl Bond {
 	/// the discovery catalog. This method is called only for peers that are
 	/// already known in the discovery catalog.
 	pub(super) async fn create(
-		group: Arc<WorkerState>,
+		group: Arc<WorkerState<M>>,
 		peer: SignedPeerEntry,
 	) -> Result<(Self, BondEvents), Error> {
 		// attempt to establish a new wire link to the remote peer
@@ -328,7 +340,7 @@ impl Bond {
 	///   verified.
 	/// - The authentication proof has not been verified yet.
 	pub(super) async fn accept(
-		group: Arc<WorkerState>,
+		group: Arc<WorkerState<M>>,
 		link: Link<Groups>,
 		peer: SignedPeerEntry,
 		handshake: HandshakeStart,
@@ -373,7 +385,7 @@ impl Bond {
 }
 
 /// Internal Bond API used by the groups module.
-impl Bond {
+impl<M: StateMachine> Bond<M> {
 	/// Sends a wire message over the bond connection to the remote peer.
 	pub(super) fn send_message(&self, message: BondMessage) {
 		let _ = self.commands_tx.send(WorkerCommand::SendMessage(message));
@@ -403,11 +415,19 @@ impl Bond {
 /// This type is cheap to clone and can be freely passed around, all clones of
 /// this type will always reflect the same up to date set of active bonds in the
 /// group.
-#[derive(Debug, Clone)]
-pub struct Bonds(pub(super) watch::Sender<im::OrdMap<PeerId, Bond>>);
+#[derive(Debug)]
+pub struct Bonds<M: StateMachine>(
+	pub(super) watch::Sender<im::OrdMap<PeerId, Bond<M>>>,
+);
+
+impl<M: StateMachine> Clone for Bonds<M> {
+	fn clone(&self) -> Self {
+		Self(self.0.clone())
+	}
+}
 
 /// Public API
-impl Bonds {
+impl<M: StateMachine> Bonds<M> {
 	/// Returns the number of active bonds in the group.
 	pub fn len(&self) -> usize {
 		self.0.borrow().len()
@@ -425,7 +445,7 @@ impl Bonds {
 
 	/// Returns an iterator over all active bonds in the group ordered by their
 	/// peer ids at the time of calling this method.
-	pub fn iter(&self) -> impl Iterator<Item = Bond> {
+	pub fn iter(&self) -> impl Iterator<Item = Bond<M>> {
 		let bonds = self.0.borrow().clone();
 		bonds.into_iter().map(|(_, bond)| bond)
 	}
@@ -437,23 +457,23 @@ impl Bonds {
 	}
 
 	/// Returns the bond to the specified peer if it exists.
-	pub fn get(&self, peer_id: &PeerId) -> Option<Bond> {
+	pub fn get(&self, peer_id: &PeerId) -> Option<Bond<M>> {
 		self.0.borrow().get(peer_id).cloned()
 	}
 }
 
 /// Internal API
-impl Default for Bonds {
+impl<M: StateMachine> Default for Bonds<M> {
 	fn default() -> Self {
 		Self(watch::Sender::new(im::OrdMap::new()))
 	}
 }
 
 /// Internal API
-impl Bonds {
+impl<M: StateMachine> Bonds<M> {
 	pub(super) fn update_with(
 		&self,
-		f: impl FnOnce(&mut im::OrdMap<PeerId, Bond>),
+		f: impl FnOnce(&mut im::OrdMap<PeerId, Bond<M>>),
 	) {
 		self.0.send_if_modified(|active| {
 			let before = active.len();
@@ -485,7 +505,7 @@ impl Bonds {
 	}
 
 	/// Sends a raft protocol message to all bonded peers.
-	pub(super) fn broadcast_raft<M: StateMachine>(
+	pub(super) fn broadcast_raft(
 		&self,
 		message: &raft::Message<M>,
 	) -> Vec<PeerId> {
@@ -494,11 +514,7 @@ impl Bonds {
 	}
 
 	/// Sends a raft protocol message to the specified bonded peer.
-	pub(super) fn send_raft_to<M: StateMachine>(
-		&self,
-		message: &raft::Message<M>,
-		to: PeerId,
-	) {
+	pub(super) fn send_raft_to(&self, message: &raft::Message<M>, to: PeerId) {
 		let Some(bond) = self.get(&to) else {
 			tracing::warn!(
 				peer = %Short(to),

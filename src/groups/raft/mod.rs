@@ -82,7 +82,7 @@ where
 	/// Creates a new consensus instance with the given storage and state machine
 	/// implementations. This is called when initializing the Worker task for a
 	/// group.
-	pub fn new(group: Arc<WorkerState>, storage: S, state_machine: M) -> Self {
+	pub fn new(group: Arc<WorkerState<M>>, storage: S, state_machine: M) -> Self {
 		let shared = Shared::new(group, storage, state_machine);
 		let role = Role::new(&shared);
 		Self { role, shared }

@@ -68,7 +68,7 @@ use {
 	crate::{
 		Digest,
 		discovery::Discovery,
-		groups::state::WorkerState,
+		groups::state::GroupHandle,
 		network::{LocalNode, ProtocolProvider, link::Protocol},
 	},
 	dashmap::DashMap,
@@ -152,7 +152,7 @@ pub struct Groups {
 	/// is used to ensure that only one worker loop is spawned for each group id,
 	/// and to route incoming bond connection attempts to the correct worker loop
 	/// based on the group id that is derived from the bond request.
-	active: Arc<DashMap<GroupId, Arc<WorkerState>>>,
+	active: Arc<DashMap<GroupId, Arc<GroupHandle>>>,
 }
 
 /// Public API

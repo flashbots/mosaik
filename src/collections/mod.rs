@@ -38,6 +38,10 @@ pub enum Error<T> {
 	#[error("Offline")]
 	Offline(T),
 
+	/// An error occurred during encoding the value for replication.
+	#[error("Encoding: {1}")]
+	Encoding(T, #[source] Box<dyn std::error::Error + Send + Sync>),
+
 	/// The network is permanently down, and the operation cannot be completed.
 	///
 	/// This is an unrecoverable error and the replicated data structure is no

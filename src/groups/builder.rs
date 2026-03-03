@@ -171,7 +171,7 @@ where
 		let group_id = *config.group_id();
 		match self.groups.active.entry(group_id) {
 			Entry::Occupied(existing) => {
-				existing.get().public_handle::<M>(&self.groups.active)
+				existing.get().public_handle(&self.groups.active)
 			}
 			Entry::Vacant(place) => {
 				let worker = Worker::<S, M>::spawn(

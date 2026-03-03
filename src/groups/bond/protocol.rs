@@ -8,7 +8,7 @@ use {
 			GroupId,
 			Groups,
 			error::{GroupNotFound, InvalidHandshake, Timeout},
-			state::WorkerState,
+			state::GroupHandle,
 		},
 		network::{
 			CloseReason,
@@ -111,7 +111,7 @@ pub(in crate::groups) struct Acceptor {
 	local: LocalNode,
 	config: Arc<Config>,
 	discovery: Discovery,
-	active: Arc<DashMap<GroupId, Arc<WorkerState>>>,
+	active: Arc<DashMap<GroupId, Arc<GroupHandle>>>,
 }
 
 impl Acceptor {

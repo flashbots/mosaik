@@ -5,6 +5,7 @@ use {
 		groups::{
 			Bond,
 			Groups,
+			StateMachine,
 			bond::{BondEvent, BondEvents, BondId, heartbeat::Heartbeat},
 			error::Timeout,
 			state::WorkerState,
@@ -59,14 +60,14 @@ pub(super) enum WorkerCommand {
 ///   discovery peer entries over the bond connection outside of the normal
 ///   discovery mechanisms to ensure timely propagation of changes to all group
 ///   members.
-pub struct BondWorker {
+pub struct BondWorker<M: StateMachine> {
 	/// Unique identifier for this bond connection. This value is identical on
 	/// both sides of the bond and is derived from the shared TLS secrets of the
 	/// connection.
 	id: BondId,
 
 	/// Reference to the shared group state managing this bond.
-	group: Arc<WorkerState>,
+	group: Arc<WorkerState<M>>,
 
 	/// The peer entry representing the remote peer in the group.
 	peer: watch::Sender<SignedPeerEntry>,
@@ -102,12 +103,12 @@ pub struct BondWorker {
 	close_reason: ApplicationClose,
 }
 
-impl BondWorker {
+impl<M: StateMachine> BondWorker<M> {
 	pub fn spawn(
-		group: Arc<WorkerState>,
+		group: Arc<WorkerState<M>>,
 		peer: SignedPeerEntry,
 		link: Link<Groups>,
-	) -> (Bond, BondEvents) {
+	) -> (Bond<M>, BondEvents) {
 		let mut link = link;
 		let (peer, peer_rx) = watch::channel(peer);
 		let cancel = group.cancel.child_token();
@@ -142,13 +143,14 @@ impl BondWorker {
 				commands_tx,
 				peer: peer_rx,
 				terminated_rx,
+				_p: std::marker::PhantomData,
 			},
 			events_rx,
 		)
 	}
 }
 
-impl BondWorker {
+impl<M: StateMachine> BondWorker<M> {
 	/// Main loop for managing the bond connection.
 	async fn run(mut self) {
 		let mut link_dropped = pin!(self.link.closed());
@@ -346,7 +348,7 @@ impl BondWorker {
 }
 
 /// Heartbeat-related event handlers.
-impl BondWorker {
+impl<M: StateMachine> BondWorker<M> {
 	/// Called when the heartbeat timer ticks.
 	pub(super) fn on_heartbeat_tick(&self) {
 		if self.pending_sends.is_empty() {
@@ -380,7 +382,7 @@ impl BondWorker {
 }
 
 // commands
-impl BondWorker {
+impl<M: StateMachine> BondWorker<M> {
 	fn enqueue_message(&self, message: BondMessage) {
 		self.pending_sends.send(Either::Left(message));
 	}

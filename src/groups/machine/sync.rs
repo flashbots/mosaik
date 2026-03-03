@@ -214,7 +214,7 @@ pub trait SyncContext<S: StateSync>: Sealed {
 
 	/// Returns [`Bonds`] of the group which can be used to observe changes to the
 	/// list of connected/bonded peers.
-	fn bonds(&self) -> Bonds;
+	fn bonds(&self) -> Bonds<S::Machine>;
 }
 
 /// Context object that is passed to instances of [`StateSyncSession`] instances

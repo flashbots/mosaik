@@ -33,9 +33,70 @@ use {
 	tokio_util::sync::CancellationToken,
 };
 
+#[derive(Debug)]
+pub struct GroupHandle {
+	state: Arc<dyn Any + Send + Sync + 'static>,
+	bonds_cmd_tx: UnboundedSender<WorkerBondCommand>,
+}
+
+impl GroupHandle {
+	pub(crate) fn new<M: StateMachine>(state: Arc<WorkerState<M>>) -> Self {
+		let bonds_cmd_tx = state.bonds_cmd_tx.clone();
+
+		Self {
+			state,
+			bonds_cmd_tx,
+		}
+	}
+
+	/// Accepts an incoming bond connection for this group.
+	///
+	/// This is called by the group's protocol handler when a new connection
+	/// is established  in [`Listener::accept`].
+	///
+	/// By the time this method is called:
+	/// - The network id has already been verified to match the local node's
+	///   network id.
+	/// - The group id has already been verified to match this group's id.
+	/// - The authentication proof has not been verified yet.
+	/// - The presence of the remote peer in the local discovery catalog is not
+	///   guaranteed.
+	pub async fn accept(
+		&self,
+		link: Link<Groups>,
+		peer: SignedPeerEntry,
+		handshake: HandshakeStart,
+	) -> Result<(), AcceptError> {
+		let (result_tx, result_rx) = oneshot::channel();
+		let command =
+			WorkerBondCommand::Accept(link.into(), peer, handshake, result_tx);
+
+		// handoff the accept process to the background worker loop
+		self
+			.bonds_cmd_tx
+			.send(command)
+			.map_err(AcceptError::from_err)?;
+
+		// wait for the worker loop to process the accept request
+		result_rx.await.map_err(AcceptError::from_err)?
+	}
+
+	pub fn public_handle<M: StateMachine>(
+		&self,
+		groups: &Arc<DashMap<GroupId, Arc<Self>>>,
+	) -> Group<M> {
+		self
+			.state
+			.clone()
+			.downcast::<WorkerState<M>>()
+			.expect("GroupHandle state type mismatch. this is a bug.")
+			.public_handle(groups)
+	}
+}
+
 /// Manages an instance of a joined group worker loop.
 #[derive(Debug)]
-pub struct WorkerState {
+pub struct WorkerState<M: StateMachine> {
 	/// Configuration settings for this group, such as the group key and the
 	/// consensus configuration. Those values must be identical across all
 	/// members of the group, any difference will render a different group id and
@@ -64,7 +125,7 @@ pub struct WorkerState {
 	/// We always want to have this list in sync with `members`, so that we
 	/// maintain bonds to all current members of the group. Any divergence
 	/// between these two structures should be temporary and resolved quickly.
-	pub bonds: Bonds,
+	pub bonds: Bonds<M>,
 
 	/// Cancellation token that terminates the worker loop for this group and all
 	/// active bonds associated with it.
@@ -83,14 +144,14 @@ pub struct WorkerState {
 	/// state machine and storage types so we can store it in homogenous
 	/// registers of groups alongside other groups with different state machine
 	/// and storage implementations.
-	pub raft_cmd_tx: Box<dyn Any + Send + Sync>,
+	pub raft_cmd_tx: UnboundedSender<WorkerRaftCommand<M>>,
 
 	/// The type ids of the state machine and storage implementations used by
 	/// this group.
 	pub types: (TypeId, TypeId),
 }
 
-impl WorkerState {
+impl<M: StateMachine> WorkerState<M> {
 	/// `PeerId` of the local node.
 	pub fn local_id(&self) -> PeerId {
 		self.local.id()
@@ -149,44 +210,12 @@ impl WorkerState {
 	///
 	/// Panics if the provided state machine type does not match the one used by
 	/// this group.
-	pub fn public_handle<M: StateMachine>(
+	pub fn public_handle(
 		self: &Arc<Self>,
-		groups: &Arc<DashMap<GroupId, Arc<Self>>>,
+		groups: &Arc<DashMap<GroupId, Arc<GroupHandle>>>,
 	) -> Group<M> {
 		assert_eq!(self.state_machine_type(), TypeId::of::<M>());
 		Group::new(Arc::clone(self), Arc::clone(groups))
-	}
-
-	/// Accepts an incoming bond connection for this group.
-	///
-	/// This is called by the group's protocol handler when a new connection
-	/// is established  in [`Listener::accept`].
-	///
-	/// By the time this method is called:
-	/// - The network id has already been verified to match the local node's
-	///   network id.
-	/// - The group id has already been verified to match this group's id.
-	/// - The authentication proof has not been verified yet.
-	/// - The presence of the remote peer in the local discovery catalog is not
-	///   guaranteed.
-	pub async fn accept(
-		&self,
-		link: Link<Groups>,
-		peer: SignedPeerEntry,
-		handshake: HandshakeStart,
-	) -> Result<(), AcceptError> {
-		let (result_tx, result_rx) = oneshot::channel();
-		let command =
-			WorkerBondCommand::Accept(link.into(), peer, handshake, result_tx);
-
-		// handoff the accept process to the background worker loop
-		self
-			.bonds_cmd_tx
-			.send(command)
-			.map_err(AcceptError::from_err)?;
-
-		// wait for the worker loop to process the accept request
-		result_rx.await.map_err(AcceptError::from_err)?
 	}
 }
 

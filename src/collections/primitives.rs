@@ -28,30 +28,12 @@ pub struct Version(pub crate::groups::Index);
 
 /// Type requirements for values stored in mosaik collections.
 pub trait Value:
-	Clone
-	+ Debug
-	+ Serialize
-	+ DeserializeOwned
-	+ Hash
-	+ PartialEq
-	+ Eq
-	+ Send
-	+ Sync
-	+ 'static
+	Clone + Serialize + DeserializeOwned + PartialEq + Send + Sync + 'static
 {
 }
 
 impl<T> Value for T where
-	T: Clone
-		+ Debug
-		+ Serialize
-		+ DeserializeOwned
-		+ Hash
-		+ PartialEq
-		+ Eq
-		+ Send
-		+ Sync
-		+ 'static
+	T: Clone + Serialize + DeserializeOwned + PartialEq + Send + Sync + 'static
 {
 }
 

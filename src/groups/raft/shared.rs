@@ -24,10 +24,7 @@ use {
 	},
 	core::{mem::MaybeUninit, task::Poll},
 	std::sync::Arc,
-	tokio::sync::{
-		mpsc::{UnboundedSender, error::SendError},
-		oneshot,
-	},
+	tokio::sync::{mpsc::error::SendError, oneshot},
 };
 
 /// State that is shared across all raft roles.
@@ -38,7 +35,7 @@ where
 {
 	/// The group state that is shared between the long-running group worker and
 	/// the external world.
-	pub group: Arc<WorkerState>,
+	pub group: Arc<WorkerState<M>>,
 
 	/// The underlying storage for the log entries of this group state machine.
 	pub storage: S,
@@ -76,7 +73,7 @@ where
 	M: StateMachine,
 {
 	pub(super) fn new(
-		group: Arc<WorkerState>,
+		group: Arc<WorkerState<M>>,
 		storage: S,
 		state_machine: M,
 	) -> Self {
@@ -108,7 +105,7 @@ where
 	}
 
 	/// Returns the list of active bonds for this consensus group.
-	pub fn bonds(&self) -> &Bonds {
+	pub fn bonds(&self) -> &Bonds<M> {
 		&self.group.bonds
 	}
 
@@ -399,7 +396,7 @@ where
 		self
 			.group
 			.bonds
-			.send_raft_to::<M>(&Message::StateSync(message), peer);
+			.send_raft_to(&Message::StateSync(message), peer);
 	}
 
 	fn broadcast(
@@ -409,10 +406,10 @@ where
 		self
 			.group
 			.bonds
-			.broadcast_raft::<M>(&Message::<M>::StateSync(message))
+			.broadcast_raft(&Message::StateSync(message))
 	}
 
-	fn bonds(&self) -> Bonds {
+	fn bonds(&self) -> Bonds<M> {
 		self.group.bonds.clone()
 	}
 }
@@ -447,15 +444,11 @@ where
 
 	fn feed_command(&mut self, command: M::Command) -> Result<(), M::Command> {
 		if self.is_leader() {
-			let sender = self
+			let (unused, _) = oneshot::channel();
+			if let Err(SendError(WorkerRaftCommand::Feed(commands, _))) = self
 				.group
 				.raft_cmd_tx
-				.downcast_ref::<UnboundedSender<WorkerRaftCommand<M>>>()
-				.expect("invalid raft_tx type. this is a bug");
-
-			let (unused, _) = oneshot::channel();
-			if let Err(SendError(WorkerRaftCommand::Feed(commands, _))) =
-				sender.send(WorkerRaftCommand::Feed(vec![command], unused))
+				.send(WorkerRaftCommand::Feed(vec![command], unused))
 			{
 				return Err(
 					commands
