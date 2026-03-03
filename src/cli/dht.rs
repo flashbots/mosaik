@@ -149,7 +149,7 @@ async fn check_status(
 	// send an empty ping request and wait for a peer entry response
 	timeout(
 		Duration::from_secs(timeout_secs),
-		sender.send(primitives::encoding::serialize(&())),
+		sender.send(primitives::encoding::try_serialize(&()).unwrap()),
 	)
 	.await
 	.map_err(|e| {

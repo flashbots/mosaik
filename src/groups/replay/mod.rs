@@ -9,7 +9,7 @@ use {
 			Term,
 			machine::*,
 		},
-		primitives::UniqueId,
+		primitives::{UniqueId, datum::Encoded},
 	},
 	core::{
 		any::type_name,
@@ -164,7 +164,7 @@ pub enum LogReplaySyncMessage<C: Command> {
 	/// provide the requested log entries during the catch-up process.
 	FetchEntriesResponse {
 		range: RangeInclusive<Index>,
-		entries: Vec<(C, Term)>,
+		entries: Vec<(Encoded<C>, Term)>,
 	},
 }
 

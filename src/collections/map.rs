@@ -26,6 +26,7 @@ use {
 			LogReplaySync,
 			StateMachine,
 		},
+		primitives::EncodeError,
 	},
 	core::{any::type_name, borrow::Borrow, hash::Hash},
 	serde::{Deserialize, Serialize},
@@ -203,7 +204,11 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 	/// were previously inside it are dropped.
 	pub async fn clear(&self) -> Result<Version, Error<()>> {
 		self
-			.execute(MapCommand::Clear, |_| Error::Offline(()))
+			.execute(
+				MapCommand::Clear,
+				|_| Error::Offline(()),
+				|_, _| unreachable!(),
+			)
 			.await
 	}
 
@@ -218,10 +223,17 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 		value: V,
 	) -> Result<Version, Error<(K, V)>> {
 		self
-			.execute(MapCommand::Insert { key, value }, |cmd| match cmd {
-				MapCommand::Insert { key, value } => Error::Offline((key, value)),
-				_ => unreachable!(),
-			})
+			.execute(
+				MapCommand::Insert { key, value },
+				|cmd| match cmd {
+					MapCommand::Insert { key, value } => Error::Offline((key, value)),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					MapCommand::Insert { key, value } => Error::Encoding((key, value), e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -242,14 +254,21 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 		new: Option<V>,
 	) -> Result<Version, Error<(K, Option<V>, Option<V>)>> {
 		self
-			.execute(MapCommand::CompareExchange { key, expected, new }, |cmd| {
-				match cmd {
+			.execute(
+				MapCommand::CompareExchange { key, expected, new },
+				|cmd| match cmd {
 					MapCommand::CompareExchange { key, expected, new } => {
 						Error::Offline((key, expected, new))
 					}
 					_ => unreachable!(),
-				}
-			})
+				},
+				|cmd, e| match cmd {
+					MapCommand::CompareExchange { key, expected, new } => {
+						Error::Encoding((key, expected, new), e)
+					}
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -265,10 +284,17 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 		}
 
 		self
-			.execute(MapCommand::Extend { entries }, |cmd| match cmd {
-				MapCommand::Extend { entries } => Error::Offline(entries),
-				_ => unreachable!(),
-			})
+			.execute(
+				MapCommand::Extend { entries },
+				|cmd| match cmd {
+					MapCommand::Extend { entries } => Error::Offline(entries),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					MapCommand::Extend { entries } => Error::Encoding(entries, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -278,10 +304,17 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 	pub async fn remove(&self, key: &K) -> Result<Version, Error<K>> {
 		let key = key.clone();
 		self
-			.execute(MapCommand::Remove { key }, |cmd| match cmd {
-				MapCommand::Remove { key } => Error::Offline(key),
-				_ => unreachable!(),
-			})
+			.execute(
+				MapCommand::Remove { key },
+				|cmd| match cmd {
+					MapCommand::Remove { key } => Error::Offline(key),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					MapCommand::Remove { key } => Error::Encoding(key, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 }
@@ -368,6 +401,7 @@ impl<K: Key, V: Value> Map<K, V, WRITER> {
 		&self,
 		command: MapCommand<K, V>,
 		offline_err: impl FnOnce(MapCommand<K, V>) -> Error<TErr>,
+		encoding_err: impl FnOnce(MapCommand<K, V>, EncodeError) -> Error<TErr>,
 	) -> Result<Version, Error<TErr>> {
 		self
 			.group
@@ -378,6 +412,10 @@ impl<K: Key, V: Value> Map<K, V, WRITER> {
 				CommandError::Offline(mut items) => {
 					let command = items.remove(0);
 					offline_err(command)
+				}
+				CommandError::Encoding(mut items, err) => {
+					let command = items.remove(0);
+					encoding_err(command, err)
 				}
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),

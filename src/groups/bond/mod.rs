@@ -65,7 +65,7 @@ use {
 			UnknownPeer,
 			link::{Link, RecvError},
 		},
-		primitives::{Short, serialize},
+		primitives::{EncodeError, Short, encoding::try_serialize},
 	},
 	bytes::Bytes,
 	core::fmt,
@@ -119,7 +119,7 @@ pub struct Bond<M: StateMachine> {
 	id: BondId,
 
 	/// Channel for sending commands to the bond worker loop.
-	commands_tx: UnboundedSender<WorkerCommand<M>>,
+	commands_tx: UnboundedSender<WorkerCommand>,
 
 	/// Watch channel for observing when the bond worker has terminated and the
 	/// reason for termination.
@@ -127,6 +127,8 @@ pub struct Bond<M: StateMachine> {
 
 	/// Watch channel for observing updates to the remote peer's discovery entry.
 	peer: watch::Receiver<SignedPeerEntry>,
+
+	#[doc(hidden)]
 	_p: core::marker::PhantomData<M>,
 }
 
@@ -386,8 +388,14 @@ impl<M: StateMachine> Bond<M> {
 /// Internal Bond API used by the groups module.
 impl<M: StateMachine> Bond<M> {
 	/// Sends a wire message over the bond connection to the remote peer.
-	pub(super) fn send_message(&self, message: BondMessage<M>) {
-		let _ = self.commands_tx.send(WorkerCommand::SendMessage(message));
+	#[allow(clippy::needless_pass_by_value)]
+	pub(super) fn send_message(
+		&self,
+		message: BondMessage<M>,
+	) -> Result<(), EncodeError> {
+		let serialized = try_serialize(&message)?;
+		unsafe { self.send_raw_message(serialized) };
+		Ok(())
 	}
 
 	/// Sends a raw pre-encoded message over the bond connection to the remote
@@ -484,15 +492,19 @@ impl<M: StateMachine> Bonds<M> {
 	/// Notifies all active bonds that the local peer's discovery entry has
 	/// been updated.
 	pub(super) fn notify_local_info_update(&self, entry: &SignedPeerEntry) {
-		self.broadcast(&BondMessage::PeerEntryUpdate(Box::new(entry.clone())), &[]);
+		self
+			.broadcast(&BondMessage::PeerEntryUpdate(Box::new(entry.clone())), &[])
+			.expect("infallible serialization");
 	}
 
 	/// Notifies all active bonds that a new bond has been formed with the
 	/// specified peer and sends its latest known discovery entry.
 	pub(super) fn notify_bond_formed(&self, with: &SignedPeerEntry) {
-		self.broadcast(&BondMessage::BondFormed(Box::new(with.clone())), &[
-			*with.id()
-		]);
+		self
+			.broadcast(&BondMessage::BondFormed(Box::new(with.clone())), &[
+				*with.id()
+			])
+			.expect("infallible serialization");
 	}
 
 	/// Notifies all active bonds that the bond with the specified peer has
@@ -500,29 +512,35 @@ impl<M: StateMachine> Bonds<M> {
 	/// for heartbeat timeouts to detect that the peer has left and can adjust
 	/// their quorums.
 	pub(super) fn notify_departure(&self) {
-		self.broadcast(&BondMessage::Departure, &[]);
+		self
+			.broadcast(&BondMessage::Departure, &[])
+			.expect("infallible serialization");
 	}
 
 	/// Sends a raft protocol message to all bonded peers.
 	pub(super) fn broadcast_raft(
 		&self,
 		message: raft::Message<M>,
-	) -> Vec<PeerId> {
+	) -> Result<Vec<PeerId>, EncodeError> {
 		let message = BondMessage::Raft(message);
 		self.broadcast(&message, &[])
 	}
 
 	/// Sends a raft protocol message to the specified bonded peer.
-	pub(super) fn send_raft_to(&self, message: raft::Message<M>, to: PeerId) {
+	pub(super) fn send_raft_to(
+		&self,
+		message: raft::Message<M>,
+		to: PeerId,
+	) -> Result<(), EncodeError> {
 		let Some(bond) = self.get(&to) else {
 			tracing::warn!(
 				peer = %Short(to),
 				"attempted to send raft message to non-bonded peer",
 			);
-			return;
+			return Ok(());
 		};
 
-		bond.send_message(BondMessage::Raft(message));
+		bond.send_message(BondMessage::Raft(message))
 	}
 
 	/// Broadcast a message to all connected peers in the group. The `except`
@@ -532,10 +550,10 @@ impl<M: StateMachine> Bonds<M> {
 		&self,
 		message: &BondMessage<M>,
 		except: &[PeerId],
-	) -> Vec<PeerId> {
+	) -> Result<Vec<PeerId>, EncodeError> {
 		// serialize once and reuse a pointer to the same encoded message bytes
 		// buffer for all bonds
-		let encoded = serialize(message);
+		let encoded = try_serialize(message)?;
 
 		let mut sent_to = Vec::new();
 		for bond in self.iter() {
@@ -544,6 +562,6 @@ impl<M: StateMachine> Bonds<M> {
 				sent_to.push(*bond.peer().id());
 			}
 		}
-		sent_to
+		Ok(sent_to)
 	}
 }

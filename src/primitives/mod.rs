@@ -1,19 +1,18 @@
 //! Traits, helpers and types used across the SDK
 
 mod channel;
-mod datum;
 mod fmt;
 mod fut;
 mod id;
 mod iter;
 mod queue;
 
-#[doc(hidden)]
+pub mod datum;
 pub mod encoding;
 
 /// Public API re-exported byte types.
 pub use bytes::{Bytes, BytesMut};
-pub use datum::Datum;
+pub use datum::{Datum, Encoded};
 #[doc(hidden)]
 pub use fmt::*;
 /// Public API re-exported primitives.

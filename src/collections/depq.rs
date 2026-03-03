@@ -25,6 +25,7 @@ use {
 			Cursor,
 			StateMachine,
 		},
+		primitives::EncodeError,
 	},
 	core::{
 		any::type_name,
@@ -32,6 +33,7 @@ use {
 		hash::Hash,
 		ops::{Range, RangeBounds},
 	},
+	iroh::endpoint_info::EncodingError,
 	serde::{Deserialize, Serialize},
 	std::hash::BuildHasherDefault,
 	tokio::sync::watch,
@@ -323,6 +325,14 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 					} => Error::Offline((priority, key, value)),
 					_ => unreachable!(),
 				},
+				|cmd, e| match cmd {
+					DepqCommand::Insert {
+						priority,
+						key,
+						value,
+					} => Error::Encoding((priority, key, value), e),
+					_ => unreachable!(),
+				},
 			)
 			.await
 	}
@@ -342,10 +352,17 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		}
 
 		self
-			.execute(DepqCommand::Extend { entries }, |cmd| match cmd {
-				DepqCommand::Extend { entries } => Error::Offline(entries),
-				_ => unreachable!(),
-			})
+			.execute(
+				DepqCommand::Extend { entries },
+				|cmd| match cmd {
+					DepqCommand::Extend { entries } => Error::Offline(entries),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					DepqCommand::Extend { entries } => Error::Encoding(entries, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -368,6 +385,10 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 				},
 				|cmd| match cmd {
 					DepqCommand::UpdatePriority { key, .. } => Error::Offline(key),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					DepqCommand::UpdatePriority { key, .. } => Error::Encoding(key, e),
 					_ => unreachable!(),
 				},
 			)
@@ -395,6 +416,10 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 					DepqCommand::UpdateValue { key, .. } => Error::Offline(key),
 					_ => unreachable!(),
 				},
+				|cmd, e| match cmd {
+					DepqCommand::UpdateValue { key, .. } => Error::Encoding(key, e),
+					_ => unreachable!(),
+				},
 			)
 			.await
 	}
@@ -420,6 +445,12 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 					DepqCommand::CompareExchangeValue { key, .. } => Error::Offline(key),
 					_ => unreachable!(),
 				},
+				|cmd, e| match cmd {
+					DepqCommand::CompareExchangeValue { key, .. } => {
+						Error::Encoding(key, e)
+					}
+					_ => unreachable!(),
+				},
 			)
 			.await
 	}
@@ -430,7 +461,11 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 	/// inside it are dropped.
 	pub async fn clear(&self) -> Result<Version, Error<()>> {
 		self
-			.execute(DepqCommand::Clear, |_| Error::Offline(()))
+			.execute(
+				DepqCommand::Clear,
+				|_| Error::Offline(()),
+				|_, _| unreachable!(),
+			)
 			.await
 	}
 
@@ -440,10 +475,17 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 	pub async fn remove(&self, key: &K) -> Result<Version, Error<K>> {
 		let key = key.clone();
 		self
-			.execute(DepqCommand::Remove { key }, |cmd| match cmd {
-				DepqCommand::Remove { key } => Error::Offline(key),
-				_ => unreachable!(),
-			})
+			.execute(
+				DepqCommand::Remove { key },
+				|cmd| match cmd {
+					DepqCommand::Remove { key } => Error::Offline(key),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					DepqCommand::Remove { key } => Error::Encoding(key, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -464,9 +506,11 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		let start = SerBound::from_std(range.start_bound());
 		let end = SerBound::from_std(range.end_bound());
 		self
-			.execute(DepqCommand::RemoveRange { start, end }, |_| {
-				Error::Offline(())
-			})
+			.execute(
+				DepqCommand::RemoveRange { start, end },
+				|_| Error::Offline(()),
+				|_, e| Error::Encoding((), e),
+			)
 			.await
 	}
 }
@@ -540,6 +584,7 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		&self,
 		command: DepqCommand<P, K, V>,
 		offline_err: impl FnOnce(DepqCommand<P, K, V>) -> Error<TErr>,
+		encoding_err: impl FnOnce(DepqCommand<P, K, V>, EncodeError) -> Error<TErr>,
 	) -> Result<Version, Error<TErr>> {
 		self
 			.group
@@ -550,6 +595,10 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 				CommandError::Offline(mut items) => {
 					let command = items.remove(0);
 					offline_err(command)
+				}
+				CommandError::Encoding(mut items, err) => {
+					let command = items.remove(0);
+					encoding_err(command, err)
 				}
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),

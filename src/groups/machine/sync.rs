@@ -6,7 +6,7 @@ use {
 		NetworkId,
 		PeerId,
 		groups::{Bonds, Cursor, GroupId, Index, StateMachine, Storage, Term},
-		primitives::{UniqueId, sealed::Sealed},
+		primitives::{EncodeError, UniqueId, sealed::Sealed},
 	},
 	core::task::{Context, Poll},
 	serde::{Serialize, de::DeserializeOwned},
@@ -206,11 +206,18 @@ pub trait SyncContext<S: StateSync>: Sealed {
 	fn network_id(&self) -> NetworkId;
 
 	/// Sends a message to a specific peer.
-	fn send_to(&mut self, peer: PeerId, message: S::Message);
+	fn send_to(
+		&mut self,
+		peer: PeerId,
+		message: S::Message,
+	) -> Result<(), EncodeError>;
 
 	/// Broadcasts a message to all peers in the group and returns the list of
 	/// peers the message was sent to.
-	fn broadcast(&mut self, message: S::Message) -> Vec<PeerId>;
+	fn broadcast(
+		&mut self,
+		message: S::Message,
+	) -> Result<Vec<PeerId>, EncodeError>;
 
 	/// Returns [`Bonds`] of the group which can be used to observe changes to the
 	/// list of connected/bonded peers.

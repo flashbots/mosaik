@@ -19,7 +19,7 @@ use {
 		PeerId,
 		UniqueId,
 		groups::*,
-		primitives::{Short, UnboundedChannel},
+		primitives::{EncodeError, Short, UnboundedChannel},
 	},
 	chrono::{DateTime, Utc},
 	core::{any::type_name, cmp::Ordering, ops::Range},
@@ -257,7 +257,11 @@ impl<T: Value> VecWriter<T> {
 	/// were previously inside it are dropped.
 	pub async fn clear(&self) -> Result<Version, Error<()>> {
 		self
-			.execute(VecCommand::Clear, |_| Error::Offline(()))
+			.execute(
+				VecCommand::Clear,
+				|_| Error::Offline(()),
+				|_, _| unreachable!(),
+			)
 			.await
 	}
 
@@ -266,10 +270,17 @@ impl<T: Value> VecWriter<T> {
 	/// Time: O(1)*
 	pub async fn push_back(&self, value: T) -> Result<Version, Error<T>> {
 		self
-			.execute(VecCommand::PushBack { value }, |cmd| match cmd {
-				VecCommand::PushBack { value } => Error::Offline(value),
-				_ => unreachable!(),
-			})
+			.execute(
+				VecCommand::PushBack { value },
+				|cmd| match cmd {
+					VecCommand::PushBack { value } => Error::Offline(value),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					VecCommand::PushBack { value } => Error::Encoding(value, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -278,17 +289,28 @@ impl<T: Value> VecWriter<T> {
 	/// Time: O(1)*
 	pub async fn push_front(&self, value: T) -> Result<Version, Error<T>> {
 		self
-			.execute(VecCommand::PushFront { value }, |cmd| match cmd {
-				VecCommand::PushFront { value } => Error::Offline(value),
-				_ => unreachable!(),
-			})
+			.execute(
+				VecCommand::PushFront { value },
+				|cmd| match cmd {
+					VecCommand::PushFront { value } => Error::Offline(value),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					VecCommand::PushFront { value } => Error::Encoding(value, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
 	/// Swap the elements at indices `i` and `j`.
 	pub async fn swap(&self, i: u64, j: u64) -> Result<Version, Error<()>> {
 		self
-			.execute(VecCommand::Swap { i, j }, |_| Error::Offline(()))
+			.execute(
+				VecCommand::Swap { i, j },
+				|_| Error::Offline(()),
+				|_, _| unreachable!(),
+			)
 			.await
 	}
 
@@ -302,10 +324,17 @@ impl<T: Value> VecWriter<T> {
 		value: T,
 	) -> Result<Version, Error<T>> {
 		self
-			.execute(VecCommand::Insert { index, value }, |cmd| match cmd {
-				VecCommand::Insert { value, .. } => Error::Offline(value),
-				_ => unreachable!(),
-			})
+			.execute(
+				VecCommand::Insert { index, value },
+				|cmd| match cmd {
+					VecCommand::Insert { value, .. } => Error::Offline(value),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					VecCommand::Insert { value, .. } => Error::Encoding(value, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -321,10 +350,17 @@ impl<T: Value> VecWriter<T> {
 		}
 
 		self
-			.execute(VecCommand::Extend { entries }, |cmd| match cmd {
-				VecCommand::Extend { entries } => Error::Offline(entries),
-				_ => unreachable!(),
-			})
+			.execute(
+				VecCommand::Extend { entries },
+				|cmd| match cmd {
+					VecCommand::Extend { entries } => Error::Offline(entries),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					VecCommand::Extend { entries } => Error::Encoding(entries, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -333,7 +369,11 @@ impl<T: Value> VecWriter<T> {
 	/// Time: O(1)*
 	pub async fn pop_back(&self) -> Result<Version, Error<()>> {
 		self
-			.execute(VecCommand::PopBack, |_| Error::Offline(()))
+			.execute(
+				VecCommand::PopBack,
+				|_| Error::Offline(()),
+				|_, _| unreachable!(),
+			)
 			.await
 	}
 
@@ -342,7 +382,11 @@ impl<T: Value> VecWriter<T> {
 	/// Time: O(1)*
 	pub async fn pop_front(&self) -> Result<Version, Error<()>> {
 		self
-			.execute(VecCommand::PopFront, |_| Error::Offline(()))
+			.execute(
+				VecCommand::PopFront,
+				|_| Error::Offline(()),
+				|_, _| unreachable!(),
+			)
 			.await
 	}
 
@@ -352,10 +396,14 @@ impl<T: Value> VecWriter<T> {
 	/// elements after it to the left, and return the removed element.
 	pub async fn remove(&self, index: u64) -> Result<Version, Error<u64>> {
 		self
-			.execute(VecCommand::Remove { index }, |cmd| match cmd {
-				VecCommand::Remove { index } => Error::Offline(index),
-				_ => unreachable!(),
-			})
+			.execute(
+				VecCommand::Remove { index },
+				|cmd| match cmd {
+					VecCommand::Remove { index } => Error::Offline(index),
+					_ => unreachable!(),
+				},
+				|_, _| unreachable!(),
+			)
 			.await
 	}
 
@@ -367,7 +415,11 @@ impl<T: Value> VecWriter<T> {
 	pub async fn truncate(&self, len: usize) -> Result<Version, Error<()>> {
 		let len = len as u64;
 		self
-			.execute(VecCommand::Truncate { len }, |_| Error::Offline(()))
+			.execute(
+				VecCommand::Truncate { len },
+				|_| Error::Offline(()),
+				|_, _| unreachable!(),
+			)
 			.await
 	}
 }
@@ -405,6 +457,7 @@ impl<T: Value> Vec<T, WRITER> {
 		&self,
 		command: VecCommand<T>,
 		offline_err: impl FnOnce(VecCommand<T>) -> Error<TErr>,
+		encoding_err: impl FnOnce(VecCommand<T>, EncodeError) -> Error<TErr>,
 	) -> Result<Version, Error<TErr>> {
 		self
 			.group
@@ -415,6 +468,10 @@ impl<T: Value> Vec<T, WRITER> {
 				CommandError::Offline(mut items) => {
 					let command = items.remove(0);
 					offline_err(command)
+				}
+				CommandError::Encoding(mut items, e) => {
+					let command = items.remove(0);
+					encoding_err(command, e)
 				}
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),

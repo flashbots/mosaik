@@ -27,12 +27,9 @@ use {
 };
 
 /// Commands sent by the `Bond` handle to the `BondWorker`.
-pub(super) enum WorkerCommand<M: StateMachine> {
+pub(super) enum WorkerCommand {
 	/// Closes the bond connection with the provided application-level reason.
 	Close(ApplicationClose),
-
-	/// Sends a wire message over the bond connection to the remote peer.
-	SendMessage(BondMessage<M>),
 
 	/// Sends a raw pre-encoded message over the bond connection to the remote
 	/// peer. This is used when the same message is being sent to multiple peers
@@ -74,7 +71,7 @@ pub struct BondWorker<M: StateMachine> {
 	peer: watch::Sender<SignedPeerEntry>,
 
 	/// Channel for receiving commands to control the bond worker by the handle.
-	commands: UnboundedChannel<WorkerCommand<M>>,
+	commands: UnboundedChannel<WorkerCommand>,
 
 	/// Underlying transport link for sending and receiving messages over the
 	/// bond connection.
@@ -207,14 +204,11 @@ impl<M: StateMachine> BondWorker<M> {
 		self.terminated_tx.send(Some(self.close_reason)).ok();
 	}
 
-	fn on_command(&mut self, command: WorkerCommand<M>) {
+	fn on_command(&mut self, command: WorkerCommand) {
 		match command {
 			WorkerCommand::Close(reason) => {
 				self.cancel.cancel();
 				self.close_reason = reason;
-			}
-			WorkerCommand::SendMessage(message) => {
-				self.pending_sends.send(Either::Left(message));
 			}
 			WorkerCommand::SendRawMessage(message) => {
 				self.pending_sends.send(Either::Right(message));

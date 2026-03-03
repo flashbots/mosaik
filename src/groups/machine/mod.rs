@@ -8,6 +8,7 @@
 
 use {
 	crate::{
+		Datum,
 		groups::{ConsensusConfig, Cursor, Term},
 		primitives::UniqueId,
 	},
@@ -153,11 +154,11 @@ impl<T> StateMachineMessage for T where
 {
 }
 
-pub trait Command: StateMachineMessage {}
-impl<T> Command for T where T: StateMachineMessage {}
+pub trait Command: Datum + Sync + Clone {}
+impl<T> Command for T where T: Datum + Sync + Clone {}
 
-pub trait Query: StateMachineMessage {}
-impl<T> Query for T where T: StateMachineMessage {}
+pub trait Query: Datum + Sync + Clone {}
+impl<T> Query for T where T: Datum + Sync + Clone {}
 
-pub trait QueryResult: StateMachineMessage {}
-impl<T> QueryResult for T where T: StateMachineMessage {}
+pub trait QueryResult: Datum + Sync + Clone {}
+impl<T> QueryResult for T where T: Datum + Sync + Clone {}

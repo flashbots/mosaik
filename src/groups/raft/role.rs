@@ -314,13 +314,15 @@ impl<M: StateMachine> Role<M> {
 
 		let bonds = shared.group.bonds.clone();
 		let vote_with = |vote: Vote| {
-			bonds.send_raft_to(
-				Message::RequestVoteResponse(RequestVoteResponse {
-					vote,
-					term: request.term,
-				}),
-				sender,
-			);
+			bonds
+				.send_raft_to(
+					Message::RequestVoteResponse(RequestVoteResponse {
+						vote,
+						term: request.term,
+					}),
+					sender,
+				)
+				.expect("infallible serialization");
 		};
 
 		if !shared.can_vote(request.term, request.candidate) {

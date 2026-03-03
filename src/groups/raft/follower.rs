@@ -20,7 +20,13 @@ use {
 				shared::Shared,
 			},
 		},
-		primitives::{BoxPinFut, InternalFutureExt, Short, UnboundedChannel},
+		primitives::{
+			BoxPinFut,
+			Encoded,
+			InternalFutureExt,
+			Short,
+			UnboundedChannel,
+		},
 	},
 	core::{
 		future::ready,
@@ -227,7 +233,7 @@ impl<M: StateMachine> Follower<M> {
 				result,
 				position,
 			}) => {
-				self.on_forward_query_response(request_id, result, position);
+				self.on_forward_query_response(request_id, result.0, position);
 			}
 
 			// state-sync related messages
@@ -293,13 +299,16 @@ impl<M: StateMachine> Follower<M> {
 
 		// send the command to the current leader
 		let message = Message::Forward(Forward::Command {
-			commands: commands.clone(), // todo: avoid cloning!
+			commands: commands.iter().cloned().map(Encoded).collect(),
 			request_id: Some(request_id),
 		});
 
 		let (forward_ack_tx, forward_ack_rx) = oneshot::channel();
 		self.pending_commands.insert(request_id, forward_ack_tx);
-		shared.bonds().send_raft_to(message, leader);
+
+		if let Err(e) = shared.bonds().send_raft_to(message, leader) {
+			return ready(Err(CommandError::Encoding(commands, e))).pin();
+		}
 
 		let expired_sender = self.expired_commands.sender().clone();
 		let forward_timeout = shared.consensus().forward_timeout;
@@ -340,13 +349,16 @@ impl<M: StateMachine> Follower<M> {
 
 		// send the query to the current leader
 		let message = Message::Forward(Forward::Query {
-			query: query.clone(), // todo: avoid cloning!
+			query: Encoded(query.clone()), // todo: avoid cloning!
 			request_id,
 		});
 
 		let (response_tx, response_rx) = oneshot::channel();
 		self.pending_queries.insert(request_id, response_tx);
-		shared.bonds().send_raft_to(message, leader);
+
+		if let Err(e) = shared.bonds().send_raft_to(message, leader) {
+			return ready(Err(QueryError::Encoding(query, e))).pin();
+		}
 
 		let expired_sender = self.expired_queries.sender().clone();
 		let query_timeout = shared.consensus().query_timeout;
@@ -427,7 +439,7 @@ impl<M: StateMachine> Follower<M> {
 			let entries = request
 				.entries
 				.into_iter()
-				.map(|entry| (entry.command, entry.term))
+				.map(|entry| (entry.command.0, entry.term))
 				.collect();
 			if let Some(catchup) = self.catchup.as_mut() {
 				catchup.buffer(request.prev_log_position, entries, shared);
@@ -538,21 +550,24 @@ impl<M: StateMachine> Follower<M> {
 					continue;
 				}
 
-				shared.storage.append(entry.command, entry.term);
+				shared.storage.append(entry.command.0, entry.term);
 				appended_count += 1;
 			}
 
 			// confirm to the leader that we have appended the entries and report the
 			// index of our last log entry
 			let local_position = shared.storage.last();
-			shared.bonds().send_raft_to(
-				Message::AppendEntriesResponse(AppendEntriesResponse {
-					term: self.term(),
-					vote: Vote::Granted,
-					last_log_index: local_position.index(),
-				}),
-				sender,
-			);
+			shared
+				.bonds()
+				.send_raft_to(
+					Message::AppendEntriesResponse(AppendEntriesResponse {
+						term: self.term(),
+						vote: Vote::Granted,
+						last_log_index: local_position.index(),
+					}),
+					sender,
+				)
+				.expect("infallible serialization");
 		}
 
 		// advance local commit index to the minimum of the leader's commit index

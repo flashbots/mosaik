@@ -6,7 +6,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.89"
-version = "0.2.19"
+version = "0.2.20"
 license = "MIT"
 homepage = "https://github.com/flashbots/mosaik"
 repository = "https://github.com/flashbots/mosaik"
@@ -107,6 +107,7 @@ iroh-gossip = "0.96.0"
 pkarr = "5.0"
 b58 = "0.1"
 arrayvec = "0.7"
+serde_bytes = "0.11"
 
 # CLI-specific dependencies
 clap = { version = "4.5", features = [

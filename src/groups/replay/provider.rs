@@ -8,7 +8,7 @@ use {
 			SyncContext,
 			SyncProviderContext,
 		},
-		primitives::{Pretty, Short},
+		primitives::{Encoded, Pretty, Short},
 	},
 	core::marker::PhantomData,
 };
@@ -66,7 +66,8 @@ impl<M: StateMachine> StateSyncProvider for LogReplayProvider<M> {
 				cx.send_to(
 					sender,
 					LogReplaySyncMessage::AvailabilityResponse(available),
-				);
+				)
+				.expect("infallible serialization");
 			}
 			LogReplaySyncMessage::FetchEntriesRequest(range) => {
 				if range.is_empty() {
@@ -84,7 +85,8 @@ impl<M: StateMachine> StateSyncProvider for LogReplayProvider<M> {
 					cx.send_to(sender, LogReplaySyncMessage::FetchEntriesResponse {
 						range: Index::zero()..=Index::zero(),
 						entries: Vec::new(),
-					});
+					})
+					.expect("infallible serialization");
 					return Ok(());
 				}
 
@@ -104,13 +106,23 @@ impl<M: StateMachine> StateSyncProvider for LogReplayProvider<M> {
 					"providing state to"
 				);
 
-				cx.send_to(sender, LogReplaySyncMessage::FetchEntriesResponse {
-					range: actual_range,
-					entries: entries
-						.into_iter()
-						.map(|(term, _, command)| (command, term))
-						.collect(),
-				});
+				if let Err(e) =
+					cx.send_to(sender, LogReplaySyncMessage::FetchEntriesResponse {
+						range: actual_range.clone(),
+						entries: entries
+							.into_iter()
+							.map(|(term, _, command)| (Encoded(command), term))
+							.collect(),
+					}) {
+					tracing::warn!(
+						err = ?e,
+						peer = %Short(sender),
+						range = %Pretty(&actual_range),
+						group = %Short(cx.group_id()),
+						network = %Short(cx.network_id()),
+						"failed to encode log entries",
+					);
+				}
 			}
 			message => return Err(message),
 		}

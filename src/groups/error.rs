@@ -5,6 +5,7 @@ use crate::{
 		self,
 		link::{Link, LinkError},
 	},
+	primitives::EncodeError,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -46,6 +47,10 @@ pub enum CommandError<M: StateMachine> {
 	/// longer running.
 	#[error("Group is terminated")]
 	GroupTerminated,
+
+	/// The provided commands could not be encoded for sending over the network.
+	#[error("Command encoding error: {1}")]
+	Encoding(Vec<M::Command>, EncodeError),
 }
 
 /// Errors that are communicated by the public API when issuing queries to the
@@ -66,6 +71,10 @@ pub enum QueryError<M: StateMachine> {
 	/// longer running.
 	#[error("Group is terminated")]
 	GroupTerminated,
+
+	/// The provided query could not be encoded for sending over the network.
+	#[error("Query encoding error: {1}")]
+	Encoding(M::Query, EncodeError),
 }
 
 network::make_close_reason!(

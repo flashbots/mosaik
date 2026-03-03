@@ -25,6 +25,7 @@ use {
 			Cursor,
 			StateMachine,
 		},
+		primitives::EncodeError,
 	},
 	core::{
 		any::type_name,
@@ -174,10 +175,17 @@ impl<T: Value> RegisterWriter<T> {
 	/// Time: O(1)
 	pub async fn write(&self, value: T) -> Result<Version, Error<T>> {
 		self
-			.execute(RegisterCommand::Write { value }, |cmd| match cmd {
-				RegisterCommand::Write { value } => Error::Offline(value),
-				_ => unreachable!(),
-			})
+			.execute(
+				RegisterCommand::Write { value },
+				|cmd| match cmd {
+					RegisterCommand::Write { value } => Error::Offline(value),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					RegisterCommand::Write { value } => Error::Encoding(value, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -199,14 +207,21 @@ impl<T: Value> RegisterWriter<T> {
 		new: Option<T>,
 	) -> Result<Version, Error<(Option<T>, Option<T>)>> {
 		self
-			.execute(RegisterCommand::CompareExchange { current, new }, |cmd| {
-				match cmd {
+			.execute(
+				RegisterCommand::CompareExchange { current, new },
+				|cmd| match cmd {
 					RegisterCommand::CompareExchange { current, new } => {
 						Error::Offline((current, new))
 					}
 					_ => unreachable!(),
-				}
-			})
+				},
+				|cmd, e| match cmd {
+					RegisterCommand::CompareExchange { current, new } => {
+						Error::Encoding((current, new), e)
+					}
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -217,7 +232,11 @@ impl<T: Value> RegisterWriter<T> {
 	/// Time: O(1)
 	pub async fn clear(&self) -> Result<Version, Error<()>> {
 		self
-			.execute(RegisterCommand::Clear, |_| Error::Offline(()))
+			.execute(
+				RegisterCommand::Clear,
+				|_| Error::Offline(()),
+				|_, _| unreachable!(),
+			)
 			.await
 	}
 }
@@ -297,6 +316,7 @@ impl<T: Value> RegisterWriter<T> {
 		&self,
 		command: RegisterCommand<T>,
 		offline_err: impl FnOnce(RegisterCommand<T>) -> Error<TErr>,
+		encoding_err: impl FnOnce(RegisterCommand<T>, EncodeError) -> Error<TErr>,
 	) -> Result<Version, Error<TErr>> {
 		self
 			.group
@@ -305,6 +325,9 @@ impl<T: Value> RegisterWriter<T> {
 			.map(Version)
 			.map_err(|err| match err {
 				CommandError::Offline(mut items) => offline_err(items.remove(0)),
+				CommandError::Encoding(mut items, err) => {
+					encoding_err(items.remove(0), err)
+				}
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),
 			})

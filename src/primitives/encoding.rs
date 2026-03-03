@@ -12,7 +12,7 @@ pub type EncodeError = postcard::Error;
 pub type DecodeError = postcard::Error;
 
 #[track_caller]
-pub fn serialize<T: Serialize>(value: &T) -> Bytes {
+pub(crate) fn serialize<T: Serialize>(value: &T) -> Bytes {
 	postcard::to_allocvec(value)
 		.expect("serialization should never fail")
 		.into()
@@ -23,7 +23,7 @@ pub fn try_serialize<T: Serialize>(value: &T) -> Result<Bytes, EncodeError> {
 }
 
 #[track_caller]
-pub fn serialize_to_writer<T: Serialize>(
+pub(crate) fn serialize_to_writer<T: Serialize>(
 	value: &T,
 	writer: &mut impl std::io::Write,
 ) {

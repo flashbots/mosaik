@@ -1,7 +1,8 @@
 use {
 	crate::StreamId,
 	bytes::Bytes,
-	serde::{Serialize, de::DeserializeOwned},
+	derive_more::{Deref, DerefMut},
+	serde::{Deserializer, Serialize, Serializer, de::DeserializeOwned},
 };
 
 /// Implemented by all data types that are published as streams.
@@ -42,5 +43,38 @@ where
 
 	fn decode(bytes: &[u8]) -> Result<Self, Self::DecodeError> {
 		crate::primitives::encoding::deserialize(bytes)
+	}
+}
+
+/// A serde-compatible wrapper that serializes/deserializes a `Datum` as opaque
+/// bytes.
+///
+/// Use this to wrap `Datum` types in structs that derive
+/// `Serialize`/`Deserialize`, so that standard serde containers (`Vec`, tuples,
+/// etc.) work automatically.
+#[derive(Clone, Debug, Deref, DerefMut, PartialEq, Eq)]
+pub struct Encoded<T>(pub T);
+
+impl<T: Datum> From<T> for Encoded<T> {
+	fn from(value: T) -> Self {
+		Self(value)
+	}
+}
+
+impl<T: Datum> Serialize for Encoded<T> {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		let encoded = self.0.encode().map_err(serde::ser::Error::custom)?;
+		encoded.serialize(serializer)
+	}
+}
+
+impl<'de, T: Datum> serde::Deserialize<'de> for Encoded<T> {
+	fn deserialize<D: Deserializer<'de>>(
+		deserializer: D,
+	) -> Result<Self, D::Error> {
+		let bytes = Vec::<u8>::deserialize(deserializer)?;
+		T::decode(&bytes)
+			.map(Encoded)
+			.map_err(serde::de::Error::custom)
 	}
 }

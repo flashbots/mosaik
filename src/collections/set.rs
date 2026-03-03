@@ -25,6 +25,7 @@ use {
 			Cursor,
 			StateMachine,
 		},
+		primitives::EncodeError,
 	},
 	core::{any::type_name, borrow::Borrow, hash::Hash, ops::Range},
 	serde::{Deserialize, Serialize},
@@ -179,7 +180,11 @@ impl<T: Key> SetWriter<T> {
 	/// were previously inside it are dropped.
 	pub async fn clear(&self) -> Result<Version, Error<()>> {
 		self
-			.execute(SetCommand::Clear, |_| Error::Offline(()))
+			.execute(
+				SetCommand::Clear,
+				|_| Error::Offline(()),
+				|_, _| unreachable!(),
+			)
 			.await
 	}
 
@@ -190,10 +195,17 @@ impl<T: Key> SetWriter<T> {
 	/// Time: O(log n)
 	pub async fn insert(&self, value: T) -> Result<Version, Error<T>> {
 		self
-			.execute(SetCommand::Insert { value }, |cmd| match cmd {
-				SetCommand::Insert { value } => Error::Offline(value),
-				_ => unreachable!(),
-			})
+			.execute(
+				SetCommand::Insert { value },
+				|cmd| match cmd {
+					SetCommand::Insert { value } => Error::Offline(value),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					SetCommand::Insert { value } => Error::Encoding(value, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -209,10 +221,17 @@ impl<T: Key> SetWriter<T> {
 		}
 
 		self
-			.execute(SetCommand::Extend { entries }, |cmd| match cmd {
-				SetCommand::Extend { entries } => Error::Offline(entries),
-				_ => unreachable!(),
-			})
+			.execute(
+				SetCommand::Extend { entries },
+				|cmd| match cmd {
+					SetCommand::Extend { entries } => Error::Offline(entries),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					SetCommand::Extend { entries } => Error::Encoding(entries, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 
@@ -225,10 +244,17 @@ impl<T: Key> SetWriter<T> {
 	) -> Result<Version, Error<T>> {
 		let value = value.borrow().clone();
 		self
-			.execute(SetCommand::Remove { value }, |cmd| match cmd {
-				SetCommand::Remove { value } => Error::Offline(value),
-				_ => unreachable!(),
-			})
+			.execute(
+				SetCommand::Remove { value },
+				|cmd| match cmd {
+					SetCommand::Remove { value } => Error::Offline(value),
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					SetCommand::Remove { value } => Error::Encoding(value, e),
+					_ => unreachable!(),
+				},
+			)
 			.await
 	}
 }
@@ -300,6 +326,7 @@ impl<T: Key> SetWriter<T> {
 		&self,
 		command: SetCommand<T>,
 		offline_err: impl FnOnce(SetCommand<T>) -> Error<TErr>,
+		encoding_err: impl FnOnce(SetCommand<T>, EncodeError) -> Error<TErr>,
 	) -> Result<Version, Error<TErr>> {
 		self
 			.group
@@ -310,6 +337,10 @@ impl<T: Key> SetWriter<T> {
 				CommandError::Offline(mut items) => {
 					let command = items.remove(0);
 					offline_err(command)
+				}
+				CommandError::Encoding(mut items, err) => {
+					let command = items.remove(0);
+					encoding_err(command, err)
 				}
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),

@@ -26,6 +26,8 @@ pub use {
 	when::When,
 };
 
+use crate::primitives::EncodeError;
+
 const WRITER: bool = true;
 const READER: bool = false;
 
@@ -40,7 +42,7 @@ pub enum Error<T> {
 
 	/// An error occurred during encoding the value for replication.
 	#[error("Encoding: {1}")]
-	Encoding(T, #[source] Box<dyn std::error::Error + Send + Sync>),
+	Encoding(T, EncodeError),
 
 	/// The network is permanently down, and the operation cannot be completed.
 	///

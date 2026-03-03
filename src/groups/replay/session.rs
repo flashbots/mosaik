@@ -221,7 +221,9 @@ impl<M: StateMachine> LogReplaySession<M> {
 			// The peer might still be alive but slow. Send a fresh
 			// DiscoveryRequest — if it responds, it'll be re-added
 			// to availability via add_availability().
-			sync_cx.send_to(peer, LogReplaySyncMessage::AvailabilityRequest);
+			sync_cx
+				.send_to(peer, LogReplaySyncMessage::AvailabilityRequest)
+				.expect("infallible serialization");
 
 			self.wake_all();
 		}
@@ -241,7 +243,8 @@ impl<M: StateMachine> LogReplaySession<M> {
 			current.difference(&self.known_bonds).copied().collect();
 
 		for peer in &new_peers {
-			cx.send_to(*peer, LogReplaySyncMessage::AvailabilityRequest);
+			cx.send_to(*peer, LogReplaySyncMessage::AvailabilityRequest)
+				.expect("infallible serialization");
 		}
 
 		self.known_bonds = current;
@@ -348,10 +351,12 @@ impl<M: StateMachine> LogReplaySession<M> {
 			"requesting state from"
 		);
 
-		sync_cx.send_to(
-			peer,
-			LogReplaySyncMessage::FetchEntriesRequest(range.clone()),
-		);
+		sync_cx
+			.send_to(
+				peer,
+				LogReplaySyncMessage::FetchEntriesRequest(range.clone()),
+			)
+			.expect("infallible serialization");
 
 		let timeout_duration = self.config.fetch_timeout;
 		self.inflight.insert(peer, PendingFetch {
@@ -555,7 +560,14 @@ impl<M: StateMachine> StateSyncSession for LogReplaySession<M> {
 				self.on_availability_response(sender, range, cx);
 			}
 			LogReplaySyncMessage::FetchEntriesResponse { range, entries } => {
-				self.on_fetch_entries_response(sender, range, entries);
+				self.on_fetch_entries_response(
+					sender,
+					range,
+					entries
+						.into_iter()
+						.map(|(enc_cmd, term)| (enc_cmd.0, term))
+						.collect(),
+				);
 			}
 			_ => {} // ignore
 		}

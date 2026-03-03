@@ -15,7 +15,7 @@ use {
 				shared::Shared,
 			},
 		},
-		primitives::{FmtIter, Pretty, Short, UnboundedChannel},
+		primitives::{Encoded, FmtIter, Pretty, Short, UnboundedChannel},
 	},
 	core::{
 		cmp::Reverse,
@@ -187,18 +187,22 @@ impl<M: StateMachine> Leader<M> {
 				request_id,
 			}) => {
 				if !commands.is_empty() {
-					let assigned = self.enqueue_commands(commands, shared);
+					let assigned =
+						self.enqueue_commands(commands.into_iter().map(|e| e.0), shared);
 
 					if let Some(request_id) = request_id {
 						// the follower is interested in knowing the log index assigned to
 						// this command asap.
-						shared.bonds().send_raft_to(
-							Message::Forward(Forward::CommandAck {
-								request_id,
-								assigned,
-							}),
-							sender,
-						);
+						shared
+							.bonds()
+							.send_raft_to(
+								Message::Forward(Forward::CommandAck {
+									request_id,
+									assigned,
+								}),
+								sender,
+							)
+							.expect("infallible serialization");
 					}
 				}
 			}
@@ -206,16 +210,25 @@ impl<M: StateMachine> Leader<M> {
 			// sent by followers that are forwarding client queries to the leader.
 			// todo: run queries in parallel.
 			Message::Forward(Forward::Query { query, request_id }) => {
-				let result = shared.state_machine().query(query);
+				let result = shared.state_machine().query(query.0);
 				let position = shared.committed().index();
-				shared.bonds().send_raft_to(
+				if let Err(e) = shared.bonds().send_raft_to(
 					Message::Forward(Forward::QueryResponse {
 						request_id,
-						result,
+						result: Encoded(result),
 						position,
 					}),
 					sender,
-				);
+				) {
+					tracing::warn!(
+						err = ?e,
+						request_id = %request_id,
+						position = %position,
+						group = %Short(shared.group_id()),
+						network = %Short(shared.network_id()),
+						"failed to serialize query response",
+					);
+				}
 			}
 
 			// all other message types are unexpected in the leader state. ignore.
@@ -417,14 +430,26 @@ impl<M: StateMachine> Leader<M> {
 			entries: entries
 				.into_iter()
 				.map(|c| LogEntry {
-					command: c,
+					command: Encoded(c),
 					term: self.term,
 				})
 				.collect(),
 		});
 
 		// broadcast the new log entries to all followers.
-		let followers = shared.bonds().broadcast_raft(message);
+		let Ok(followers) = shared.bonds().broadcast_raft(message) else {
+			// failed to serialize commands, revert the log append and discard those
+			// commands
+			shared.storage.truncate(prev_pos.index());
+			tracing::warn!(
+				range = %Pretty(&(prev_pos.index().next()..=prev_pos.index() + count)),
+				group = %Short(shared.group_id()),
+				network = %Short(shared.network_id()),
+				"failed to serialize client commands for replication, discarding"
+			);
+
+			return Poll::Ready(());
+		};
 
 		if !followers.is_empty() {
 			let range = prev_pos.index().next()..=prev_pos.index() + count;
@@ -464,7 +489,8 @@ impl<M: StateMachine> Leader<M> {
 
 		shared
 			.bonds()
-			.broadcast_raft(Message::AppendEntries(heartbeat));
+			.broadcast_raft(Message::AppendEntries(heartbeat))
+			.expect("infallible serialization");
 
 		self.reset_heartbeat_timeout();
 		Poll::Ready(())

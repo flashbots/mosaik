@@ -21,6 +21,7 @@ use {
 			raft::Message,
 			state::{WorkerCommand, WorkerRaftCommand, WorkerState},
 		},
+		primitives::EncodeError,
 	},
 	core::{mem::MaybeUninit, task::Poll},
 	std::sync::Arc,
@@ -392,17 +393,17 @@ where
 		&mut self,
 		peer: PeerId,
 		message: <M::StateSync as StateSync>::Message,
-	) {
+	) -> Result<(), EncodeError> {
 		self
 			.group
 			.bonds
-			.send_raft_to(Message::StateSync(message), peer);
+			.send_raft_to(Message::StateSync(message), peer)
 	}
 
 	fn broadcast(
 		&mut self,
 		message: <M::StateSync as StateSync>::Message,
-	) -> Vec<PeerId> {
+	) -> Result<Vec<PeerId>, EncodeError> {
 		self.group.bonds.broadcast_raft(Message::StateSync(message))
 	}
 
