@@ -13,9 +13,8 @@ use {
 			raft::{role::Role, shared::Shared},
 			state::WorkerState,
 		},
-		primitives::{BoxPinFut, InternalFutureExt, Short, deserialize},
+		primitives::{BoxPinFut, InternalFutureExt},
 	},
-	bytes::Bytes,
 	core::{
 		future::ready,
 		task::{Context, Poll},
@@ -91,17 +90,11 @@ where
 	/// Accepts an incoming consensus message from a remote bonded peer in the
 	/// group and decode it into a strongly-typed `Message` that is aware of the
 	/// state machine implementation used by the group.
-	pub fn receive_protocol_message(&mut self, buffer: Bytes, from: PeerId) {
-		let Ok(message) = deserialize(buffer) else {
-			tracing::warn!(
-				peer = %Short(from),
-				group = %Short(self.shared.group_id()),
-				network = %Short(self.shared.network_id()),
-				"failed to decode incoming raft message",
-			);
-			return;
-		};
-
+	pub fn receive_protocol_message(
+		&mut self,
+		message: Message<M>,
+		from: PeerId,
+	) {
 		self
 			.role
 			.receive_protocol_message(message, from, &mut self.shared);

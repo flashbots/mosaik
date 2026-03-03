@@ -17,7 +17,7 @@ use {
 			state::{
 				AcceptRequest,
 				GroupHandle,
-				WorkerBondCommand,
+				WorkerCommand,
 				WorkerRaftCommand,
 				WorkerState,
 			},
@@ -55,15 +55,10 @@ where
 	accepts: UnboundedReceiver<AcceptRequest>,
 
 	/// Receiver for commands sent from the external world to the worker loop.
-	bonds_cmd_rx: UnboundedReceiver<WorkerBondCommand>,
-
-	/// Channel for receiving commands for the group's raft consensus.
-	/// This is distinct from `commands_rx` to keep the `WorkerState` free of
-	/// generic type parameters.
-	raft_cmd_rx: UnboundedReceiver<WorkerRaftCommand<M>>,
+	cmd_rx: UnboundedReceiver<WorkerCommand<M>>,
 
 	/// Aggregated stream of all events emitted by active bonds in this group.
-	bond_events: BondEventsStream,
+	bond_events: BondEventsStream<M>,
 
 	/// The raft consensus protocol instance that manages the replicated state
 	/// machine and its underlying storage.
@@ -99,13 +94,11 @@ where
 		state_machine: M,
 	) -> Arc<GroupHandle> {
 		let (accepts_tx, accepts_rx) = unbounded_channel();
-		let (bonds_cmd_tx, bonds_cmd_rx) = unbounded_channel();
-		let (raft_cmd_tx, raft_cmd_rx) = unbounded_channel();
+		let (cmd_tx, cmd_rx) = unbounded_channel();
 
 		let worker_state = Arc::new(WorkerState {
 			config,
-			raft_cmd_tx,
-			bonds_cmd_tx,
+			cmd_tx,
 			accepts: accepts_tx,
 			global_config: Arc::clone(&groups.config),
 			local: groups.local.clone(),
@@ -117,8 +110,7 @@ where
 		});
 
 		let worker_instance = Self {
-			raft_cmd_rx,
-			bonds_cmd_rx,
+			cmd_rx,
 			accepts: accepts_rx,
 			state: Arc::clone(&worker_state),
 			bond_events: SelectAll::default(),
@@ -179,13 +171,8 @@ where
 				}
 
 				// handles external commands sent to the worker loop
-				Some(command) = self.bonds_cmd_rx.recv() => {
+				Some(command) = self.cmd_rx.recv() => {
 					self.on_worker_command(command);
-				}
-
-				// handles raft consensus commands sent to the worker loop
-				Some(command) = self.raft_cmd_rx.recv() => {
-					self.on_raft_command(command);
 				}
 			}
 		}
@@ -254,7 +241,7 @@ where
 	}
 
 	/// Handles bond events from active bonds in the group.
-	fn on_bond_event(&mut self, event: BondEvent, peer_id: PeerId) {
+	fn on_bond_event(&mut self, event: BondEvent<M>, peer_id: PeerId) {
 		match event {
 			// a connected peer has disconnected
 			BondEvent::Terminated(reason) => {
@@ -325,18 +312,22 @@ where
 	}
 
 	/// Handles incoming external commands sent to the worker loop.
-	fn on_worker_command(&mut self, command: WorkerBondCommand) {
+	fn on_worker_command(&mut self, command: WorkerCommand<M>) {
 		match command {
 			// Attempts to create a new bond connection to the specified peer.
-			WorkerBondCommand::Connect(peer_entry) => {
+			WorkerCommand::Connect(peer_entry) => {
 				self.create_bond(*peer_entry);
 			}
 			// Subscribes to bond events from a newly created bond
-			WorkerBondCommand::SubscribeToBond(events_rx, peer_id) => {
+			WorkerCommand::Subscribe(events_rx, peer_id) => {
 				self.bond_events.push(Box::pin(
 					UnboundedReceiverStream::new(events_rx)
 						.map(move |event| (event, peer_id)),
 				));
+			}
+			// Raft-specific commands are forwarded to the raft protocol handler
+			WorkerCommand::Raft(command) => {
+				self.on_raft_command(command);
 			}
 		}
 	}
@@ -396,8 +387,8 @@ where
 							Entry::Vacant(place) => {
 								// subscribe to bond events
 								if state
-									.bonds_cmd_tx
-									.send(WorkerBondCommand::SubscribeToBond(events, peer_id))
+									.cmd_tx
+									.send(WorkerCommand::Subscribe(events, peer_id))
 									.is_ok()
 								{
 									// keep track of the bond handle to control it
@@ -458,8 +449,8 @@ where
 							Entry::Vacant(place) => {
 								// subscribe to bond events
 								if state
-									.bonds_cmd_tx
-									.send(WorkerBondCommand::SubscribeToBond(events, peer_id))
+									.cmd_tx
+									.send(WorkerCommand::Subscribe(events, peer_id))
 									.is_ok()
 								{
 									// keep track of the bond handle to control it
@@ -490,6 +481,6 @@ where
 }
 
 /// Aggregated stream of bond events from all active bonds in the group.
-type BondEventsStream = SelectAll<
-	Pin<Box<dyn Stream<Item = (BondEvent, PeerId)> + Send + Sync + 'static>>,
+type BondEventsStream<M: StateMachine> = SelectAll<
+	Pin<Box<dyn Stream<Item = (BondEvent<M>, PeerId)> + Send + Sync + 'static>>,
 >;

@@ -143,14 +143,7 @@ pub(in crate::groups) struct WorkerState<M: StateMachine> {
 	/// Channel for sending external commands to the worker loop, such as
 	/// forwarding incoming bond connection attempts that are routed to this
 	/// worker by the acceptor.
-	pub bonds_cmd_tx: UnboundedSender<WorkerBondCommand>,
-
-	/// A type-erased channel for sending raft protocol commands to the worker
-	/// loop. It's type-erased to keep the `WorkerState` struct generic over the
-	/// state machine and storage types so we can store it in homogenous
-	/// registers of groups alongside other groups with different state machine
-	/// and storage implementations.
-	pub raft_cmd_tx: UnboundedSender<WorkerRaftCommand<M>>,
+	pub cmd_tx: UnboundedSender<WorkerCommand<M>>,
 
 	/// The type ids of the state machine and storage implementations used by
 	/// this group.
@@ -209,9 +202,7 @@ impl<M: StateMachine> WorkerState<M> {
 	/// Initiates the process of forming a bond connection with the specified
 	/// peer.
 	pub fn bond_with(&self, peer: SignedPeerEntry) {
-		let _ = self
-			.bonds_cmd_tx
-			.send(WorkerBondCommand::Connect(Box::new(peer)));
+		let _ = self.cmd_tx.send(WorkerCommand::Connect(Box::new(peer)));
 	}
 
 	/// Returns a public-api handle to this group.
@@ -228,7 +219,7 @@ impl<M: StateMachine> WorkerState<M> {
 }
 
 /// Bond-related commands sent to the group worker loop.
-pub enum WorkerBondCommand {
+pub enum WorkerCommand<M: StateMachine> {
 	/// Attempts to create a new bond connection to the specified peer.
 	Connect(Box<SignedPeerEntry>),
 
@@ -238,7 +229,11 @@ pub enum WorkerBondCommand {
 	///
 	/// It is an explicit command to allow scheduling concurrent bonding processes
 	/// on the worker loop without blocking the main group worker loop.
-	SubscribeToBond(UnboundedReceiver<BondEvent>, PeerId),
+	Subscribe(UnboundedReceiver<BondEvent<M>>, PeerId),
+
+	/// Commands specific to the Raft protocol and the state machine
+	/// implementation used by this group.
+	Raft(WorkerRaftCommand<M>),
 }
 
 /// Commands sent to the group worker that are raft-specific and carry state

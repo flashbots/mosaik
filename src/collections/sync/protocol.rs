@@ -24,8 +24,8 @@ pub struct SnapshotRequest {
 /// Message exchanged between `SnapshotSyncSession` and `SnapshotSyncProvider`
 /// to coordinate the snapshot sync process.
 #[derive(Clone, Serialize, Deserialize, From)]
-#[serde(bound = "T: SnapshotItem")]
-pub enum SnapshotSyncMessage<T> {
+#[serde(bound = "")]
+pub enum SnapshotSyncMessage<T: SnapshotItem> {
 	/// A follower is starting a state catch-up session because it is lagging
 	/// behind the state of the group.
 	///
@@ -93,8 +93,8 @@ pub struct FetchDataRequest {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound = "T: SnapshotItem")]
-pub struct FetchDataResponse<T> {
+#[serde(bound = "")]
+pub struct FetchDataResponse<T: SnapshotItem> {
 	/// The log position at which the snapshot was taken.
 	///
 	/// This is the identifier of the snapshot that the follower is fetching data

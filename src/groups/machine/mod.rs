@@ -144,12 +144,12 @@ pub trait ApplyContext {
 }
 
 pub trait StateMachineMessage:
-	Clone + Send + Serialize + DeserializeOwned + 'static
+	Clone + Send + Sync + Serialize + DeserializeOwned + 'static
 {
 }
 
 impl<T> StateMachineMessage for T where
-	T: Clone + Send + Serialize + DeserializeOwned + 'static
+	T: Clone + Send + Sync + Serialize + DeserializeOwned + 'static
 {
 }
 

@@ -11,7 +11,7 @@ use {
 			When,
 			config::GroupConfig,
 			error::{CommandError, QueryError},
-			state::{GroupHandle, WorkerRaftCommand},
+			state::{GroupHandle, WorkerCommand, WorkerRaftCommand},
 		},
 		primitives::Short,
 	},
@@ -21,7 +21,7 @@ use {
 	serde::{Deserialize, Serialize},
 	state::WorkerState,
 	std::sync::Arc,
-	tokio::sync::{mpsc::error::SendError, oneshot},
+	tokio::sync::oneshot,
 };
 
 pub(in crate::groups) mod state;
@@ -216,10 +216,13 @@ impl<M: StateMachine> Group<M> {
 		}
 
 		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Feed(_, _))) = self
+		if self
 			.state
-			.raft_cmd_tx
-			.send(WorkerRaftCommand::Feed(commands, result_tx))
+			.cmd_tx
+			.send(WorkerCommand::Raft(WorkerRaftCommand::Feed(
+				commands, result_tx,
+			)))
+			.is_err()
 		{
 			return Err(CommandError::GroupTerminated);
 		}
@@ -249,10 +252,15 @@ impl<M: StateMachine> Group<M> {
 		consistency: Consistency,
 	) -> Result<CommittedQueryResult<M>, QueryError<M>> {
 		let (result_tx, result_rx) = oneshot::channel();
-		if let Err(SendError(WorkerRaftCommand::Query(_, _, _))) = self
+		if self
 			.state
-			.raft_cmd_tx
-			.send(WorkerRaftCommand::Query(query, consistency, result_tx))
+			.cmd_tx
+			.send(WorkerCommand::Raft(WorkerRaftCommand::Query(
+				query,
+				consistency,
+				result_tx,
+			)))
+			.is_err()
 		{
 			return Err(QueryError::GroupTerminated);
 		}

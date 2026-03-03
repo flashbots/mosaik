@@ -299,7 +299,7 @@ impl<M: StateMachine> Follower<M> {
 
 		let (forward_ack_tx, forward_ack_rx) = oneshot::channel();
 		self.pending_commands.insert(request_id, forward_ack_tx);
-		shared.bonds().send_raft_to(&message, leader);
+		shared.bonds().send_raft_to(message, leader);
 
 		let expired_sender = self.expired_commands.sender().clone();
 		let forward_timeout = shared.consensus().forward_timeout;
@@ -346,7 +346,7 @@ impl<M: StateMachine> Follower<M> {
 
 		let (response_tx, response_rx) = oneshot::channel();
 		self.pending_queries.insert(request_id, response_tx);
-		shared.bonds().send_raft_to(&message, leader);
+		shared.bonds().send_raft_to(message, leader);
 
 		let expired_sender = self.expired_queries.sender().clone();
 		let query_timeout = shared.consensus().query_timeout;
@@ -546,7 +546,7 @@ impl<M: StateMachine> Follower<M> {
 			// index of our last log entry
 			let local_position = shared.storage.last();
 			shared.bonds().send_raft_to(
-				&Message::AppendEntriesResponse(AppendEntriesResponse {
+				Message::AppendEntriesResponse(AppendEntriesResponse {
 					term: self.term(),
 					vote: Vote::Granted,
 					last_log_index: local_position.index(),

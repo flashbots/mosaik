@@ -19,7 +19,7 @@ use {
 			Term,
 			config::GroupConfig,
 			raft::Message,
-			state::{WorkerRaftCommand, WorkerState},
+			state::{WorkerCommand, WorkerRaftCommand, WorkerState},
 		},
 	},
 	core::{mem::MaybeUninit, task::Poll},
@@ -396,17 +396,14 @@ where
 		self
 			.group
 			.bonds
-			.send_raft_to(&Message::StateSync(message), peer);
+			.send_raft_to(Message::StateSync(message), peer);
 	}
 
 	fn broadcast(
 		&mut self,
 		message: <M::StateSync as StateSync>::Message,
 	) -> Vec<PeerId> {
-		self
-			.group
-			.bonds
-			.broadcast_raft(&Message::StateSync(message))
+		self.group.bonds.broadcast_raft(Message::StateSync(message))
 	}
 
 	fn bonds(&self) -> Bonds<M> {
@@ -445,11 +442,17 @@ where
 	fn feed_command(&mut self, command: M::Command) -> Result<(), M::Command> {
 		if self.is_leader() {
 			let (unused, _) = oneshot::channel();
-			if let Err(SendError(WorkerRaftCommand::Feed(commands, _))) = self
-				.group
-				.raft_cmd_tx
-				.send(WorkerRaftCommand::Feed(vec![command], unused))
-			{
+			if let Err(SendError(WorkerCommand::Raft(WorkerRaftCommand::Feed(
+				commands,
+				_,
+			)))) =
+				self
+					.group
+					.cmd_tx
+					.send(WorkerCommand::Raft(WorkerRaftCommand::Feed(
+						vec![command],
+						unused,
+					))) {
 				return Err(
 					commands
 						.into_iter()

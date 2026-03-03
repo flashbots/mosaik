@@ -143,8 +143,8 @@ impl<M: StateMachine> LogReplaySync<M> {
 /// Messages exchanged on the wire between peers during the log-replay state
 /// synchronization process.
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "C: Command"))]
-pub enum LogReplaySyncMessage<C> {
+#[serde(bound = "")]
+pub enum LogReplaySyncMessage<C: Command> {
 	/// Message broadcasted by a lagging follower to all bonded peers to discover
 	/// which peers have the log entries it is missing and to coordinate the
 	/// catch-up process.

@@ -7,7 +7,9 @@ use {
 			Config,
 			GroupId,
 			Groups,
+			StateMachine,
 			error::{GroupNotFound, InvalidHandshake, Timeout},
+			raft,
 			state::GroupHandle,
 		},
 		network::{
@@ -19,7 +21,6 @@ use {
 		},
 		primitives::Short,
 	},
-	bytes::Bytes,
 	core::fmt,
 	dashmap::DashMap,
 	iroh::{
@@ -71,8 +72,9 @@ pub struct HandshakeEnd {
 
 /// Messages exchanged over an established bond connection between two group
 /// members.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum BondMessage {
+#[derive(Serialize, Deserialize)]
+#[serde(bound = "")]
+pub enum BondMessage<M: StateMachine> {
 	/// Bond-level liveness check.
 	Ping,
 
@@ -96,7 +98,7 @@ pub enum BondMessage {
 	/// These are relayed to the raft protocol handler and are not interpreted at
 	/// the bond level because at the bond level we don't care about the state
 	/// machine implementation.
-	Raft(Bytes),
+	Raft(raft::Message<M>),
 }
 
 /// Protocol Acceptor

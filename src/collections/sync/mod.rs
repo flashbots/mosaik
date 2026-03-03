@@ -150,12 +150,12 @@ pub trait Snapshot: Default + Clone + Send + 'static {
 /// This does not have to be the same type as the items contained in the state
 /// machine's state.
 pub trait SnapshotItem:
-	Clone + Send + Serialize + DeserializeOwned + 'static
+	Clone + Send + Sync + Serialize + DeserializeOwned + 'static
 {
 }
 
 impl<T> SnapshotItem for T where
-	T: Clone + Send + Serialize + DeserializeOwned + 'static
+	T: Clone + Send + Sync + Serialize + DeserializeOwned + 'static
 {
 }
 

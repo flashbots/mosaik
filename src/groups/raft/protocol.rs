@@ -10,21 +10,12 @@ use {
 		primitives::Short,
 	},
 	derive_more::{Display},
-	serde::{Deserialize, Serialize, de::DeserializeOwned},
+	serde::{Deserialize, Serialize},
 };
 
 /// Raft messages as defined in the Raft consensus algorithm.
 #[derive(Clone, Display, Serialize, Deserialize)]
-#[serde(bound(
-	deserialize = 
-		"M::Command: DeserializeOwned, 
-		M::Query: DeserializeOwned, 
-		M::QueryResult: DeserializeOwned",
-	serialize = 
-	"M::Command: Serialize, 
-	 M::Query: Serialize, 
-	 M::QueryResult: Serialize"
-))]
+#[serde(bound = "")]
 pub enum Message<M: StateMachine> {
 	/// Sent by leaders to assert authority (heartbeat) and replicate log
 	/// entries. When `entries` is empty, this is a pure heartbeat.
@@ -127,7 +118,7 @@ pub struct RequestVoteResponse {
 
 /// Log entry stored in the Raft log.
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "C: DeserializeOwned"))]
+#[serde(bound = "")]
 pub struct LogEntry<C: Command> {
 	/// Term when entry was received by leader.
 	pub term: Term,
@@ -142,7 +133,7 @@ pub struct LogEntry<C: Command> {
 /// Sent by leader to replicate log entries and as heartbeat.
 /// When `entries` is empty, this serves as a heartbeat to maintain leadership.
 #[derive(Clone, Serialize, Deserialize)]
-#[serde(bound(deserialize = "C: DeserializeOwned"))]
+#[serde(bound = "")]
 pub struct AppendEntries<C: Command> {
 	/// Leader's term.
 	pub term: Term,

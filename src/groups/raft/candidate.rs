@@ -107,9 +107,8 @@ impl<M: StateMachine> Candidate<M> {
 		);
 
 		// Broadcast the `RequestVote` message to all bonded peers in the group.
-		let requested_from = shared
-			.bonds()
-			.broadcast_raft(&Message::RequestVote(request));
+		let requested_from =
+			shared.bonds().broadcast_raft(Message::RequestVote(request));
 
 		let requested_from =
 			requested_from.into_iter().chain(once(candidate)).collect();

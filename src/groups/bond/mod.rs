@@ -97,20 +97,19 @@ pub(super) use protocol::{Acceptor, HandshakeStart};
 /// The bond id should be identical on both sides of the bond connection.
 pub type BondId = Digest;
 
-#[derive(Debug, Clone)]
-pub enum BondEvent {
+pub enum BondEvent<M: StateMachine> {
 	/// The bond connection to the remote peer has been successfully established.
 	Connected,
 
 	/// Received a raft-protocol message from the remote peer.
-	Raft(Bytes),
+	Raft(raft::Message<M>),
 
 	/// The bond connection to the remote peer has been closed. The provided
 	/// reason hints at why the bond was closed.
 	Terminated(ApplicationClose),
 }
 
-pub type BondEvents = UnboundedReceiver<BondEvent>;
+pub type BondEvents<M> = UnboundedReceiver<BondEvent<M>>;
 
 /// Handle to a bond with another peer in a group.
 pub struct Bond<M: StateMachine> {
@@ -120,7 +119,7 @@ pub struct Bond<M: StateMachine> {
 	id: BondId,
 
 	/// Channel for sending commands to the bond worker loop.
-	commands_tx: UnboundedSender<WorkerCommand>,
+	commands_tx: UnboundedSender<WorkerCommand<M>>,
 
 	/// Watch channel for observing when the bond worker has terminated and the
 	/// reason for termination.
@@ -217,7 +216,7 @@ impl<M: StateMachine> Bond<M> {
 	pub(super) async fn create(
 		group: Arc<WorkerState<M>>,
 		peer: SignedPeerEntry,
-	) -> Result<(Self, BondEvents), Error> {
+	) -> Result<(Self, BondEvents<M>), Error> {
 		// attempt to establish a new wire link to the remote peer
 		let mut link = group
 			.local
@@ -344,7 +343,7 @@ impl<M: StateMachine> Bond<M> {
 		link: Link<Groups>,
 		peer: SignedPeerEntry,
 		handshake: HandshakeStart,
-	) -> Result<(Self, BondEvents), Error> {
+	) -> Result<(Self, BondEvents<M>), Error> {
 		let mut link = link;
 
 		// verify the remote peer's proof of knowledge of the group secret
@@ -387,7 +386,7 @@ impl<M: StateMachine> Bond<M> {
 /// Internal Bond API used by the groups module.
 impl<M: StateMachine> Bond<M> {
 	/// Sends a wire message over the bond connection to the remote peer.
-	pub(super) fn send_message(&self, message: BondMessage) {
+	pub(super) fn send_message(&self, message: BondMessage<M>) {
 		let _ = self.commands_tx.send(WorkerCommand::SendMessage(message));
 	}
 
@@ -507,14 +506,14 @@ impl<M: StateMachine> Bonds<M> {
 	/// Sends a raft protocol message to all bonded peers.
 	pub(super) fn broadcast_raft(
 		&self,
-		message: &raft::Message<M>,
+		message: raft::Message<M>,
 	) -> Vec<PeerId> {
-		let message = BondMessage::Raft(serialize(&message));
+		let message = BondMessage::Raft(message);
 		self.broadcast(&message, &[])
 	}
 
 	/// Sends a raft protocol message to the specified bonded peer.
-	pub(super) fn send_raft_to(&self, message: &raft::Message<M>, to: PeerId) {
+	pub(super) fn send_raft_to(&self, message: raft::Message<M>, to: PeerId) {
 		let Some(bond) = self.get(&to) else {
 			tracing::warn!(
 				peer = %Short(to),
@@ -523,13 +522,17 @@ impl<M: StateMachine> Bonds<M> {
 			return;
 		};
 
-		bond.send_message(BondMessage::Raft(serialize(message)));
+		bond.send_message(BondMessage::Raft(message));
 	}
 
 	/// Broadcast a message to all connected peers in the group. The `except`
 	/// parameter specifies a list of peer ids to exclude from the broadcast.
 	/// Returns the list of peer ids to which the message was sent.
-	fn broadcast(&self, message: &BondMessage, except: &[PeerId]) -> Vec<PeerId> {
+	fn broadcast(
+		&self,
+		message: &BondMessage<M>,
+		except: &[PeerId],
+	) -> Vec<PeerId> {
 		// serialize once and reuse a pointer to the same encoded message bytes
 		// buffer for all bonds
 		let encoded = serialize(message);

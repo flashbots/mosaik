@@ -8,6 +8,7 @@ use {
 			StateMachine,
 			bond::{BondEvent, BondEvents, BondId, heartbeat::Heartbeat},
 			error::Timeout,
+			raft,
 			state::WorkerState,
 		},
 		network::{link::*, *},
@@ -26,12 +27,12 @@ use {
 };
 
 /// Commands sent by the `Bond` handle to the `BondWorker`.
-pub(super) enum WorkerCommand {
+pub(super) enum WorkerCommand<M: StateMachine> {
 	/// Closes the bond connection with the provided application-level reason.
 	Close(ApplicationClose),
 
 	/// Sends a wire message over the bond connection to the remote peer.
-	SendMessage(BondMessage),
+	SendMessage(BondMessage<M>),
 
 	/// Sends a raw pre-encoded message over the bond connection to the remote
 	/// peer. This is used when the same message is being sent to multiple peers
@@ -73,14 +74,14 @@ pub struct BondWorker<M: StateMachine> {
 	peer: watch::Sender<SignedPeerEntry>,
 
 	/// Channel for receiving commands to control the bond worker by the handle.
-	commands: UnboundedChannel<WorkerCommand>,
+	commands: UnboundedChannel<WorkerCommand<M>>,
 
 	/// Underlying transport link for sending and receiving messages over the
 	/// bond connection.
 	link: Link<Groups>,
 
 	/// Pending outbound messages to be sent over the bond.
-	pending_sends: UnboundedChannel<Either<BondMessage, Bytes>>,
+	pending_sends: UnboundedChannel<Either<BondMessage<M>, Bytes>>,
 
 	/// Manages heartbeats sent over the bond to ensure liveness.
 	heartbeat: Heartbeat,
@@ -91,7 +92,7 @@ pub struct BondWorker<M: StateMachine> {
 	cancel: CancellationToken,
 
 	/// Channel for sending bond events to the group managing it.
-	events_tx: UnboundedSender<BondEvent>,
+	events_tx: UnboundedSender<BondEvent<M>>,
 
 	// used to signal the bond handle that the worker has terminated
 	terminated_tx: watch::Sender<Option<ApplicationClose>>,
@@ -108,7 +109,7 @@ impl<M: StateMachine> BondWorker<M> {
 		group: Arc<WorkerState<M>>,
 		peer: SignedPeerEntry,
 		link: Link<Groups>,
-	) -> (Bond<M>, BondEvents) {
+	) -> (Bond<M>, BondEvents<M>) {
 		let mut link = link;
 		let (peer, peer_rx) = watch::channel(peer);
 		let cancel = group.cancel.child_token();
@@ -169,7 +170,7 @@ impl<M: StateMachine> BondWorker<M> {
 				}
 
 				// incoming wire message
-				result = self.link.recv::<BondMessage>(), if !self.cancel.is_cancelled() => {
+				result = self.link.recv::<BondMessage<M>>(), if !self.cancel.is_cancelled() => {
 					self.on_next_recv(result);
 				}
 
@@ -206,7 +207,7 @@ impl<M: StateMachine> BondWorker<M> {
 		self.terminated_tx.send(Some(self.close_reason)).ok();
 	}
 
-	fn on_command(&mut self, command: WorkerCommand) {
+	fn on_command(&mut self, command: WorkerCommand<M>) {
 		match command {
 			WorkerCommand::Close(reason) => {
 				self.cancel.cancel();
@@ -221,7 +222,7 @@ impl<M: StateMachine> BondWorker<M> {
 		}
 	}
 
-	async fn send_message(&mut self, message: Either<BondMessage, Bytes>) {
+	async fn send_message(&mut self, message: Either<BondMessage<M>, Bytes>) {
 		let res = match message {
 			Either::Left(msg) => self.link.send(&msg).await,
 			Either::Right(raw) => unsafe { self.link.send_raw(raw).await },
@@ -232,7 +233,7 @@ impl<M: StateMachine> BondWorker<M> {
 
 	/// Called when the next message is received from the bonded remote peer.
 	/// Implicitly resets the idle heartbeat timer.
-	fn on_next_recv(&mut self, result: RecvResult) {
+	fn on_next_recv(&mut self, result: RecvResult<M>) {
 		match result {
 			Ok(message) => {
 				self.heartbeat.reset();
@@ -307,7 +308,7 @@ impl<M: StateMachine> BondWorker<M> {
 
 	/// Called when the remote peer sends us a raft consensus message over the
 	/// bond connection.
-	fn on_raft_message(&mut self, message: Bytes) {
+	fn on_raft_message(&mut self, message: raft::Message<M>) {
 		if let Err(e) = self.events_tx.send(BondEvent::Raft(message))
 			&& !self.cancel.is_cancelled()
 		{
@@ -383,12 +384,12 @@ impl<M: StateMachine> BondWorker<M> {
 
 // commands
 impl<M: StateMachine> BondWorker<M> {
-	fn enqueue_message(&self, message: BondMessage) {
+	fn enqueue_message(&self, message: BondMessage<M>) {
 		self.pending_sends.send(Either::Left(message));
 	}
 }
 
 type SendResult = Result<usize, SendError>;
-type RecvResult = Result<BondMessage, RecvError>;
+type RecvResult<M> = Result<BondMessage<M>, RecvError>;
 
 const BOND_ID_LABEL: &str = "group_bond_id";

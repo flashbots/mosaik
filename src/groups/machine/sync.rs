@@ -268,12 +268,12 @@ pub trait SyncProviderContext<S: StateSync>: SyncContext<S> {
 }
 
 pub trait StateSyncMessage:
-	Clone + Serialize + DeserializeOwned + Send + 'static
+	Clone + Serialize + DeserializeOwned + Send + Sync + 'static
 {
 }
 
 impl<T> StateSyncMessage for T where
-	T: Clone + Serialize + DeserializeOwned + Send + 'static
+	T: Clone + Serialize + DeserializeOwned + Send + Sync + 'static
 {
 }
 
