@@ -112,7 +112,7 @@ impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
 		&self.when
 	}
 
-	/// The current version of the vector's state, which is the version of the
+	/// The current version of the map's state, which is the version of the
 	/// latest committed state.
 	pub fn version(&self) -> Version {
 		Version(self.group.committed())
@@ -121,6 +121,82 @@ impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
 
 // Mutable operations, only available to writers
 impl<K: Key, V: Value> MapWriter<K, V> {
+	/// Create a new map in writer mode.
+	///
+	/// The returned writer can be used to modify the map, and it also provides
+	/// read access to the map's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new map with default synchronization configuration. If you
+	/// want to customize the synchronization behavior (e.g. snapshot sync
+	/// configuration), use `writer_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting maps will not be able to see each other.
+	pub fn writer(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::writer_with_config(network, store_id, SyncConfig::default())
+	}
+
+	/// Create a new map in writer mode.
+	///
+	/// The returned writer can be used to modify the map, and it also provides
+	/// read access to the map's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new map with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `writer` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting maps will not be able to see each other.
+	pub fn writer_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		config: SyncConfig,
+	) -> Self {
+		Self::create::<WRITER>(network, store_id, config)
+	}
+
+	/// Create a new map in writer mode.
+	///
+	/// The returned writer can be used to modify the map, and it also provides
+	/// read access to the map's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new map with default synchronization configuration. If you
+	/// want to customize the synchronization behavior (e.g. snapshot sync
+	/// configuration), use `writer_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting maps will not be able to see each other.
+	pub fn new(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::writer(network, store_id)
+	}
+
+	/// Create a new map in writer mode.
+	///
+	/// The returned writer can be used to modify the map, and it also provides
+	/// read access to the map's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new map with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `writer` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting maps will not be able to see each other.
+	pub fn new_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		config: SyncConfig,
+	) -> Self {
+		Self::writer_with_config(network, store_id, config)
+	}
+
 	/// Discard all entries from the map.
 	///
 	/// This leaves you with an empty map, and all entries that
@@ -212,82 +288,6 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 
 // construction
 impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
-	/// Create a new map in writer mode.
-	///
-	/// The returned writer can be used to modify the map, and it also provides
-	/// read access to the map's contents. Writers can be used by multiple
-	/// nodes concurrently, and all changes made by any writer will be replicated
-	/// to all other writers and readers.
-	///
-	/// This creates a new map with default synchronization configuration. If you
-	/// want to customize the synchronization behavior (e.g. snapshot sync
-	/// configuration), use `writer_with_config` instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting maps will not be able to see each other.
-	pub fn writer(network: &Network, store_id: StoreId) -> MapWriter<K, V> {
-		Self::writer_with_config(network, store_id, SyncConfig::default())
-	}
-
-	/// Create a new map in writer mode.
-	///
-	/// The returned writer can be used to modify the map, and it also provides
-	/// read access to the map's contents. Writers can be used by multiple
-	/// nodes concurrently, and all changes made by any writer will be replicated
-	/// to all other writers and readers.
-	///
-	/// This creates a new map with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `writer` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting maps will not be able to see each other.
-	pub fn writer_with_config(
-		network: &Network,
-		store_id: StoreId,
-		config: SyncConfig,
-	) -> MapWriter<K, V> {
-		Self::create::<WRITER>(network, store_id, config)
-	}
-
-	/// Create a new map in writer mode.
-	///
-	/// The returned writer can be used to modify the map, and it also provides
-	/// read access to the map's contents. Writers can be used by multiple
-	/// nodes concurrently, and all changes made by any writer will be replicated
-	/// to all other writers and readers.
-	///
-	/// This creates a new map with default synchronization configuration. If you
-	/// want to customize the synchronization behavior (e.g. snapshot sync
-	/// configuration), use `writer_with_config` instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting maps will not be able to see each other.
-	pub fn new(network: &Network, store_id: StoreId) -> MapWriter<K, V> {
-		Self::writer(network, store_id)
-	}
-
-	/// Create a new map in writer mode.
-	///
-	/// The returned writer can be used to modify the map, and it also provides
-	/// read access to the map's contents. Writers can be used by multiple
-	/// nodes concurrently, and all changes made by any writer will be replicated
-	/// to all other writers and readers.
-	///
-	/// This creates a new map with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `writer` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting maps will not be able to see each other.
-	pub fn new_with_config(
-		network: &Network,
-		store_id: StoreId,
-		config: SyncConfig,
-	) -> MapWriter<K, V> {
-		Self::writer_with_config(network, store_id, config)
-	}
-
 	/// Create a new map in reader mode.
 	///
 	/// The returned reader provides read-only access to the map's contents.
@@ -296,7 +296,10 @@ impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
 	/// they will not be able to make any changes themselves. Readers have longer
 	/// election timeouts to reduce the likelihood of them being elected as
 	/// group leaders, which reduces latency for read operations.
-	pub fn reader(network: &Network, store_id: StoreId) -> MapReader<K, V> {
+	pub fn reader(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+	) -> MapReader<K, V> {
 		Self::reader_with_config(network, store_id, SyncConfig::default())
 	}
 
@@ -310,7 +313,7 @@ impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
 	/// group leaders, which reduces latency for read operations.
 	pub fn reader_with_config(
 		network: &Network,
-		store_id: StoreId,
+		store_id: impl Into<StoreId>,
 		config: SyncConfig,
 	) -> MapReader<K, V> {
 		Self::create::<READER>(network, store_id, config)
@@ -318,9 +321,10 @@ impl<K: Key, V: Value, const IS_WRITER: bool> Map<K, V, IS_WRITER> {
 
 	fn create<const W: bool>(
 		network: &Network,
-		store_id: StoreId,
+		store_id: impl Into<StoreId>,
 		config: SyncConfig,
 	) -> Map<K, V, W> {
+		let store_id = store_id.into();
 		let machine = MapStateMachine::new(
 			store_id, //
 			W,

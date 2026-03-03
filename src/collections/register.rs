@@ -112,6 +112,63 @@ impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
 
 // Mutable operations, only available to writers
 impl<T: Value> RegisterWriter<T> {
+	/// Create a new register in writer mode.
+	///
+	/// The returned writer can be used to modify the register, and it also
+	/// provides read access to the register's contents. Writers can be used by
+	/// multiple nodes concurrently, and all changes made by any writer will be
+	/// replicated to all other writers and readers.
+	///
+	/// This creates a new register with default synchronization configuration.
+	/// If you want to customize the synchronization behavior, use
+	/// `writer_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting registers will not be able to see each other.
+	pub fn writer(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::writer_with_config(network, store_id, SyncConfig::default())
+	}
+
+	/// Create a new register in writer mode.
+	///
+	/// The returned writer can be used to modify the register, and it also
+	/// provides read access to the register's contents. Writers can be used by
+	/// multiple nodes concurrently, and all changes made by any writer will be
+	/// replicated to all other writers and readers.
+	///
+	/// This creates a new register with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `writer` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting registers will not be able to see each other.
+	pub fn writer_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		config: SyncConfig,
+	) -> Self {
+		Self::create::<WRITER>(network, store_id, config)
+	}
+
+	/// Create a new register in writer mode.
+	///
+	/// This is an alias for the `writer` method.
+	pub fn new(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::writer(network, store_id)
+	}
+
+	/// Create a new register in writer mode with the specified sync
+	/// configuration.
+	///
+	/// This is an alias for the `writer_with_config` method.
+	pub fn new_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		config: SyncConfig,
+	) -> Self {
+		Self::writer_with_config(network, store_id, config)
+	}
+
 	/// Write a new value to the register, replacing the previous one.
 	///
 	/// Time: O(1)
@@ -167,63 +224,6 @@ impl<T: Value> RegisterWriter<T> {
 
 // construction
 impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
-	/// Create a new register in writer mode.
-	///
-	/// The returned writer can be used to modify the register, and it also
-	/// provides read access to the register's contents. Writers can be used by
-	/// multiple nodes concurrently, and all changes made by any writer will be
-	/// replicated to all other writers and readers.
-	///
-	/// This creates a new register with default synchronization configuration.
-	/// If you want to customize the synchronization behavior, use
-	/// `writer_with_config` instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting registers will not be able to see each other.
-	pub fn writer(network: &Network, store_id: StoreId) -> RegisterWriter<T> {
-		Self::writer_with_config(network, store_id, SyncConfig::default())
-	}
-
-	/// Create a new register in writer mode.
-	///
-	/// The returned writer can be used to modify the register, and it also
-	/// provides read access to the register's contents. Writers can be used by
-	/// multiple nodes concurrently, and all changes made by any writer will be
-	/// replicated to all other writers and readers.
-	///
-	/// This creates a new register with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `writer` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting registers will not be able to see each other.
-	pub fn writer_with_config(
-		network: &Network,
-		store_id: StoreId,
-		config: SyncConfig,
-	) -> RegisterWriter<T> {
-		Self::create::<WRITER>(network, store_id, config)
-	}
-
-	/// Create a new register in writer mode.
-	///
-	/// This is an alias for the `writer` method.
-	pub fn new(network: &Network, store_id: StoreId) -> RegisterWriter<T> {
-		Self::writer(network, store_id)
-	}
-
-	/// Create a new register in writer mode with the specified sync
-	/// configuration.
-	///
-	/// This is an alias for the `writer_with_config` method.
-	pub fn new_with_config(
-		network: &Network,
-		store_id: StoreId,
-		config: SyncConfig,
-	) -> RegisterWriter<T> {
-		Self::writer_with_config(network, store_id, config)
-	}
-
 	/// Create a new register in reader mode.
 	///
 	/// The returned reader provides read-only access to the register's contents.
@@ -236,7 +236,10 @@ impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
 	/// This creates a new register with the default sync configuration. If you
 	/// want to specify a custom sync configuration, use the
 	/// `reader_with_config` method instead.
-	pub fn reader(network: &Network, store_id: StoreId) -> RegisterReader<T> {
+	pub fn reader(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+	) -> RegisterReader<T> {
 		Self::reader_with_config(network, store_id, SyncConfig::default())
 	}
 
@@ -257,7 +260,7 @@ impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
 	/// and the resulting registers will not be able to see each other.
 	pub fn reader_with_config(
 		network: &Network,
-		store_id: StoreId,
+		store_id: impl Into<StoreId>,
 		config: SyncConfig,
 	) -> RegisterReader<T> {
 		Self::create::<READER>(network, store_id, config)
@@ -265,9 +268,10 @@ impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
 
 	fn create<const W: bool>(
 		network: &Network,
-		store_id: StoreId,
+		store_id: impl Into<StoreId>,
 		config: SyncConfig,
 	) -> Register<T, W> {
+		let store_id = store_id.into();
 		let machine = RegisterStateMachine::new(
 			store_id, //
 			W,

@@ -107,6 +107,72 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 
 // Mutable operations, only available to writers
 impl<T: Key> SetWriter<T> {
+	/// Create a new set in writer mode.
+	///
+	/// The returned writer can be used to modify the set, and it also provides
+	/// read access to the set's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new set with default synchronization configuration. If you
+	/// want to customize the synchronization behavior (e.g. snapshot sync
+	/// configuration), use `writer_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting sets will not be able to see each other.
+	pub fn writer(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::writer_with_config(network, store_id, SyncConfig::default())
+	}
+
+	/// Create a new set in writer mode.
+	///
+	/// The returned writer can be used to modify the set, and it also provides
+	/// read access to the set's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new set with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `writer` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting sets will not be able to see each other.
+	pub fn writer_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		config: SyncConfig,
+	) -> Self {
+		Self::create::<WRITER>(network, store_id, config)
+	}
+
+	/// Create a new set in writer mode.
+	///
+	/// This creates a new set with default synchronization configuration. If you
+	/// want to customize the synchronization behavior (e.g. snapshot sync
+	/// configuration), use `new_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting sets will not be able to see each other.
+	pub fn new(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::writer(network, store_id)
+	}
+
+	/// Create a new set in writer mode.
+	///
+	/// This creates a new set with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `new` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting sets will not be able to see each other.
+	pub fn new_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		config: SyncConfig,
+	) -> Self {
+		Self::writer_with_config(network, store_id, config)
+	}
+
 	/// Discard all elements from the set.
 	///
 	/// This leaves you with an empty set, and all elements that
@@ -153,8 +219,11 @@ impl<T: Key> SetWriter<T> {
 	/// Remove a value from the set.
 	///
 	/// Time: O(log n)
-	pub async fn remove(&self, value: &T) -> Result<Version, Error<T>> {
-		let value = value.clone();
+	pub async fn remove<Q: Borrow<T>>(
+		&self,
+		value: &Q,
+	) -> Result<Version, Error<T>> {
+		let value = value.borrow().clone();
 		self
 			.execute(SetCommand::Remove { value }, |cmd| match cmd {
 				SetCommand::Remove { value } => Error::Offline(value),
@@ -166,72 +235,6 @@ impl<T: Key> SetWriter<T> {
 
 // construction
 impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
-	/// Create a new set in writer mode.
-	///
-	/// The returned writer can be used to modify the set, and it also provides
-	/// read access to the set's contents. Writers can be used by multiple
-	/// nodes concurrently, and all changes made by any writer will be replicated
-	/// to all other writers and readers.
-	///
-	/// This creates a new set with default synchronization configuration. If you
-	/// want to customize the synchronization behavior (e.g. snapshot sync
-	/// configuration), use `writer_with_config` instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting sets will not be able to see each other.
-	pub fn writer(network: &Network, store_id: StoreId) -> SetWriter<T> {
-		Self::writer_with_config(network, store_id, SyncConfig::default())
-	}
-
-	/// Create a new set in writer mode.
-	///
-	/// The returned writer can be used to modify the set, and it also provides
-	/// read access to the set's contents. Writers can be used by multiple
-	/// nodes concurrently, and all changes made by any writer will be replicated
-	/// to all other writers and readers.
-	///
-	/// This creates a new set with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `writer` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting sets will not be able to see each other.
-	pub fn writer_with_config(
-		network: &Network,
-		store_id: StoreId,
-		config: SyncConfig,
-	) -> SetWriter<T> {
-		Self::create::<WRITER>(network, store_id, config)
-	}
-
-	/// Create a new set in writer mode.
-	///
-	/// This creates a new set with default synchronization configuration. If you
-	/// want to customize the synchronization behavior (e.g. snapshot sync
-	/// configuration), use `new_with_config` instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting sets will not be able to see each other.
-	pub fn new(network: &Network, store_id: StoreId) -> SetWriter<T> {
-		Self::writer(network, store_id)
-	}
-
-	/// Create a new set in writer mode.
-	///
-	/// This creates a new set with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `new` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting sets will not be able to see each other.
-	pub fn new_with_config(
-		network: &Network,
-		store_id: StoreId,
-		config: SyncConfig,
-	) -> SetWriter<T> {
-		Self::writer_with_config(network, store_id, config)
-	}
-
 	/// Create a new set in reader mode.
 	///
 	/// The returned reader provides read-only access to the set's contents.
@@ -240,7 +243,10 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 	/// they will not be able to make any changes themselves. Readers have longer
 	/// election timeouts to reduce the likelihood of them being elected as
 	/// group leaders, which reduces latency for read operations.
-	pub fn reader(network: &Network, store_id: StoreId) -> SetReader<T> {
+	pub fn reader(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+	) -> SetReader<T> {
 		Self::reader_with_config(network, store_id, SyncConfig::default())
 	}
 
@@ -254,7 +260,7 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 	/// group leaders, which reduces latency for read operations.
 	pub fn reader_with_config(
 		network: &Network,
-		store_id: StoreId,
+		store_id: impl Into<StoreId>,
 		config: SyncConfig,
 	) -> SetReader<T> {
 		Self::create::<READER>(network, store_id, config)
@@ -262,9 +268,10 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 
 	fn create<const W: bool>(
 		network: &Network,
-		store_id: StoreId,
+		store_id: impl Into<StoreId>,
 		config: SyncConfig,
 	) -> Set<T, W> {
+		let store_id = store_id.into();
 		let machine = SetStateMachine::new(
 			store_id, //
 			W,

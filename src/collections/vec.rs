@@ -46,6 +46,48 @@ pub struct Vec<T: Value, const IS_WRITER: bool = WRITER> {
 
 // read-only access, available to both readers and writers
 impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
+	/// Create a new vector in reader mode.
+	///
+	/// The returned reader provides read-only access to the vector's contents.
+	/// Readers can be used by multiple nodes concurrently, and they will see all
+	/// changes made by any writer. However, readers cannot modify the vector, and
+	/// they will not be able to make any changes themselves. Readers have longer
+	/// election timeouts to reduce the likelihood of them being elected as
+	/// group leaders, which reduces latency for read operations.
+	///
+	/// This creates a new vector with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `reader` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different groups ids
+	/// and the resulting vectors will not be able to see each other. Make sure
+	/// that the sync configuration used for readers is compatible with the sync
+	/// configuration used for writers, otherwise the readers will not see any of
+	/// the writers' changes.
+	pub fn reader_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		sync_config: SyncConfig,
+	) -> Self {
+		Vec::<T, READER>::create(network, store_id, sync_config)
+	}
+
+	/// Create a new vector in reader mode.
+	///
+	/// The returned reader provides read-only access to the vector's contents.
+	/// Readers can be used by multiple nodes concurrently, and they will see all
+	/// changes made by any writer. However, readers cannot modify the vector, and
+	/// they will not be able to make any changes themselves. Readers have longer
+	/// election timeouts to reduce the likelihood of them being elected as
+	/// group leaders, which reduces latency for read operations.
+	///
+	/// This creates a new vector with the default sync configuration. If you want
+	/// to specify a custom sync configuration, use the `reader_with_config`
+	/// method instead.
+	pub fn reader(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::reader_with_config(network, store_id, SyncConfig::default())
+	}
+
 	/// Get the length of a vector.
 	///
 	/// Time: O(1)
@@ -153,6 +195,62 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 
 // Mutable operations, only available to writers
 impl<T: Value> VecWriter<T> {
+	/// Create a new vector in writer mode.
+	///
+	/// The returned writer can be used to modify the vector, and it also provides
+	/// read access to the vector's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This create a new vector with the default sync configuration. If you want
+	/// to specify a custom sync configuration, use the `writer_with_sync_config`
+	/// method instead.
+	///
+	/// Note that different sync configurations will create different groups ids
+	/// and the resulting vectors will not be able to see each other.
+	pub fn writer(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::writer_with_config(network, store_id, SyncConfig::default())
+	}
+
+	/// Create a new vector in writer mode.
+	///
+	/// The returned writer can be used to modify the vector, and it also provides
+	/// read access to the vector's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This create a new vector with the specified sync configuration. If you
+	/// want to use the default sync configuration, use the `writer` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different groups ids
+	/// and the resulting vectors will not be able to see each other.
+	pub fn writer_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		sync_config: SyncConfig,
+	) -> Self {
+		Self::create::<WRITER>(network, store_id, sync_config)
+	}
+
+	/// Create a new vector in writer mode.
+	///
+	/// This is an alias for the `writer` method.
+	pub fn new(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::writer(network, store_id)
+	}
+
+	/// Create a new vector in writer mode with the specified sync configuration.
+	///
+	/// This is an alias for the `writer_with_config` method.
+	pub fn new_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		sync_config: SyncConfig,
+	) -> Self {
+		Self::writer_with_config(network, store_id, sync_config)
+	}
+
 	/// Discard all elements from the vector.
 	///
 	/// This leaves you with an empty vector, and all elements that
@@ -276,109 +374,12 @@ impl<T: Value> VecWriter<T> {
 
 // construction
 impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
-	/// Create a new vector in writer mode.
-	///
-	/// The returned writer can be used to modify the vector, and it also provides
-	/// read access to the vector's contents. Writers can be used by multiple
-	/// nodes concurrently, and all changes made by any writer will be replicated
-	/// to all other writers and readers.
-	///
-	/// This create a new vector with the default sync configuration. If you want
-	/// to specify a custom sync configuration, use the `writer_with_sync_config`
-	/// method instead.
-	///
-	/// Note that different sync configurations will create different groups ids
-	/// and the resulting vectors will not be able to see each other.
-	pub fn writer(network: &Network, store_id: UniqueId) -> VecWriter<T> {
-		Self::writer_with_config(network, store_id, SyncConfig::default())
-	}
-
-	/// Create a new vector in writer mode.
-	///
-	/// The returned writer can be used to modify the vector, and it also provides
-	/// read access to the vector's contents. Writers can be used by multiple
-	/// nodes concurrently, and all changes made by any writer will be replicated
-	/// to all other writers and readers.
-	///
-	/// This create a new vector with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `writer` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different groups ids
-	/// and the resulting vectors will not be able to see each other.
-	pub fn writer_with_config(
-		network: &Network,
-		store_id: UniqueId,
-		sync_config: SyncConfig,
-	) -> VecWriter<T> {
-		Self::create::<WRITER>(network, store_id, sync_config)
-	}
-
-	/// Create a new vector in reader mode.
-	///
-	/// The returned reader provides read-only access to the vector's contents.
-	/// Readers can be used by multiple nodes concurrently, and they will see all
-	/// changes made by any writer. However, readers cannot modify the vector, and
-	/// they will not be able to make any changes themselves. Readers have longer
-	/// election timeouts to reduce the likelihood of them being elected as
-	/// group leaders, which reduces latency for read operations.
-	///
-	/// This creates a new vector with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `reader` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different groups ids
-	/// and the resulting vectors will not be able to see each other. Make sure
-	/// that the sync configuration used for readers is compatible with the sync
-	/// configuration used for writers, otherwise the readers will not see any of
-	/// the writers' changes.
-	pub fn reader_with_config(
-		network: &Network,
-		store_id: StoreId,
-		sync_config: SyncConfig,
-	) -> VecReader<T> {
-		Self::create::<READER>(network, store_id, sync_config)
-	}
-
-	/// Create a new vector in writer mode.
-	///
-	/// This is an alias for the `writer` method.
-	pub fn new(network: &Network, store_id: StoreId) -> VecWriter<T> {
-		Self::writer(network, store_id)
-	}
-
-	/// Create a new vector in writer mode with the specified sync configuration.
-	///
-	/// This is an alias for the `writer_with_config` method.
-	pub fn new_with_config(
-		network: &Network,
-		store_id: StoreId,
-		sync_config: SyncConfig,
-	) -> VecWriter<T> {
-		Self::writer_with_config(network, store_id, sync_config)
-	}
-
-	/// Create a new vector in reader mode.
-	///
-	/// The returned reader provides read-only access to the vector's contents.
-	/// Readers can be used by multiple nodes concurrently, and they will see all
-	/// changes made by any writer. However, readers cannot modify the vector, and
-	/// they will not be able to make any changes themselves. Readers have longer
-	/// election timeouts to reduce the likelihood of them being elected as
-	/// group leaders, which reduces latency for read operations.
-	///
-	/// This creates a new vector with the default sync configuration. If you want
-	/// to specify a custom sync configuration, use the `reader_with_config`
-	/// method instead.
-	pub fn reader(network: &Network, store_id: StoreId) -> VecReader<T> {
-		Self::reader_with_config(network, store_id, SyncConfig::default())
-	}
-
 	fn create<const W: bool>(
 		network: &Network,
-		store_id: StoreId,
+		store_id: impl Into<StoreId>,
 		sync_config: SyncConfig,
 	) -> Vec<T, W> {
+		let store_id = store_id.into();
 		let machine = VecStateMachine::new(
 			store_id, //
 			W,

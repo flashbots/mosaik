@@ -230,6 +230,72 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 
 // write access, only available to writers
 impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
+	/// Create a new priority queue in writer mode.
+	///
+	/// The returned writer can be used to modify the queue, and it also provides
+	/// read access to the queue's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new priority queue with default synchronization
+	/// configuration. If you want to customize the synchronization behavior
+	/// (e.g. snapshot sync configuration), use `writer_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting queues will not be able to see each other.
+	pub fn writer(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::writer_with_config(network, store_id, SyncConfig::default())
+	}
+
+	/// Create a new priority queue in writer mode.
+	///
+	/// The returned writer can be used to modify the queue, and it also provides
+	/// read access to the queue's contents. Writers can be used by multiple
+	/// nodes concurrently, and all changes made by any writer will be replicated
+	/// to all other writers and readers.
+	///
+	/// This creates a new priority queue with the specified sync configuration.
+	/// If you want to use the default sync configuration, use the `writer`
+	/// method instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting queues will not be able to see each other.
+	pub fn writer_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		config: SyncConfig,
+	) -> Self {
+		Self::create::<WRITER>(network, store_id, config)
+	}
+
+	/// Create a new priority queue in writer mode.
+	///
+	/// This creates a new priority queue with default synchronization
+	/// configuration. If you want to customize the synchronization behavior
+	/// (e.g. snapshot sync configuration), use `new_with_config` instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting queues will not be able to see each other.
+	pub fn new(network: &Network, store_id: impl Into<StoreId>) -> Self {
+		Self::writer(network, store_id)
+	}
+
+	/// Create a new priority queue in writer mode.
+	///
+	/// This creates a new priority queue with the specified sync configuration.
+	/// If you want to use the default sync configuration, use the `new` method
+	/// instead.
+	///
+	/// Note that different sync configurations will create different group ids
+	/// and the resulting queues will not be able to see each other.
+	pub fn new_with_config(
+		network: &Network,
+		store_id: impl Into<StoreId>,
+		config: SyncConfig,
+	) -> Self {
+		Self::writer_with_config(network, store_id, config)
+	}
+
 	/// Insert an entry into the priority queue.
 	///
 	/// If the queue already contained this key, its priority and value are
@@ -409,78 +475,6 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	PriorityQueue<P, K, V, IS_WRITER>
 {
-	/// Create a new priority queue in writer mode.
-	///
-	/// The returned writer can be used to modify the queue, and it also provides
-	/// read access to the queue's contents. Writers can be used by multiple
-	/// nodes concurrently, and all changes made by any writer will be replicated
-	/// to all other writers and readers.
-	///
-	/// This creates a new priority queue with default synchronization
-	/// configuration. If you want to customize the synchronization behavior
-	/// (e.g. snapshot sync configuration), use `writer_with_config` instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting queues will not be able to see each other.
-	pub fn writer(
-		network: &Network,
-		store_id: StoreId,
-	) -> PriorityQueueWriter<P, K, V> {
-		Self::writer_with_config(network, store_id, SyncConfig::default())
-	}
-
-	/// Create a new priority queue in writer mode.
-	///
-	/// The returned writer can be used to modify the queue, and it also provides
-	/// read access to the queue's contents. Writers can be used by multiple
-	/// nodes concurrently, and all changes made by any writer will be replicated
-	/// to all other writers and readers.
-	///
-	/// This creates a new priority queue with the specified sync configuration.
-	/// If you want to use the default sync configuration, use the `writer`
-	/// method instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting queues will not be able to see each other.
-	pub fn writer_with_config(
-		network: &Network,
-		store_id: StoreId,
-		config: SyncConfig,
-	) -> PriorityQueueWriter<P, K, V> {
-		Self::create::<WRITER>(network, store_id, config)
-	}
-
-	/// Create a new priority queue in writer mode.
-	///
-	/// This creates a new priority queue with default synchronization
-	/// configuration. If you want to customize the synchronization behavior
-	/// (e.g. snapshot sync configuration), use `new_with_config` instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting queues will not be able to see each other.
-	pub fn new(
-		network: &Network,
-		store_id: StoreId,
-	) -> PriorityQueueWriter<P, K, V> {
-		Self::writer(network, store_id)
-	}
-
-	/// Create a new priority queue in writer mode.
-	///
-	/// This creates a new priority queue with the specified sync configuration.
-	/// If you want to use the default sync configuration, use the `new` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting queues will not be able to see each other.
-	pub fn new_with_config(
-		network: &Network,
-		store_id: StoreId,
-		config: SyncConfig,
-	) -> PriorityQueueWriter<P, K, V> {
-		Self::writer_with_config(network, store_id, config)
-	}
-
 	/// Create a new priority queue in reader mode.
 	///
 	/// The returned reader provides read-only access to the queue's contents.
@@ -491,7 +485,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	/// group leaders, which reduces latency for read operations.
 	pub fn reader(
 		network: &Network,
-		store_id: StoreId,
+		store_id: impl Into<StoreId>,
 	) -> PriorityQueueReader<P, K, V> {
 		Self::reader_with_config(network, store_id, SyncConfig::default())
 	}
@@ -506,7 +500,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	/// group leaders, which reduces latency for read operations.
 	pub fn reader_with_config(
 		network: &Network,
-		store_id: StoreId,
+		store_id: impl Into<StoreId>,
 		config: SyncConfig,
 	) -> PriorityQueueReader<P, K, V> {
 		Self::create::<READER>(network, store_id, config)
@@ -514,9 +508,10 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 
 	fn create<const W: bool>(
 		network: &Network,
-		store_id: StoreId,
+		store_id: impl Into<StoreId>,
 		config: SyncConfig,
 	) -> PriorityQueue<P, K, V, W> {
+		let store_id = store_id.into();
 		let machine = DepqStateMachine::new(
 			store_id, //
 			W,
