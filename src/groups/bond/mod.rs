@@ -518,6 +518,8 @@ impl<M: StateMachine> Bonds<M> {
 	}
 
 	/// Sends a raft protocol message to all bonded peers.
+	///
+	/// Fails if the message serialization fail.
 	pub(super) fn broadcast_raft(
 		&self,
 		message: raft::Message<M>,
@@ -527,6 +529,8 @@ impl<M: StateMachine> Bonds<M> {
 	}
 
 	/// Sends a raft protocol message to the specified bonded peer.
+	///
+	/// Fails if the message serialization fail.
 	pub(super) fn send_raft_to(
 		&self,
 		message: raft::Message<M>,

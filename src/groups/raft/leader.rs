@@ -417,11 +417,6 @@ impl<M: StateMachine> Leader<M> {
 		// signal log update to public api observers
 		shared.update_log_pos(shared.storage.last());
 
-		// always vote for our own `AppendEntries` messages. If we are the
-		// only voter in the committee, this will immediately commit the new log
-		// entries.
-		self.record_vote(shared.local_id(), prev_pos.index() + count, shared);
-
 		let message = Message::AppendEntries(AppendEntries {
 			term: self.term,
 			leader_commit: shared.committed().index(),
@@ -437,19 +432,27 @@ impl<M: StateMachine> Leader<M> {
 		});
 
 		// broadcast the new log entries to all followers.
-		let Ok(followers) = shared.bonds().broadcast_raft(message) else {
-			// failed to serialize commands, revert the log append and discard those
-			// commands
-			shared.storage.truncate(prev_pos.index());
-			tracing::warn!(
-				range = %Pretty(&(prev_pos.index().next()..=prev_pos.index() + count)),
-				group = %Short(shared.group_id()),
-				network = %Short(shared.network_id()),
-				"failed to serialize client commands for replication, discarding"
-			);
-
+		let Ok(followers) =
+			shared.bonds().broadcast_raft(message).inspect_err(|e| {
+				tracing::warn!(
+					error = %e,
+					range = %Pretty(&(prev_pos.index().next()..=prev_pos.index() + count)),
+					group = %Short(shared.group_id()),
+					network = %Short(shared.network_id()),
+					"unable to serialize log entries for replication; reverting and dropping batch"
+				);
+			})
+		else {
+			// failed to serialize commands, revert the log to the previous position 
+			// before the failed batch append and drop the batch of commands.
+			shared.storage.truncate(prev_pos.index().next());
 			return Poll::Ready(());
 		};
+
+		// always vote for our own `AppendEntries` messages. If we are the
+		// only voter in the committee, this will immediately commit the new log
+		// entries.
+		self.record_vote(shared.local_id(), prev_pos.index() + count, shared);
 
 		if !followers.is_empty() {
 			let range = prev_pos.index().next()..=prev_pos.index() + count;
