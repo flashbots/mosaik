@@ -25,7 +25,7 @@ use {
 			Cursor,
 			StateMachine,
 		},
-		primitives::EncodeError,
+		primitives::{EncodeError, Encoded},
 	},
 	core::{
 		any::type_name,
@@ -313,16 +313,16 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		self
 			.execute(
 				DepqCommand::Insert {
-					priority,
-					key,
-					value,
+					priority: Encoded(priority),
+					key: Encoded(key),
+					value: Encoded(value),
 				},
 				|cmd| match cmd {
 					DepqCommand::Insert {
 						priority,
 						key,
 						value,
-					} => Error::Offline((priority, key, value)),
+					} => Error::Offline((priority.0, key.0, value.0)),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
@@ -330,7 +330,7 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 						priority,
 						key,
 						value,
-					} => Error::Encoding((priority, key, value), e),
+					} => Error::Encoding((priority.0, key.0, value.0), e),
 					_ => unreachable!(),
 				},
 			)
@@ -345,7 +345,10 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 	where
 		I: IntoIterator<Item = (P, K, V)>,
 	{
-		let entries: Vec<(P, K, V)> = items.into_iter().collect();
+		let entries: Vec<(Encoded<P>, Encoded<K>, Encoded<V>)> = items
+			.into_iter()
+			.map(|(p, k, v)| (Encoded(p), Encoded(k), Encoded(v)))
+			.collect();
 
 		if entries.is_empty() {
 			return Ok(Version(self.group.committed()));
@@ -355,11 +358,22 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 			.execute(
 				DepqCommand::Extend { entries },
 				|cmd| match cmd {
-					DepqCommand::Extend { entries } => Error::Offline(entries),
+					DepqCommand::Extend { entries } => Error::Offline(
+						entries
+							.into_iter()
+							.map(|(p, k, v)| (p.0, k.0, v.0))
+							.collect(),
+					),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					DepqCommand::Extend { entries } => Error::Encoding(entries, e),
+					DepqCommand::Extend { entries } => Error::Encoding(
+						entries
+							.into_iter()
+							.map(|(p, k, v)| (p.0, k.0, v.0))
+							.collect(),
+						e,
+					),
 					_ => unreachable!(),
 				},
 			)
@@ -380,15 +394,15 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		self
 			.execute(
 				DepqCommand::UpdatePriority {
-					key,
-					priority: new_priority,
+					key: Encoded(key),
+					priority: Encoded(new_priority),
 				},
 				|cmd| match cmd {
-					DepqCommand::UpdatePriority { key, .. } => Error::Offline(key),
+					DepqCommand::UpdatePriority { key, .. } => Error::Offline(key.0),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					DepqCommand::UpdatePriority { key, .. } => Error::Encoding(key, e),
+					DepqCommand::UpdatePriority { key, .. } => Error::Encoding(key.0, e),
 					_ => unreachable!(),
 				},
 			)
@@ -409,15 +423,15 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		self
 			.execute(
 				DepqCommand::UpdateValue {
-					key,
-					value: new_value,
+					key: Encoded(key),
+					value: Encoded(new_value),
 				},
 				|cmd| match cmd {
-					DepqCommand::UpdateValue { key, .. } => Error::Offline(key),
+					DepqCommand::UpdateValue { key, .. } => Error::Offline(key.0),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					DepqCommand::UpdateValue { key, .. } => Error::Encoding(key, e),
+					DepqCommand::UpdateValue { key, .. } => Error::Encoding(key.0, e),
 					_ => unreachable!(),
 				},
 			)
@@ -440,14 +454,20 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		let key = key.clone();
 		self
 			.execute(
-				DepqCommand::CompareExchangeValue { key, expected, new },
+				DepqCommand::CompareExchangeValue {
+					key: Encoded(key),
+					expected: Encoded(expected),
+					new: new.map(Encoded),
+				},
 				|cmd| match cmd {
-					DepqCommand::CompareExchangeValue { key, .. } => Error::Offline(key),
+					DepqCommand::CompareExchangeValue { key, .. } => {
+						Error::Offline(key.0)
+					}
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
 					DepqCommand::CompareExchangeValue { key, .. } => {
-						Error::Encoding(key, e)
+						Error::Encoding(key.0, e)
 					}
 					_ => unreachable!(),
 				},
@@ -476,13 +496,13 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		let key = key.clone();
 		self
 			.execute(
-				DepqCommand::Remove { key },
+				DepqCommand::Remove { key: Encoded(key) },
 				|cmd| match cmd {
-					DepqCommand::Remove { key } => Error::Offline(key),
+					DepqCommand::Remove { key } => Error::Offline(key.0),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					DepqCommand::Remove { key } => Error::Encoding(key, e),
+					DepqCommand::Remove { key } => Error::Encoding(key.0, e),
 					_ => unreachable!(),
 				},
 			)
@@ -503,8 +523,9 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		&self,
 		range: impl RangeBounds<P>,
 	) -> Result<Version, Error<()>> {
-		let start = SerBound::from_std(range.start_bound());
-		let end = SerBound::from_std(range.end_bound());
+		let start =
+			SerBound::from_std(range.start_bound().map(|r| Encoded(r.clone())));
+		let end = SerBound::from_std(range.end_bound().map(|r| Encoded(r.clone())));
 		self
 			.execute(
 				DepqCommand::RemoveRange { start, end },
@@ -721,43 +742,47 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 					key,
 					value,
 				} => {
-					self.apply_insert(priority, key, value);
+					self.apply_insert(priority.0, key.0, value.0);
 				}
 				DepqCommand::CompareExchangeValue { key, expected, new } => {
 					if let Some((p, old_v)) = self.data.by_key.get(&key) {
-						if *old_v != expected {
+						if *old_v != expected.0 {
 							continue;
 						}
 						let p = p.clone();
 						if let Some(new) = new {
-							self.apply_insert(p, key, new);
+							self.apply_insert(p, key.0, new.0);
 						} else {
-							self.apply_remove(&key);
+							self.apply_remove(&key.0);
 						}
 					}
 				}
 				DepqCommand::Extend { entries } => {
 					for (priority, key, value) in entries {
-						self.apply_insert(priority, key, value);
+						self.apply_insert(priority.0, key.0, value.0);
 					}
 				}
 				DepqCommand::UpdatePriority { key, priority } => {
 					if let Some((_, old_v)) = self.data.by_key.get(&key) {
 						let old_v = old_v.clone();
-						self.apply_insert(priority, key, old_v);
+						self.apply_insert(priority.0, key.0, old_v);
 					}
 				}
 				DepqCommand::UpdateValue { key, value } => {
 					if let Some((p, _)) = self.data.by_key.get(&key) {
 						let p = p.clone();
-						self.apply_insert(p, key, value);
+						self.apply_insert(p, key.0, value.0);
 					}
 				}
 				DepqCommand::Remove { key } => {
-					self.apply_remove(&key);
+					self.apply_remove(&key.0);
 				}
 				DepqCommand::RemoveRange { start, end } => {
-					let range = (start.to_std(), end.to_std());
+					let range = (
+						start.to_std().map(|r| r.0.clone()),
+						end.to_std().map(|r| r.0.clone()),
+					);
+
 					let keys_to_remove: std::vec::Vec<K> = self
 						.data
 						.by_key
@@ -765,6 +790,7 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 						.filter(|(_, (p, _))| range.contains(p))
 						.map(|(k, _)| k.clone())
 						.collect();
+
 					for key in keys_to_remove {
 						self.apply_remove(&key);
 					}
@@ -850,32 +876,32 @@ impl<P: OrderedKey, K: Key, V: Value> SnapshotStateMachine
 enum DepqCommand<P, K, V> {
 	Clear,
 	Insert {
-		priority: P,
-		key: K,
-		value: V,
+		priority: Encoded<P>,
+		key: Encoded<K>,
+		value: Encoded<V>,
 	},
 	Extend {
-		entries: Vec<(P, K, V)>,
+		entries: Vec<(Encoded<P>, Encoded<K>, Encoded<V>)>,
 	},
 	UpdatePriority {
-		key: K,
-		priority: P,
+		key: Encoded<K>,
+		priority: Encoded<P>,
 	},
 	UpdateValue {
-		key: K,
-		value: V,
+		key: Encoded<K>,
+		value: Encoded<V>,
 	},
 	CompareExchangeValue {
-		key: K,
-		expected: V,
-		new: Option<V>,
+		key: Encoded<K>,
+		expected: Encoded<V>,
+		new: Option<Encoded<V>>,
 	},
 	Remove {
-		key: K,
+		key: Encoded<K>,
 	},
 	RemoveRange {
-		start: SerBound<P>,
-		end: SerBound<P>,
+		start: SerBound<Encoded<P>>,
+		end: SerBound<Encoded<P>>,
 	},
 	TakeSnapshot(SnapshotRequest),
 }
@@ -890,10 +916,10 @@ enum SerBound<T> {
 }
 
 impl<T: Clone> SerBound<T> {
-	fn from_std(b: core::ops::Bound<&T>) -> Self {
+	fn from_std(b: core::ops::Bound<T>) -> Self {
 		match b {
-			core::ops::Bound::Included(v) => Self::Included(v.clone()),
-			core::ops::Bound::Excluded(v) => Self::Excluded(v.clone()),
+			core::ops::Bound::Included(v) => Self::Included(v),
+			core::ops::Bound::Excluded(v) => Self::Excluded(v),
 			core::ops::Bound::Unbounded => Self::Unbounded,
 		}
 	}
@@ -935,7 +961,7 @@ impl<P: OrderedKey, K: Key, V: Value> Default
 impl<P: OrderedKey, K: Key, V: Value> Snapshot
 	for PriorityQueueSnapshot<P, K, V>
 {
-	type Item = (P, K, V);
+	type Item = (Encoded<P>, Encoded<K>, Encoded<V>);
 
 	fn len(&self) -> u64 {
 		self.by_key.len() as u64
@@ -952,8 +978,9 @@ impl<P: OrderedKey, K: Key, V: Value> Snapshot
 		Some(
 			self
 				.by_key
-				.iter()
-				.map(|(k, (p, v))| (p.clone(), k.clone(), v.clone()))
+				.clone()
+				.into_iter()
+				.map(|(k, (p, v))| (Encoded(p), Encoded(k), Encoded(v)))
 				.skip(range.start as usize)
 				.take((range.end - range.start) as usize),
 		)
@@ -961,6 +988,8 @@ impl<P: OrderedKey, K: Key, V: Value> Snapshot
 
 	fn append(&mut self, items: impl IntoIterator<Item = Self::Item>) {
 		for (priority, key, value) in items {
+			let (priority, key, value) = (priority.0, key.0, value.0);
+
 			self
 				.by_key
 				.insert(key.clone(), (priority.clone(), value.clone()));

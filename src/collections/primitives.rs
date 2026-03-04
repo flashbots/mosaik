@@ -1,5 +1,5 @@
 use {
-	crate::UniqueId,
+	crate::{Datum, UniqueId},
 	core::{fmt::Debug, hash::Hash},
 	derive_more::{Deref, Display},
 	serde::{Serialize, de::DeserializeOwned},
@@ -27,43 +27,13 @@ pub type StoreId = UniqueId;
 pub struct Version(pub crate::groups::Index);
 
 /// Type requirements for values stored in mosaik collections.
-pub trait Value:
-	Clone + Serialize + DeserializeOwned + PartialEq + Send + Sync + 'static
-{
-}
-
-impl<T> Value for T where
-	T: Clone + Serialize + DeserializeOwned + PartialEq + Send + Sync + 'static
-{
-}
+pub trait Value: Clone + Datum + PartialEq + Sync {}
+impl<T> Value for T where T: Clone + Datum + PartialEq + Sync {}
 
 /// Type requirements for keys in mosaik collections that support key-value
 /// pairs, such as `Map` or `Set` (key, ()).
-pub trait Key:
-	Clone
-	+ Serialize
-	+ DeserializeOwned
-	+ Hash
-	+ PartialEq
-	+ Eq
-	+ Send
-	+ Sync
-	+ 'static
-{
-}
-
-impl<T> Key for T where
-	T: Clone
-		+ Serialize
-		+ DeserializeOwned
-		+ Hash
-		+ PartialEq
-		+ Eq
-		+ Send
-		+ Sync
-		+ 'static
-{
-}
+pub trait Key: Clone + Datum + Hash + PartialEq + Eq + Sync {}
+impl<T> Key for T where T: Clone + Datum + Hash + PartialEq + Eq + Sync {}
 
 pub trait OrderedKey: Key + Ord {}
 impl<T: Key + Ord> OrderedKey for T {}

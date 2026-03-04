@@ -25,7 +25,7 @@ use {
 			Cursor,
 			StateMachine,
 		},
-		primitives::EncodeError,
+		primitives::{EncodeError, Encoded},
 	},
 	core::{
 		any::type_name,
@@ -174,15 +174,16 @@ impl<T: Value> RegisterWriter<T> {
 	///
 	/// Time: O(1)
 	pub async fn write(&self, value: T) -> Result<Version, Error<T>> {
+		let value = Encoded(value);
 		self
 			.execute(
 				RegisterCommand::Write { value },
 				|cmd| match cmd {
-					RegisterCommand::Write { value } => Error::Offline(value),
+					RegisterCommand::Write { value } => Error::Offline(value.0),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					RegisterCommand::Write { value } => Error::Encoding(value, e),
+					RegisterCommand::Write { value } => Error::Encoding(value.0, e),
 					_ => unreachable!(),
 				},
 			)
@@ -206,18 +207,21 @@ impl<T: Value> RegisterWriter<T> {
 		current: Option<T>,
 		new: Option<T>,
 	) -> Result<Version, Error<(Option<T>, Option<T>)>> {
+		let current = current.map(Encoded);
+		let new = new.map(Encoded);
+
 		self
 			.execute(
 				RegisterCommand::CompareExchange { current, new },
 				|cmd| match cmd {
 					RegisterCommand::CompareExchange { current, new } => {
-						Error::Offline((current, new))
+						Error::Offline((current.map(|v| v.0), new.map(|v| v.0)))
 					}
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
 					RegisterCommand::CompareExchange { current, new } => {
-						Error::Encoding((current, new), e)
+						Error::Encoding((current.map(|v| v.0), new.map(|v| v.0)), e)
 					}
 					_ => unreachable!(),
 				},
@@ -393,11 +397,11 @@ impl<T: Value> StateMachine for RegisterStateMachine<T> {
 		for command in commands {
 			match command {
 				RegisterCommand::Write { value } => {
-					self.data = Some(value);
+					self.data = Some(value.0);
 				}
 				RegisterCommand::CompareExchange { current, new } => {
-					if self.data == current {
-						self.data = new;
+					if self.data == current.map(|v| v.0) {
+						self.data = new.map(|v| v.0);
 					}
 				}
 				RegisterCommand::Clear => {
@@ -466,12 +470,12 @@ impl<T: Value> SnapshotStateMachine for RegisterStateMachine<T> {
 
 	fn create_snapshot(&self) -> Self::Snapshot {
 		RegisterSnapshot {
-			data: self.data.clone(),
+			data: self.data.clone().map(Encoded),
 		}
 	}
 
 	fn install_snapshot(&mut self, snapshot: Self::Snapshot) {
-		self.data = snapshot.data;
+		self.data = snapshot.data.map(|d| d.0);
 		self.latest.send_replace(self.data.clone());
 	}
 }
@@ -479,15 +483,20 @@ impl<T: Value> SnapshotStateMachine for RegisterStateMachine<T> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "T: Value")]
 enum RegisterCommand<T> {
-	Write { value: T },
-	CompareExchange { current: Option<T>, new: Option<T> },
+	Write {
+		value: Encoded<T>,
+	},
+	CompareExchange {
+		current: Option<Encoded<T>>,
+		new: Option<Encoded<T>>,
+	},
 	Clear,
 	TakeSnapshot(SnapshotRequest),
 }
 
 #[derive(Debug, Clone)]
 pub struct RegisterSnapshot<T: Value> {
-	data: Option<T>,
+	data: Option<Encoded<T>>,
 }
 
 impl<T: Value> Default for RegisterSnapshot<T> {
@@ -497,7 +506,7 @@ impl<T: Value> Default for RegisterSnapshot<T> {
 }
 
 impl<T: Value> Snapshot for RegisterSnapshot<T> {
-	type Item = T;
+	type Item = Encoded<T>;
 
 	fn len(&self) -> u64 {
 		u64::from(self.data.is_some())

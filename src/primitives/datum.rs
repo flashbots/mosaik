@@ -52,7 +52,7 @@ where
 /// Use this to wrap `Datum` types in structs that derive
 /// `Serialize`/`Deserialize`, so that standard serde containers (`Vec`, tuples,
 /// etc.) work automatically.
-#[derive(Clone, Debug, Deref, DerefMut, PartialEq, Eq)]
+#[derive(Clone, Debug, Deref, DerefMut, PartialEq, Eq, Hash)]
 pub struct Encoded<T>(pub T);
 
 impl<T: Datum> From<T> for Encoded<T> {

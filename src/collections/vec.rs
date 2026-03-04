@@ -19,7 +19,7 @@ use {
 		PeerId,
 		UniqueId,
 		groups::*,
-		primitives::{EncodeError, Short, UnboundedChannel},
+		primitives::{EncodeError, Encoded, Short, UnboundedChannel},
 	},
 	chrono::{DateTime, Utc},
 	core::{any::type_name, cmp::Ordering, ops::Range},
@@ -269,15 +269,16 @@ impl<T: Value> VecWriter<T> {
 	///
 	/// Time: O(1)*
 	pub async fn push_back(&self, value: T) -> Result<Version, Error<T>> {
+		let value = Encoded(value);
 		self
 			.execute(
 				VecCommand::PushBack { value },
 				|cmd| match cmd {
-					VecCommand::PushBack { value } => Error::Offline(value),
+					VecCommand::PushBack { value } => Error::Offline(value.0),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					VecCommand::PushBack { value } => Error::Encoding(value, e),
+					VecCommand::PushBack { value } => Error::Encoding(value.0, e),
 					_ => unreachable!(),
 				},
 			)
@@ -288,15 +289,16 @@ impl<T: Value> VecWriter<T> {
 	///
 	/// Time: O(1)*
 	pub async fn push_front(&self, value: T) -> Result<Version, Error<T>> {
+		let value = Encoded(value);
 		self
 			.execute(
 				VecCommand::PushFront { value },
 				|cmd| match cmd {
-					VecCommand::PushFront { value } => Error::Offline(value),
+					VecCommand::PushFront { value } => Error::Offline(value.0),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					VecCommand::PushFront { value } => Error::Encoding(value, e),
+					VecCommand::PushFront { value } => Error::Encoding(value.0, e),
 					_ => unreachable!(),
 				},
 			)
@@ -323,15 +325,16 @@ impl<T: Value> VecWriter<T> {
 		index: u64,
 		value: T,
 	) -> Result<Version, Error<T>> {
+		let value = Encoded(value);
 		self
 			.execute(
 				VecCommand::Insert { index, value },
 				|cmd| match cmd {
-					VecCommand::Insert { value, .. } => Error::Offline(value),
+					VecCommand::Insert { value, .. } => Error::Offline(value.0),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					VecCommand::Insert { value, .. } => Error::Encoding(value, e),
+					VecCommand::Insert { value, .. } => Error::Encoding(value.0, e),
 					_ => unreachable!(),
 				},
 			)
@@ -343,7 +346,8 @@ impl<T: Value> VecWriter<T> {
 		&self,
 		entries: impl IntoIterator<Item = T>,
 	) -> Result<Version, Error<std::vec::Vec<T>>> {
-		let entries: std::vec::Vec<T> = entries.into_iter().collect();
+		let entries: std::vec::Vec<Encoded<T>> =
+			entries.into_iter().map(Encoded).collect();
 
 		if entries.is_empty() {
 			return Ok(Version(self.group.committed()));
@@ -353,11 +357,15 @@ impl<T: Value> VecWriter<T> {
 			.execute(
 				VecCommand::Extend { entries },
 				|cmd| match cmd {
-					VecCommand::Extend { entries } => Error::Offline(entries),
+					VecCommand::Extend { entries } => {
+						Error::Offline(entries.into_iter().map(|e| e.0).collect())
+					}
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					VecCommand::Extend { entries } => Error::Encoding(entries, e),
+					VecCommand::Extend { entries } => {
+						Error::Encoding(entries.into_iter().map(|e| e.0).collect(), e)
+					}
 					_ => unreachable!(),
 				},
 			)
@@ -545,13 +553,13 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 					}
 				}
 				VecCommand::Insert { index, value } => {
-					self.data.insert(index as usize, value);
+					self.data.insert(index as usize, value.0);
 				}
 				VecCommand::PushBack { value } => {
-					self.data.push_back(value);
+					self.data.push_back(value.0);
 				}
 				VecCommand::PushFront { value } => {
-					self.data.push_front(value);
+					self.data.push_front(value.0);
 				}
 				VecCommand::PopBack => {
 					self.data.pop_back();
@@ -570,7 +578,7 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 					self.data.truncate(len);
 				}
 				VecCommand::Extend { entries } => {
-					self.data.extend(entries);
+					self.data.extend(entries.into_iter().map(|e| e.0));
 				}
 				VecCommand::TakeSnapshot(request) => {
 					if request.requested_by != self.local_id
@@ -650,14 +658,14 @@ impl<T: Value> SnapshotStateMachine for VecStateMachine<T> {
 enum VecCommand<T> {
 	Clear,
 	Swap { i: u64, j: u64 },
-	Insert { index: u64, value: T },
-	PushBack { value: T },
-	PushFront { value: T },
+	Insert { index: u64, value: Encoded<T> },
+	PushBack { value: Encoded<T> },
+	PushFront { value: Encoded<T> },
 	PopBack,
 	PopFront,
 	Remove { index: u64 },
 	Truncate { len: u64 },
-	Extend { entries: std::vec::Vec<T> },
+	Extend { entries: std::vec::Vec<Encoded<T>> },
 	TakeSnapshot(SnapshotRequest),
 }
 
@@ -667,7 +675,7 @@ pub struct VecSnapshot<T: Value> {
 }
 
 impl<T: Value> Snapshot for VecSnapshot<T> {
-	type Item = T;
+	type Item = Encoded<T>;
 
 	fn len(&self) -> u64 {
 		self.data.len() as u64
@@ -684,11 +692,11 @@ impl<T: Value> Snapshot for VecSnapshot<T> {
 			return None;
 		}
 
-		Some(self.data.skip(skip).take(take).into_iter())
+		Some(self.data.skip(skip).take(take).into_iter().map(Encoded))
 	}
 
 	fn append(&mut self, items: impl IntoIterator<Item = Self::Item>) {
-		self.data.extend(items);
+		self.data.extend(items.into_iter().map(|e| e.0));
 	}
 }
 

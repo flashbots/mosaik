@@ -26,7 +26,7 @@ use {
 			LogReplaySync,
 			StateMachine,
 		},
-		primitives::EncodeError,
+		primitives::{EncodeError, Encoded},
 	},
 	core::{any::type_name, borrow::Borrow, hash::Hash},
 	serde::{Deserialize, Serialize},
@@ -222,15 +222,20 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 		key: K,
 		value: V,
 	) -> Result<Version, Error<(K, V)>> {
+		let key = Encoded(key);
+		let value = Encoded(value);
+
 		self
 			.execute(
 				MapCommand::Insert { key, value },
 				|cmd| match cmd {
-					MapCommand::Insert { key, value } => Error::Offline((key, value)),
+					MapCommand::Insert { key, value } => Error::Offline((key.0, value.0)),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					MapCommand::Insert { key, value } => Error::Encoding((key, value), e),
+					MapCommand::Insert { key, value } => {
+						Error::Encoding((key.0, value.0), e)
+					}
 					_ => unreachable!(),
 				},
 			)
@@ -253,18 +258,22 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 		expected: Option<V>,
 		new: Option<V>,
 	) -> Result<Version, Error<(K, Option<V>, Option<V>)>> {
+		let key = Encoded(key);
+		let expected = expected.map(Encoded);
+		let new = new.map(Encoded);
+
 		self
 			.execute(
 				MapCommand::CompareExchange { key, expected, new },
 				|cmd| match cmd {
 					MapCommand::CompareExchange { key, expected, new } => {
-						Error::Offline((key, expected, new))
+						Error::Offline((key.0, expected.map(|v| v.0), new.map(|v| v.0)))
 					}
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
 					MapCommand::CompareExchange { key, expected, new } => {
-						Error::Encoding((key, expected, new), e)
+						Error::Encoding((key.0, expected.map(|v| v.0), new.map(|v| v.0)), e)
 					}
 					_ => unreachable!(),
 				},
@@ -277,7 +286,10 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 		&self,
 		entries: impl IntoIterator<Item = (K, V)>,
 	) -> Result<Version, Error<Vec<(K, V)>>> {
-		let entries: Vec<(K, V)> = entries.into_iter().collect();
+		let entries: Vec<(Encoded<K>, Encoded<V>)> = entries
+			.into_iter()
+			.map(|(k, v)| (Encoded(k), Encoded(v)))
+			.collect();
 
 		if entries.is_empty() {
 			return Ok(Version(self.group.committed()));
@@ -287,11 +299,16 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 			.execute(
 				MapCommand::Extend { entries },
 				|cmd| match cmd {
-					MapCommand::Extend { entries } => Error::Offline(entries),
+					MapCommand::Extend { entries } => Error::Offline(
+						entries.into_iter().map(|(k, v)| (k.0, v.0)).collect(),
+					),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					MapCommand::Extend { entries } => Error::Encoding(entries, e),
+					MapCommand::Extend { entries } => Error::Encoding(
+						entries.into_iter().map(|(k, v)| (k.0, v.0)).collect(),
+						e,
+					),
 					_ => unreachable!(),
 				},
 			)
@@ -302,16 +319,16 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 	///
 	/// Time: O(log n)
 	pub async fn remove(&self, key: &K) -> Result<Version, Error<K>> {
-		let key = key.clone();
+		let key = Encoded(key.clone());
 		self
 			.execute(
 				MapCommand::Remove { key },
 				|cmd| match cmd {
-					MapCommand::Remove { key } => Error::Offline(key),
+					MapCommand::Remove { key } => Error::Offline(key.0),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					MapCommand::Remove { key } => Error::Encoding(key, e),
+					MapCommand::Remove { key } => Error::Encoding(key.0, e),
 					_ => unreachable!(),
 				},
 			)
@@ -485,31 +502,31 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 					self.data.clear();
 				}
 				MapCommand::Insert { key, value } => {
-					self.data.insert(key, value);
+					self.data.insert(key.0, value.0);
 				}
 				MapCommand::CompareExchange { key, expected, new } => {
-					match (self.data.get(&key), expected) {
-						(Some(current), Some(expected)) if current == &expected => {
+					match (self.data.get(&key.0), expected) {
+						(Some(current), Some(expected)) if current == &expected.0 => {
 							if let Some(new) = new {
-								self.data.insert(key, new);
+								self.data.insert(key.0, new.0);
 							} else {
-								self.data.remove(&key);
+								self.data.remove(&key.0);
 							}
 						}
 						(None, None) => {
 							if let Some(new) = new {
-								self.data.insert(key, new);
+								self.data.insert(key.0, new.0);
 							}
 						}
 						_ => {}
 					}
 				}
 				MapCommand::Remove { key } => {
-					self.data.remove(&key);
+					self.data.remove(&key.0);
 				}
 				MapCommand::Extend { entries } => {
 					for (key, value) in entries {
-						self.data.insert(key, value);
+						self.data.insert(key.0, value.0);
 					}
 				}
 				MapCommand::TakeSnapshot(request) => {
@@ -575,19 +592,19 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 enum MapCommand<K, V> {
 	Clear,
 	Insert {
-		key: K,
-		value: V,
+		key: Encoded<K>,
+		value: Encoded<V>,
 	},
 	CompareExchange {
-		key: K,
-		expected: Option<V>,
-		new: Option<V>,
+		key: Encoded<K>,
+		expected: Option<Encoded<V>>,
+		new: Option<Encoded<V>>,
 	},
 	Remove {
-		key: K,
+		key: Encoded<K>,
 	},
 	Extend {
-		entries: Vec<(K, V)>,
+		entries: Vec<(Encoded<K>, Encoded<V>)>,
 	},
 	TakeSnapshot(SnapshotRequest),
 }
@@ -606,7 +623,7 @@ impl<K: Key, V: Value> Default for MapSnapshot<K, V> {
 }
 
 impl<K: Key, V: Value> Snapshot for MapSnapshot<K, V> {
-	type Item = (K, V);
+	type Item = (Encoded<K>, Encoded<V>);
 
 	fn len(&self) -> u64 {
 		self.data.len() as u64
@@ -623,14 +640,15 @@ impl<K: Key, V: Value> Snapshot for MapSnapshot<K, V> {
 		Some(
 			self
 				.data
-				.iter()
+				.clone()
+				.into_iter()
 				.skip(range.start as usize)
 				.take((range.end - range.start) as usize)
-				.map(|(k, v)| (k.clone(), v.clone())),
+				.map(|(k, v)| (Encoded(k), Encoded(v))),
 		)
 	}
 
 	fn append(&mut self, items: impl IntoIterator<Item = Self::Item>) {
-		self.data.extend(items);
+		self.data.extend(items.into_iter().map(|(k, v)| (k.0, v.0)));
 	}
 }

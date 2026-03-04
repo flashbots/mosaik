@@ -25,7 +25,7 @@ use {
 			Cursor,
 			StateMachine,
 		},
-		primitives::EncodeError,
+		primitives::{EncodeError, Encoded},
 	},
 	core::{any::type_name, borrow::Borrow, hash::Hash, ops::Range},
 	serde::{Deserialize, Serialize},
@@ -194,15 +194,16 @@ impl<T: Key> SetWriter<T> {
 	///
 	/// Time: O(log n)
 	pub async fn insert(&self, value: T) -> Result<Version, Error<T>> {
+		let value = Encoded(value);
 		self
 			.execute(
 				SetCommand::Insert { value },
 				|cmd| match cmd {
-					SetCommand::Insert { value } => Error::Offline(value),
+					SetCommand::Insert { value } => Error::Offline(value.0),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					SetCommand::Insert { value } => Error::Encoding(value, e),
+					SetCommand::Insert { value } => Error::Encoding(value.0, e),
 					_ => unreachable!(),
 				},
 			)
@@ -214,7 +215,7 @@ impl<T: Key> SetWriter<T> {
 		&self,
 		values: impl IntoIterator<Item = T>,
 	) -> Result<Version, Error<Vec<T>>> {
-		let entries: Vec<T> = values.into_iter().collect();
+		let entries: Vec<Encoded<T>> = values.into_iter().map(Encoded).collect();
 
 		if entries.is_empty() {
 			return Ok(Version(self.group.committed()));
@@ -224,11 +225,15 @@ impl<T: Key> SetWriter<T> {
 			.execute(
 				SetCommand::Extend { entries },
 				|cmd| match cmd {
-					SetCommand::Extend { entries } => Error::Offline(entries),
+					SetCommand::Extend { entries } => {
+						Error::Offline(entries.into_iter().map(|e| e.0).collect())
+					}
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					SetCommand::Extend { entries } => Error::Encoding(entries, e),
+					SetCommand::Extend { entries } => {
+						Error::Encoding(entries.into_iter().map(|e| e.0).collect(), e)
+					}
 					_ => unreachable!(),
 				},
 			)
@@ -242,16 +247,16 @@ impl<T: Key> SetWriter<T> {
 		&self,
 		value: &Q,
 	) -> Result<Version, Error<T>> {
-		let value = value.borrow().clone();
+		let value = Encoded(value.borrow().clone());
 		self
 			.execute(
 				SetCommand::Remove { value },
 				|cmd| match cmd {
-					SetCommand::Remove { value } => Error::Offline(value),
+					SetCommand::Remove { value } => Error::Offline(value.0),
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					SetCommand::Remove { value } => Error::Encoding(value, e),
+					SetCommand::Remove { value } => Error::Encoding(value.0, e),
 					_ => unreachable!(),
 				},
 			)
@@ -410,14 +415,14 @@ impl<T: Key> StateMachine for SetStateMachine<T> {
 					self.data.clear();
 				}
 				SetCommand::Insert { value } => {
-					self.data.insert(value);
+					self.data.insert(value.0);
 				}
 				SetCommand::Remove { value } => {
-					self.data.remove(&value);
+					self.data.remove(&value.0);
 				}
 				SetCommand::Extend { entries } => {
 					for value in entries {
-						self.data.insert(value);
+						self.data.insert(value.0);
 					}
 				}
 				SetCommand::TakeSnapshot(request) => {
@@ -496,9 +501,9 @@ impl<T: Key> SnapshotStateMachine for SetStateMachine<T> {
 #[serde(bound = "T: Key")]
 enum SetCommand<T> {
 	Clear,
-	Insert { value: T },
-	Remove { value: T },
-	Extend { entries: Vec<T> },
+	Insert { value: Encoded<T> },
+	Remove { value: Encoded<T> },
+	Extend { entries: Vec<Encoded<T>> },
 	TakeSnapshot(SnapshotRequest),
 }
 
@@ -516,7 +521,7 @@ impl<T: Key> Default for SetSnapshot<T> {
 }
 
 impl<T: Key> Snapshot for SetSnapshot<T> {
-	type Item = T;
+	type Item = Encoded<T>;
 
 	fn len(&self) -> u64 {
 		self.data.len() as u64
@@ -533,14 +538,15 @@ impl<T: Key> Snapshot for SetSnapshot<T> {
 		Some(
 			self
 				.data
-				.iter()
+				.clone()
+				.into_iter()
 				.skip(range.start as usize)
 				.take((range.end - range.start) as usize)
-				.cloned(),
+				.map(Encoded),
 		)
 	}
 
 	fn append(&mut self, items: impl IntoIterator<Item = Self::Item>) {
-		self.data.extend(items);
+		self.data.extend(items.into_iter().map(|e| e.0));
 	}
 }
