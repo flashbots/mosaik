@@ -117,6 +117,7 @@ pub trait StateSyncProvider: Send + 'static {
 	///
 	/// This value should never be greater than the position of the latest
 	/// committed log entry.
+	#[inline]
 	fn safe_to_prune_prefix(
 		&self,
 		_: &mut dyn SyncProviderContext<Self::Owner>,
@@ -127,6 +128,7 @@ pub trait StateSyncProvider: Send + 'static {
 	/// Notifies the provider that the committed index has advanced to a new
 	/// position. This can be used by the provider to update its internal state,
 	/// create snapshots, etc.
+	#[inline]
 	fn committed(
 		&mut self,
 		_: Cursor,

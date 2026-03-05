@@ -25,9 +25,9 @@ use {
 };
 
 mod announce;
-mod bootstrap;
 mod catalog;
 mod config;
+mod dht;
 mod entry;
 mod error;
 mod event;

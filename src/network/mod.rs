@@ -10,13 +10,13 @@ use {
 	iroh::protocol::{Router, RouterBuilder},
 };
 
-mod config;
+mod builder;
 pub mod error;
 pub(crate) mod link;
 mod local;
 
 pub use {
-	config::{NetworkBuilder, NetworkConfig},
+	builder::{NetworkBuilder, NetworkConfig},
 	error::{Error as NetworkError, *},
 	iroh::RelayMode,
 	local::LocalNode,

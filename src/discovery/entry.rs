@@ -167,6 +167,13 @@ impl PeerEntry {
 		self.version.updated_at()
 	}
 
+	/// The self-declared duration since the start of the peer's process.
+	pub fn uptime(&self) -> core::time::Duration {
+		(Utc::now() - self.version.started_at())
+			.to_std()
+			.unwrap_or_default()
+	}
+
 	/// Computes a Blake3 digest of the `PeerEntry`.
 	pub fn digest(&self) -> blake3::Hash {
 		let mut hasher = blake3::Hasher::new();

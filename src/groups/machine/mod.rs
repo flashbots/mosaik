@@ -74,6 +74,7 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 	/// application of a batch of commands. By default, this method applies
 	/// commands one by one using the `apply` method, but state machines that
 	/// can optimize batch processing can override this method.
+	#[inline]
 	fn apply_batch(
 		&mut self,
 		commands: impl IntoIterator<Item = Self::Command>,
@@ -114,6 +115,7 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 	///
 	/// If this value is not set, the value of
 	/// [`ConsensusConfig::default()`] will be used.
+	#[inline]
 	fn consensus_config(&self) -> Option<ConsensusConfig> {
 		None
 	}

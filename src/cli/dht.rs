@@ -1,8 +1,9 @@
 use {
 	crate::cli::CliOpts,
+	colored::Colorize,
 	core::{net::SocketAddr, str::FromStr, time::Duration},
-	futures::{SinkExt, StreamExt},
-	iroh::{Endpoint, EndpointAddr, RelayUrl},
+	futures::{SinkExt, StreamExt, future::join_all},
+	iroh::{Endpoint, EndpointAddr, RelayUrl, TransportAddr},
 	mosaik::{NetworkId, PeerId, discovery::SignedPeerEntry, primitives},
 	pkarr::{
 		Client,
@@ -13,85 +14,151 @@ use {
 	tokio_util::codec::{FramedRead, FramedWrite, LengthDelimitedCodec},
 };
 
+/// Number of DHT slots in the bootstrap chain (matches discovery module).
+const CHAIN_DEPTH: usize = 16;
+
 #[derive(Debug, clap::Parser)]
 pub struct DhtCommand {
 	/// Network ID to query
 	#[clap(short, long)]
 	pub network: NetworkId,
 
-	/// Check the status of the bootstrap peer by trying to connect to it.
+	/// Check the status of the bootstrap peers by trying to connect to them.
 	#[clap(long, default_value = "true")]
 	pub check_status: bool,
 
-	/// Timeout in seconds for the status check connection attempt.
+	/// Timeout in seconds for each status check connection attempt.
 	#[clap(short, long, default_value = "10")]
 	pub timeout: u64,
-
-	/// Show full information about the bootstrap peer.
-	#[clap(short, long)]
-	pub full_info: bool,
 }
 
 impl DhtCommand {
 	pub async fn run(&self, _: &CliOpts) -> anyhow::Result<()> {
-		let client = Client::builder().no_relays().cache_size(0).build()?;
-		let keypair = Keypair::from_secret_key(self.network.as_bytes());
-		let public_key = keypair.public_key();
-		let Some(packet) = client.resolve_most_recent(&public_key).await else {
-			anyhow::bail!("Network has no bootstrap record in the Mainline DHT");
+		let client = Client::builder().build()?;
+
+		// Build the chain of public keys, mirroring the discovery module's
+		// NetworkRecord::chain() logic: slot 0 is derived directly from the
+		// network ID, each subsequent slot from blake3(previous_network_id).
+		let chain = build_chain(self.network, CHAIN_DEPTH);
+
+		// Resolve all slots in parallel.
+		let fetches = chain.iter().enumerate().map(|(idx, public_key)| {
+			let client = &client;
+			async move { (idx, client.resolve_most_recent(public_key).await) }
+		});
+
+		let resolved: Vec<_> = join_all(fetches).await;
+
+		println!("DHT bootstrap chain for network {:?}:", self.network);
+		println!();
+
+		let mut occupied = 0u32;
+		let mut healthy = 0u32;
+		let mut unhealthy = 0u32;
+
+		let local_endpoint = if self.check_status {
+			Some(Endpoint::builder().bind().await?)
+		} else {
+			None
 		};
 
-		let peer_id_record =
-			packet.resource_records("_id").next().ok_or_else(|| {
-				anyhow::anyhow!("network has invalid DHT record, missing _id field")
-			})?;
+		for (idx, packet) in &resolved {
+			let Some(packet) = packet else {
+				println!("{idx:>2}: {}", "empty".dimmed());
+				continue;
+			};
 
-		let Some(peer_id) = parse_peer_id(peer_id_record) else {
-			anyhow::bail!("network has invalid DHT record, missing valid peer id")
-		};
+			let Some(peer_id_record) = packet.resource_records("_id").next() else {
+				println!("{idx:>2}: {}", "invalid (missing _id)".dimmed());
+				continue;
+			};
 
-		println!("bootstrap peer of network id {:?}:", self.network);
-		println!("  peer id: {peer_id}");
+			let Some(peer_id) = parse_peer_id(peer_id_record) else {
+				println!("{idx:>2}: {}", "invalid (malformed peer id)".dimmed());
+				continue;
+			};
 
-		let mut addrs = Vec::new();
-		for record in packet.resource_records("_ip") {
-			if let Some(ip) = parse_ip(record) {
-				println!("  address: {ip}");
-				addrs.push(iroh::TransportAddr::Ip(ip));
+			occupied += 1;
+
+			let mut addrs = Vec::new();
+			for record in packet.resource_records("_ip") {
+				if let Some(ip) = parse_ip(record) {
+					addrs.push(TransportAddr::Ip(ip));
+				}
 			}
-		}
 
-		for record in packet.resource_records("_r") {
-			if let Some(relay) = parse_relay(record) {
-				println!("  relay: {relay}");
-				addrs.push(iroh::TransportAddr::Relay(relay));
+			for record in packet.resource_records("_r") {
+				if let Some(relay) = parse_relay(record) {
+					addrs.push(TransportAddr::Relay(relay));
+				}
 			}
-		}
 
-		println!("  timestamp: {}", packet.timestamp().format_http_date());
+			println!("{idx:>2}: {}", peer_id.to_string().cyan());
+			println!("      timestamp: {}", packet.timestamp().format_http_date());
 
-		if self.check_status {
-			let endpoint = EndpointAddr::new(peer_id).with_addrs(addrs);
-			match check_status(endpoint, self.timeout).await {
-				Ok(peer_entry) => {
-					println!("  status: healthy");
-
-					if self.full_info {
-						println!("  -----");
-						println!(
-							"  full discovery info: {:?}",
-							mosaik::primitives::Pretty(&peer_entry)
-						);
+			for addr in &addrs {
+				match addr {
+					TransportAddr::Ip(ip) => {
+						println!("      address  : {ip}");
+					}
+					TransportAddr::Relay(relay) => {
+						println!("      relay    : {relay}");
+					}
+					_ => {
+						println!("      address  : {addr:?}");
 					}
 				}
-				Err(e) => {
-					println!("  status: unhealthy ({e})");
+			}
+
+			if let Some(local) = &local_endpoint {
+				let endpoint = EndpointAddr::new(peer_id).with_addrs(addrs);
+				match check_status(local, endpoint, self.timeout).await {
+					Ok(peer_entry) => {
+						healthy += 1;
+						println!(
+							"      status   : {} (uptime: {})",
+							"healthy".green(),
+							humantime::format_duration(Duration::from_secs(
+								peer_entry.uptime().as_secs()
+							))
+						);
+					}
+					Err(e) => {
+						unhealthy += 1;
+						println!("      status   : {} ({e})", "unhealthy".red());
+					}
 				}
 			}
+		}
+
+		println!();
+		println!("  summary: {occupied}/{CHAIN_DEPTH} slots occupied");
+		if self.check_status {
+			println!(
+				"           {} healthy, {} unhealthy",
+				healthy.to_string().green(),
+				unhealthy.to_string().red()
+			);
 		}
 
 		Ok(())
 	}
+}
+
+/// Builds the chain of public keys for all DHT slots.
+///
+/// Mirrors the `NetworkRecord::chain()` logic from the discovery module:
+/// slot 0 is derived directly from the network ID, and each subsequent slot
+/// is derived by hashing the previous slot's network ID with blake3.
+fn build_chain(network_id: NetworkId, depth: usize) -> Vec<pkarr::PublicKey> {
+	let mut chain = Vec::with_capacity(depth);
+	let mut current_id = network_id;
+	for _ in 0..depth {
+		let keypair = Keypair::from_secret_key(current_id.as_bytes());
+		chain.push(keypair.public_key());
+		current_id = current_id.derive(current_id);
+	}
+	chain
 }
 
 fn parse_peer_id(record: &ResourceRecord<'_>) -> Option<PeerId> {
@@ -129,17 +196,17 @@ fn parse_relay(record: &ResourceRecord<'_>) -> Option<RelayUrl> {
 }
 
 async fn check_status(
+	local: &Endpoint,
 	addr: EndpointAddr,
 	timeout_secs: u64,
 ) -> Result<SignedPeerEntry, anyhow::Error> {
-	let local = Endpoint::builder().bind().await?;
 	let connection = timeout(
 		Duration::from_secs(timeout_secs),
 		local.connect(addr, b"/mosaik/discovery/ping/1.0"),
 	)
 	.await
-	.map_err(|_| anyhow::anyhow!("failed to connect to bootstrap peer: timeout"))?
-	.map_err(|e| anyhow::anyhow!("failed to connect to bootstrap peer: {e}"))?;
+	.map_err(|_| anyhow::anyhow!("timeout"))?
+	.map_err(|e| anyhow::anyhow!("{e}"))?;
 
 	let (tx, rx) = connection.open_bi().await?;
 

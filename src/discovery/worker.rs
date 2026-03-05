@@ -14,7 +14,7 @@ use {
 		discovery::{
 			PeerEntryVersion,
 			SignedPeerEntry,
-			bootstrap::DhtBootstrap,
+			dht::DhtBootstrap,
 			ping::Ping,
 		},
 		network::LocalNode,
@@ -252,7 +252,7 @@ impl WorkerLoop {
 	async fn run(mut self) -> Result<(), Error> {
 		// wait for the network to be online and have all its protocols installed
 		// and addresses resolved
-		self.handle.local.online().await;
+		self.handle.local.endpoint().online().await;
 
 		// watch for local address changes, this will also trigger the first
 		// local peer entry update

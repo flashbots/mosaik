@@ -77,9 +77,14 @@ impl ProtocolHandler for Ping {
 				.map_err(AcceptError::from_err)?;
 
 			let me = catalog.borrow().local().clone();
+			let me_incremented = me
+				.into_unsigned()
+				.increment_version()
+				.sign(self.local.secret_key())
+				.expect("failed to sign local peer entry update");
 
 			link
-				.send(&me)
+				.send(&me_incremented)
 				.await
 				.inspect_err(|e| {
 					tracing::trace!(

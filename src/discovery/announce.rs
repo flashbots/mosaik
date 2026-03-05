@@ -240,7 +240,7 @@ impl WorkerLoop {
 	async fn spawn(mut self) -> Result<(), Error> {
 		// Ensure that the local node is online and has all protocols installed
 		// and addresses resolved.
-		self.local.online().await;
+		self.local.endpoint().online().await;
 
 		// add bootstrap peers to the addressing system
 		self.local.observe(self.config.bootstrap_peers.iter());
@@ -479,11 +479,6 @@ impl WorkerLoop {
 	/// purposes.
 	fn broadcast_self_info(&self) {
 		let entry = self.catalog.borrow().local().clone();
-		let entry = entry
-			.into_unsigned()
-			.increment_version()
-			.sign(self.local.secret_key())
-			.expect("failed to sign local peer entry update");
 
 		tracing::trace!(
 			peer_info = ?Pretty(&entry),

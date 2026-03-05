@@ -34,11 +34,11 @@ pub struct Config {
 
 	/// The maximum allowed time drift for peer entries.
 	/// Entries with a timestamp outside this drift are considered invalid.
-	#[builder(default = "Duration::from_secs(10)")]
+	#[builder(default = "Duration::from_secs(50)")]
 	pub max_time_drift: Duration,
 
 	/// The interval at which to announce our presence to the network.
-	#[builder(default = "Duration::from_secs(15)")]
+	#[builder(default = "Duration::from_secs(45)")]
 	pub announce_interval: Duration,
 
 	/// The maximum jitter factor to apply to the announce interval.

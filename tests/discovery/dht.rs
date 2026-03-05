@@ -1,4 +1,9 @@
-use {core::time::Duration, mosaik::*, rstest::rstest};
+use {
+	core::time::Duration,
+	futures::future::join_all,
+	mosaik::*,
+	rstest::rstest,
+};
 
 /// This test verifies that N nodes can discover each other via the DHT
 /// bootstrap mechanism without explicitly being provided with each other's peer
@@ -20,10 +25,13 @@ async fn auto_bootstrap(#[case] num_nodes: usize) -> anyhow::Result<()> {
 
 	let mut nodes = Vec::with_capacity(num_nodes);
 	for _ in 0..num_nodes {
-		let network = Network::new(network_id).await?;
-		tracing::info!("started node with ID {}", network.local().id());
-		nodes.push(network);
+		nodes.push(Network::new(network_id));
 	}
+
+	let nodes = join_all(nodes)
+		.await
+		.into_iter()
+		.collect::<Result<Vec<_>, _>>()?;
 
 	// every node should have discovered all other nodes within the network
 	let mut success = false;
