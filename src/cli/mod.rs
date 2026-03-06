@@ -4,6 +4,7 @@ pub mod beacon;
 pub mod dht;
 
 #[derive(Debug, Parser)]
+#[clap(version)]
 pub struct CliOpts {
 	#[clap(subcommand)]
 	pub command: CliCommand,

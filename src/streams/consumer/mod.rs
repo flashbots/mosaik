@@ -3,6 +3,7 @@
 use {
 	crate::{
 		Datum,
+		StreamId,
 		primitives::Short,
 		streams::{
 			consumer::builder::ConsumerConfig,
@@ -77,6 +78,11 @@ impl<D: Datum> Debug for Consumer<D> {
 
 // Public API
 impl<D: Datum> Consumer<D> {
+	/// Returns the stream id this consumer is subscribed to.
+	pub fn stream_id(&self) -> &StreamId {
+		&self.config.stream_id
+	}
+
 	/// Awaits changes to the consumer's status.
 	///
 	/// example:

@@ -219,3 +219,34 @@ async fn custom_datum_encoding() -> anyhow::Result<()> {
 
 	Ok(())
 }
+
+#[tokio::test]
+async fn stream_def() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+
+	let def = StreamDef::<Data1>::with_stream_id("my-stream1".into());
+
+	let mut p0 = n0.streams().producer_of(def).build()?;
+	let mut c1 = n1.streams().consumer_of(def).build();
+
+	assert_eq!(p0.stream_id(), unique_id!("my-stream1"));
+	assert_eq!(c1.stream_id(), unique_id!("my-stream1"));
+
+	n1.discovery().dial(n0.local().addr()).await;
+
+	timeout_s(3, c1.when().subscribed()).await?;
+
+	tracing::debug!("consumer successfully subscribed to producer");
+
+	timeout_s(3, p0.send(Data1("hello stream def".into()))).await??;
+
+	let msg = timeout_s(3, c1.next())
+		.await?
+		.expect("expected message from c1");
+
+	assert_eq!(msg, Data1("hello stream def".into()));
+
+	Ok(())
+}

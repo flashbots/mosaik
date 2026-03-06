@@ -16,6 +16,7 @@ pub trait Datum: Sized + Send + 'static {
 	/// Returns the default stream id derived from the datum type name.
 	/// This is the stream id used if no custom stream id is provided when
 	/// building producers or consumers for this datum type.
+	#[inline]
 	fn derived_stream_id() -> StreamId {
 		core::any::type_name::<Self>().into()
 	}

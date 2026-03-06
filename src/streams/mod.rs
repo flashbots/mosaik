@@ -94,6 +94,20 @@ impl Streams {
 		producer::Builder::new(self)
 	}
 
+	/// Creates a new [`producer::Builder`] for the given stream definition to
+	/// assemble a more nuanced producer configuration.
+	#[allow(clippy::needless_pass_by_value)]
+	pub fn producer_of<D: Datum>(
+		&self,
+		def: StreamDef<D>,
+	) -> producer::Builder<'_, D> {
+		let mut builder = self.producer::<D>();
+		if let Some(stream_id) = def.stream_id {
+			builder = builder.with_stream_id(stream_id);
+		}
+		builder
+	}
+
 	/// Creates a new [`Consumer`] for the given data type `D` with default
 	/// configuration.
 	///
@@ -107,6 +121,20 @@ impl Streams {
 	/// assemble a more nuanced consumer configuration.
 	pub fn consumer<D: Datum>(&self) -> consumer::Builder<'_, D> {
 		consumer::Builder::new(self)
+	}
+
+	/// Creates a new [`consumer::Builder`] for the given stream definition to
+	/// assemble a more nuanced consumer configuration.
+	#[allow(clippy::needless_pass_by_value)]
+	pub fn consumer_of<D: Datum>(
+		&self,
+		def: StreamDef<D>,
+	) -> consumer::Builder<'_, D> {
+		let mut builder = self.consumer::<D>();
+		if let Some(stream_id) = def.stream_id {
+			builder = builder.with_stream_id(stream_id);
+		}
+		builder
 	}
 }
 
@@ -131,6 +159,48 @@ impl Streams {
 impl ProtocolProvider for Streams {
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder {
 		protocols.accept(Self::ALPN, Acceptor::new(self))
+	}
+}
+
+/// A stream definition that can be used to create a producer and consumer for a
+/// given datum type.
+///
+/// Usually used by libraries that want to expose a well-known stream interface.
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct StreamDef<T: Datum> {
+	pub stream_id: Option<StreamId>,
+	_marker: core::marker::PhantomData<fn(&T)>,
+}
+
+impl<T: Datum> Clone for StreamDef<T> {
+	fn clone(&self) -> Self {
+		*self
+	}
+}
+impl<T: Datum> Copy for StreamDef<T> {}
+
+impl<T: Datum> Default for StreamDef<T> {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
+impl<T: Datum> StreamDef<T> {
+	pub const fn new() -> Self {
+		Self {
+			stream_id: None,
+			_marker: core::marker::PhantomData,
+		}
+	}
+
+	/// Overrides the default type-derived stream id for this stream definition
+	/// with a custom stream id.
+	#[must_use]
+	pub const fn with_stream_id(stream_id: StreamId) -> Self {
+		Self {
+			stream_id: Some(stream_id),
+			_marker: core::marker::PhantomData,
+		}
 	}
 }
 
