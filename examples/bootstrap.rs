@@ -9,9 +9,9 @@
 //!
 //! ### Secret Key
 //!
-//! Providing a secret key yields a stable peer ID, which is recommended for bootstrap nodes
-//! so that other peers can reliably connect to them across restarts. The secret key can be
-//! specified in one of two ways:
+//! Providing a secret key yields a stable peer ID, which is recommended for
+//! bootstrap nodes so that other peers can reliably connect to them across
+//! restarts. The secret key can be specified in one of two ways:
 //!
 //! - A 64-character hex string: will be used directly as the secret key.
 //! - Any other string: will be treated as a seed and hashed into a secret key.
@@ -38,15 +38,14 @@
 //!
 //! Other nodes on the network can use this node's public ID to get onboarded
 //! onto the network and discover other nodes.
-//! 
+//!
 //! ```bash
 //! bootstrap --network-id=net1 --secret=123
 //! ```
 
-use core::convert::Infallible;
-
 use {
 	clap::{ArgAction, Parser},
+	core::convert::Infallible,
 	mosaik::*,
 };
 
@@ -178,7 +177,7 @@ fn configure_logging(opts: &Opts) {
 }
 
 #[expect(
-	clippy::unnecessary_wraps, 
+	clippy::unnecessary_wraps,
 	reason = "clap parser requires this signature"
 )]
 fn parse_secret_key(s: &str) -> Result<SecretKey, Infallible> {

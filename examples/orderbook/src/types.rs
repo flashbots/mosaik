@@ -72,7 +72,11 @@ impl core::fmt::Display for Fill {
 		write!(
 			f,
 			"Fill(bid={}, ask={}, {}@{}, qty={})",
-			self.bid_order_id, self.ask_order_id, self.pair, self.price, self.quantity
+			self.bid_order_id,
+			self.ask_order_id,
+			self.pair,
+			self.price,
+			self.quantity
 		)
 	}
 }

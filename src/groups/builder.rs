@@ -81,7 +81,7 @@ impl<'g> GroupBuilder<'g, (), ()> {
 		GroupBuilder {
 			groups: self.groups,
 			key: self.key,
-			consensus: state_machine.consensus_config(),
+			consensus: None,
 			storage: InMemoryLogStore::<SM::Command>::default(),
 			state_machine,
 		}
@@ -129,19 +129,13 @@ where
 	M: StateMachine,
 {
 	/// Consensus configuration for the group protocol, such as heartbeat
-	/// intervals, election timeouts. This is used
+	/// intervals and election timeouts.
 	///
-	/// when deriving the group id, all members of the group must have identical
-	/// configuration settings for these values, any difference will render a
-	/// different group id.
+	/// This is used when deriving the group id, all members of the group must
+	/// have identical configuration settings for these values, any difference
+	/// will render a different group id.
 	///
-	/// If not set explicitly, the value defaults to either the value hinted by
-	/// the state machine implementation via [`StateMachine::consensus_config`]
-	/// method, or to the default consensus config if the state machine does not
-	/// provide a hint.
-	///
-	/// Setting this value overrides the default consensus config provided by the
-	/// state machine, if any.
+	/// If not set explicitly, the default consensus config will be used.
 	#[must_use]
 	pub const fn with_consensus_config(
 		mut self,
@@ -285,25 +279,6 @@ impl ConsensusConfig {
 		let range_start = base;
 		let range_end = base + jitter;
 		rand::random_range(range_start..range_end)
-	}
-
-	/// Used when a state machine prefers to be a follower and wants to reduce the
-	/// chance of being elected as a leader by setting longer election timeouts.
-	///
-	/// By default the election timeout is multiplied by 3 in this mode, but the
-	/// factor can be customized by using [`deprioritize_leadership_by`] method.
-	#[must_use]
-	pub fn deprioritize_leadership(self) -> Self {
-		self.deprioritize_leadership_by(3)
-	}
-
-	/// Used when a state machine prefers to be a follower and wants to reduce the
-	/// chance of being elected as a leader by setting longer election timeouts.
-	#[must_use]
-	pub fn deprioritize_leadership_by(mut self, factor: u32) -> Self {
-		self.election_timeout *= factor;
-		self.bootstrap_delay *= factor;
-		self
 	}
 }
 

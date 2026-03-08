@@ -21,8 +21,8 @@ use {
 		groups::{
 			ApplyContext,
 			CommandError,
-			ConsensusConfig,
 			Cursor,
+			LeadershipPreference,
 			StateMachine,
 		},
 		primitives::{EncodeError, Encoded},
@@ -457,11 +457,13 @@ impl<T: Value> StateMachine for RegisterStateMachine<T> {
 		self.state_sync.clone()
 	}
 
-	/// Readers have longer election timeouts to reduce the likelihood of them
-	/// being elected as group leaders.
-	fn consensus_config(&self) -> Option<ConsensusConfig> {
-		(!self.is_writer)
-			.then(|| ConsensusConfig::default().deprioritize_leadership())
+	/// Readers are observers and never assume group leadership.
+	fn leadership_preference(&self) -> LeadershipPreference {
+		if self.is_writer {
+			LeadershipPreference::Normal
+		} else {
+			LeadershipPreference::Observer
+		}
 	}
 }
 

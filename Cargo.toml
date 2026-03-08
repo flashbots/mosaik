@@ -5,8 +5,8 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.89"
-version = "0.2.23"
+rust-version = "1.93"
+version = "0.2.24"
 license = "MIT"
 homepage = "https://github.com/flashbots/mosaik"
 repository = "https://github.com/flashbots/mosaik"

@@ -9,7 +9,7 @@
 use {
 	crate::{
 		Datum,
-		groups::{ConsensusConfig, Cursor, Term},
+		groups::{Cursor, Term},
 		primitives::UniqueId,
 	},
 	serde::{Serialize, de::DeserializeOwned},
@@ -99,25 +99,25 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 	/// starting point.
 	fn state_sync(&self) -> Self::StateSync;
 
-	/// Optionally allows the state machine to provide a default consensus
-	/// configuration that is used when joining a group without explicitly setting
-	/// the consensus config in the builder.
+	/// Returns the leadership preference for this state machine instance. This
+	/// controls whether the node running this state machine will seek to become
+	/// a leader, avoid leadership, or never assume leadership at all.
 	///
-	/// This is useful in several cases such as:
+	/// This is a per-node preference that does not affect the group identity —
+	/// different nodes in the same group can have different leadership
+	/// preferences. The preference is enforced by the Raft election logic:
 	///
-	/// - If the state machine instance knows that it has preference for being a
-	///   follower or a leader, it can set more aggressive election timeouts to
-	///   optimize for that role.
-	///
-	/// - If the state machine has specific performance characteristics that can
-	///   be optimized by tuning the consensus parameters, it can provide a
-	///   default config that is optimized for its behavior.
-	///
-	/// If this value is not set, the value of
-	/// [`ConsensusConfig::default()`] will be used.
+	/// - [`LeadershipPreference::Normal`] — default Raft behavior, the node
+	///   participates in elections as a candidate.
+	/// - [`LeadershipPreference::Reluctant`] — the node uses longer election
+	///   timeouts, reducing its likelihood of becoming leader, but can still be
+	///   elected if no other candidate is available.
+	/// - [`LeadershipPreference::Observer`] — the node never self-nominates as a
+	///   candidate. It participates in voting and log replication as a full
+	///   member of the group, but will never initiate an election.
 	#[inline]
-	fn consensus_config(&self) -> Option<ConsensusConfig> {
-		None
+	fn leadership_preference(&self) -> LeadershipPreference {
+		LeadershipPreference::Normal
 	}
 }
 
@@ -164,3 +164,56 @@ impl<T> Query for T where T: Datum + Sync + Clone {}
 
 pub trait QueryResult: Datum + Sync + Clone {}
 impl<T> QueryResult for T where T: Datum + Sync + Clone {}
+
+/// Describes a node's preference for assuming leadership within a group.
+///
+/// This preference is per-node and does not affect the group identity.
+/// Different nodes in the same group can have different leadership preferences.
+/// The preference is enforced by the Raft election logic at the follower level:
+/// observers never transition to candidate state, and reluctant nodes use
+/// longer election timeouts to reduce their likelihood of winning elections.
+///
+/// All preference levels participate fully in voting and log replication. The
+/// distinction is solely about whether and how eagerly the node self-nominates
+/// as a candidate during leader elections.
+///
+/// # Safety Considerations
+///
+/// - **Observer nodes still vote.** They are full members of the group and
+///   count toward quorum. They simply never initiate elections.
+/// - **Liveness.** If all nodes in a group are observers, no leader can ever be
+///   elected and the group will be unable to make progress. Ensure that at
+///   least one node in every group has `Normal` or `Reluctant` preference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LeadershipPreference {
+	/// Default Raft behavior. The node participates in elections as a
+	/// candidate with standard election timeouts.
+	#[default]
+	Normal,
+
+	/// The node uses longer election timeouts, reducing its likelihood of
+	/// becoming leader. It can still be elected if no other candidate is
+	/// available (e.g., during network partitions or when all preferred
+	/// leaders are down). The factor controls the timeout multiplier
+	/// (e.g., a factor of 3 triples the election timeout).
+	Reluctant {
+		/// The multiplier applied to the election timeout and bootstrap
+		/// delay. Must be greater than 1 for the deprioritization to have
+		/// any effect.
+		factor: u32,
+	},
+
+	/// The node never self-nominates as a candidate. It participates in
+	/// voting and log replication as a full member of the group, but will
+	/// never initiate an election. This provides a hard guarantee that the
+	/// node will not become leader, unlike `Reluctant` which is
+	/// probabilistic.
+	Observer,
+}
+
+impl LeadershipPreference {
+	/// Creates a reluctant preference with the default factor of 3.
+	pub const fn reluctant() -> Self {
+		Self::Reluctant { factor: 3 }
+	}
+}

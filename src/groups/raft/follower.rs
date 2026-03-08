@@ -6,6 +6,7 @@ use {
 			CommittedQueryResult,
 			Index,
 			IndexRange,
+			LeadershipPreference,
 			QueryError,
 			StateMachine,
 			StateSync,
@@ -46,6 +47,15 @@ use {
 /// candidates and leaders. If the election timeout elapses without receiving
 /// `AppendEntries` from the current leader, the follower transitions to
 /// leader candidate state and starts a new election.
+///
+/// The follower's behavior during election timeouts is governed by the
+/// [`LeadershipPreference`] of the state machine:
+/// - [`Normal`](LeadershipPreference::Normal) — standard Raft behavior,
+///   transitions to candidate when the election timeout elapses.
+/// - [`Reluctant`](LeadershipPreference::Reluctant) — uses longer election
+///   timeouts, reducing the likelihood of self-nomination.
+/// - [`Observer`](LeadershipPreference::Observer) — never transitions to
+///   candidate state, regardless of election timeouts.
 pub struct Follower<M: StateMachine> {
 	/// The current term for this node.
 	term: Term,
@@ -55,9 +65,16 @@ pub struct Follower<M: StateMachine> {
 	/// leader.
 	leader: Option<PeerId>,
 
+	/// The leadership preference for this node, copied from the state machine
+	/// at construction time.
+	leadership_preference: LeadershipPreference,
+
 	/// The election timeout for this follower. If we do not receive any
 	/// messages from a valid leader within this timeout, we will transition to
 	/// candidate state and start a new election.
+	///
+	/// For observer nodes, the timeout still fires but the transition to
+	/// candidate is suppressed.
 	election_timeout: Pin<Box<Sleep>>,
 
 	/// Tracks the pending forwarded commands from this follower to the leader
@@ -94,6 +111,7 @@ impl<M: StateMachine> Follower<M> {
 		leader: Option<PeerId>,
 		shared: &Shared<S, M>,
 	) -> Self {
+		let leadership_preference = shared.state_machine.leadership_preference();
 		let mut election_timeout = shared.config().consensus().election_timeout();
 
 		if term.is_zero() {
@@ -101,6 +119,12 @@ impl<M: StateMachine> Follower<M> {
 			// give all nodes enough time to start up and discover each other before
 			// triggering the first election.
 			election_timeout += shared.config().consensus().bootstrap_delay;
+		}
+
+		// apply the reluctant factor to the election timeout if the state
+		// machine prefers to avoid leadership.
+		if let LeadershipPreference::Reluctant { factor } = leadership_preference {
+			election_timeout *= factor;
 		}
 
 		if let Some(leader) = leader {
@@ -116,6 +140,7 @@ impl<M: StateMachine> Follower<M> {
 		Self {
 			term,
 			leader,
+			leadership_preference,
 			catchup: None,
 			pending_commands: HashMap::default(),
 			pending_queries: HashMap::default(),
@@ -189,11 +214,17 @@ impl<M: StateMachine> Follower<M> {
 		}
 
 		if self.election_timeout.as_mut().poll(cx).is_ready() {
-			// election timeout elapsed without hearing from a leader, so we start
-			// a new election by transitioning to candidate state
-			return Poll::Ready(ControlFlow::Break(
-				Candidate::new(self.term.next(), shared).into(),
-			));
+			if self.leadership_preference == LeadershipPreference::Observer {
+				// observer nodes never transition to candidate state. Reset the
+				// election timeout and continue as a follower.
+				self.reset_election_timeout(shared);
+			} else {
+				// election timeout elapsed without hearing from a leader, so we
+				// start a new election by transitioning to candidate state
+				return Poll::Ready(ControlFlow::Break(
+					Candidate::new(self.term.next(), shared).into(),
+				));
+			}
 		}
 
 		Poll::Pending
@@ -263,8 +294,15 @@ impl<M: StateMachine> Follower<M> {
 		&mut self,
 		shared: &Shared<S, M>,
 	) {
-		let next_election_timeout =
-			Instant::now() + shared.consensus().election_timeout();
+		let mut timeout = shared.consensus().election_timeout();
+
+		if let LeadershipPreference::Reluctant { factor } =
+			self.leadership_preference
+		{
+			timeout *= factor;
+		}
+
+		let next_election_timeout = Instant::now() + timeout;
 
 		self
 			.election_timeout

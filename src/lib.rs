@@ -21,6 +21,7 @@ pub use {
 		Group,
 		GroupId,
 		GroupKey,
+		LeadershipPreference,
 	},
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},

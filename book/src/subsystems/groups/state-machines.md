@@ -5,7 +5,7 @@ Every group runs a replicated state machine (RSM) that processes commands and an
 ## The StateMachine Trait
 
 ```rust,ignore
-pub trait StateMachine: Sized + Send + 'static {
+pub trait StateMachine: Sized + Send + Sync + 'static {
     type Command: Command;       // Mutating operations
     type Query: Query;           // Read-only operations
     type QueryResult: QueryResult; // Query responses
@@ -18,7 +18,7 @@ pub trait StateMachine: Sized + Send + 'static {
 
     // Optional overrides
     fn apply_batch(&mut self, commands: impl IntoIterator<Item = Self::Command>, ctx: &dyn ApplyContext) { ... }
-    fn consensus_config(&self) -> Option<ConsensusConfig> { None }
+    fn leadership_preference(&self) -> LeadershipPreference { LeadershipPreference::Normal }
 }
 ```
 
@@ -172,17 +172,37 @@ fn state_sync(&self) -> LogReplaySync<Self> {
 
 See the [State Sync](../internals/state-sync.md) deep dive for details.
 
-## Consensus Config Hints
+## Leadership Preference
 
-A state machine can provide a default `ConsensusConfig`:
+A state machine can declare its preference for assuming leadership within
+the group by overriding `leadership_preference()`. This is a per-node
+setting -- different nodes in the same group can return different values
+without affecting the `GroupId`.
 
 ```rust,ignore
-fn consensus_config(&self) -> Option<ConsensusConfig> {
-    Some(ConsensusConfig::default().deprioritize_leadership())
+use mosaik::LeadershipPreference;
+
+fn leadership_preference(&self) -> LeadershipPreference {
+    LeadershipPreference::Observer
 }
 ```
 
-This is used when the builder does not specify an explicit config. It can be overridden by `with_consensus_config()` on the builder.
+| Variant                      | Behavior                                                                |
+| ---------------------------- | ----------------------------------------------------------------------- |
+| `Normal` (default)           | Standard Raft behavior -- participates in elections as a candidate      |
+| `Reluctant { factor: u32 }`  | Longer election timeouts (multiplied by `factor`), can still be elected |
+| `Observer`                   | Never self-nominates as candidate; still votes and replicates log       |
+
+The convenience constructor `LeadershipPreference::reluctant()` creates a
+`Reluctant` variant with the default factor of 3.
+
+> **Liveness warning:** If every node in a group returns `Observer`, no
+> leader can ever be elected and the group will be unable to make progress.
+> Ensure at least one node has `Normal` or `Reluctant` preference.
+
+This mechanism is used internally by [collection readers](../collections/writer-reader.md),
+which return `Observer` so that leadership stays on writer nodes where
+writes are handled directly rather than being forwarded.
 
 ## Storage
 
