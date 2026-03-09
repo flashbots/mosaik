@@ -148,19 +148,23 @@ impl WorkerLoop {
 		// assigned and all protocols initialized.
 		self.handle.local.online().await;
 
-		let Ok(client) = Client::builder()
-			.request_timeout(PEER_PING_TIMEOUT)
-			.no_relays()
-			.cache_size(0)
-			.build()
-			.inspect_err(|e| {
-				tracing::warn!(
-					error = %e,
-					network = %self.handle.local.network_id(),
-					"failed to initialize DHT bootstrap"
-				);
-			})
-		else {
+		let network = *self.handle.local.network_id();
+		let Ok(client) = tokio::task::spawn_blocking(move || {
+			Client::builder()
+				.request_timeout(PEER_PING_TIMEOUT)
+				.no_relays()
+				.cache_size(0)
+				.build()
+		})
+		.await
+		.expect("DHT client builder task panicked")
+		.inspect_err(|e| {
+			tracing::warn!(
+				error = %e,
+				%network,
+				"failed to initialize DHT bootstrap"
+			);
+		}) else {
 			return;
 		};
 
