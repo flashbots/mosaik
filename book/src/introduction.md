@@ -1,5 +1,12 @@
 # Introduction
 
+<p align="center">
+  <a href="https://github.com/flashbots/mosaik/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <a href="https://crates.io/crates/mosaik"><img alt="Status" src="https://img.shields.io/crates/v/mosaik.svg?color=blue"></a>
+  <a href="https://github.com/flashbots/mosaik"><img alt="Rust" src="https://img.shields.io/badge/rust-1.93%2B-blue.svg"></a>
+  <a href="https://github.com/flashbots/mosaik"><img alt="Status" src="https://img.shields.io/badge/status-experimental-orange.svg"></a>
+</p>
+
 **Mosaik** is a Rust runtime for building **self-organizing, leaderless distributed systems**. It is designed for trusted, permissioned networks — environments where all participating nodes are assumed honest, such as L2 blockchain infrastructure operated by a single organization.
 
 ## What Mosaik Does
@@ -29,8 +36,8 @@ From these minimal inputs, mosaik handles peer discovery, typed pub/sub data str
 ├──────────┬──────────┬──────────┬────────────────┤
 │ Discovery│ Streams  │  Groups  │  Collections   │
 │  gossip, │  typed   │   Raft   │  Map/Vec/Set/  │
-│  catalog │ pub/sub  │ consensus│ PriorityQueue  │
-│          │          │  groups  │                │
+│  catalog │ pub/sub  │ consensus│  Register/Once │
+│          │          │  groups  │  PriorityQueue │
 └──────────┴──────────┴──────────┴────────────────┘
 ```
 
@@ -38,7 +45,7 @@ From these minimal inputs, mosaik handles peer discovery, typed pub/sub data str
 - **Discovery** uses gossip to maintain a catalog of all peers, their capabilities, and their available streams/groups.
 - **Streams** provides typed, async pub/sub channels. Any serializable Rust type can be streamed between nodes.
 - **Groups** implements Raft consensus for clusters of nodes that need shared state and leader election.
-- **Collections** builds on Groups to offer replicated data structures (`Map`, `Vec`, `Set`, `PriorityQueue`) that stay synchronized across nodes.
+- **Collections** builds on Groups to offer replicated data structures (`Map`, `Vec`, `Set`, `Register`, `Once`, `PriorityQueue`) that stay synchronized across nodes.
 
 ## Who Should Read This Book
 

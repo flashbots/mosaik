@@ -8,6 +8,7 @@
 
 mod depq;
 mod map;
+mod once;
 mod primitives;
 mod register;
 mod set;
@@ -18,6 +19,7 @@ mod when;
 pub use {
 	depq::{PriorityQueue, PriorityQueueReader, PriorityQueueWriter},
 	map::{Map, MapReader, MapWriter},
+	once::{Once, OnceReader, OnceWriter},
 	primitives::{StoreId, Version},
 	register::{Register, RegisterReader, RegisterWriter},
 	set::{Set, SetReader, SetWriter},

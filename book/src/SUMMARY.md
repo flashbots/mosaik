@@ -42,6 +42,7 @@
   - [Vec](./subsystems/collections/vec.md)
   - [Set](./subsystems/collections/set.md)
   - [Register](./subsystems/collections/register.md)
+  - [Once](./subsystems/collections/once.md)
   - [PriorityQueue](./subsystems/collections/priority-queue.md)
   - [Writer/Reader Pattern](./subsystems/collections/writer-reader.md)
 

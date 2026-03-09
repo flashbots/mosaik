@@ -113,3 +113,6 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+# Local dev tools and files
+.local

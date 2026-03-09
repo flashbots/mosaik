@@ -31,6 +31,7 @@ Each collection provides convenient type aliases:
 | `Vec<T>`                 | `VecWriter<T>`                 | `VecReader<T>`                 |
 | `Set<T>`                 | `SetWriter<T>`                 | `SetReader<T>`                 |
 | `Register<T>`            | `RegisterWriter<T>`            | `RegisterReader<T>`            |
+| `Once<T>`                | `OnceWriter<T>`                | `OnceReader<T>`                |
 | `PriorityQueue<P, K, V>` | `PriorityQueueWriter<P, K, V>` | `PriorityQueueReader<P, K, V>` |
 
 ## Construction

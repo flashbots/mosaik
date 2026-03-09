@@ -6,8 +6,9 @@
   <p align="center">
     <a href="https://github.com/flashbots/mosaik/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
     <a href="https://crates.io/crates/mosaik"><img alt="Status" src="https://img.shields.io/crates/v/mosaik.svg?color=blue"></a>
-    <a href="https://github.com/flashbots/mosaik"><img alt="Rust" src="https://img.shields.io/badge/rust-1.89%2B-blue.svg"></a>
+    <a href="https://github.com/flashbots/mosaik"><img alt="Rust" src="https://img.shields.io/badge/rust-1.93%2B-blue.svg"></a>
     <a href="https://github.com/flashbots/mosaik"><img alt="Status" src="https://img.shields.io/badge/status-experimental-orange.svg"></a>
+    <a href="http://docs.mosaik.world"><img alt="Documentation" src="https://img.shields.io/badge/documentation-8A2BE2"></a>
   </p>
 </p>
 
@@ -225,6 +226,30 @@ reader.when().reaches(ver).await;
 assert!(reader.is_empty());
 ```
 
+### `Once<T>`
+
+Replicated write-once register. Holds at most one value — once a value has been set, subsequent writes are silently ignored. This is the distributed equivalent of a `tokio::sync::OnceCell`.
+
+```rust
+let store_id = StoreId::random();
+
+let once = mosaik::collections::Once::<String>::new(&network, store_id);
+once.when().online().await;
+
+// First write — permanently stored
+once.write("genesis".into()).await?;
+assert_eq!(once.read(), Some("genesis".into()));
+
+// Second write — silently ignored
+once.write("overwrite-attempt".into()).await?;
+assert_eq!(once.read(), Some("genesis".into())); // still "genesis"
+
+// On a reader node
+let reader = mosaik::collections::Once::<String>::reader(&network, store_id);
+reader.when().online().await;
+assert_eq!(reader.read(), Some("genesis".into()));
+```
+
 ### `PriorityQueue<P, K, V>`
 
 Replicated double-ended priority queue. Each entry has a priority, a unique key, and a value. Supports efficient min/max access, key-based lookups, priority updates, and range removals.
@@ -370,24 +395,25 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 │  │   Collections   │  │   Transport (iroh)  │  │
 │  │                 │  │                     │  │
 │  │ Map · Vec · Set │  │ QUIC · Relay · mDNS │  │
-│  │ Register · DEPQ │  │                     │  │
+│  │ Register · Once │  │                     │  │
+│  │      DEPQ       │  │                     │  │
 │  └─────────────────┘  └─────────────────────┘  │
 └────────────────────────────────────────────────┘
 ```
 
 # Repository Layout
 
-| Path               | Description                                                                  |
-| ------------------ | ---------------------------------------------------------------------------- |
-| `src/`             | Core library — all shared primitives, protocols, and APIs                    |
-| `src/discovery/`   | Peer discovery, announcement, and catalog synchronization                    |
-| `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria             |
-| `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines        |
-| `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Register`, `PriorityQueue` |
-| `src/network/`     | Transport layer, connection management, typed links                          |
-| `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues                |
-| `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)          |
-| `tests/`           | Integration tests organized by subsystem                                     |
+| Path               | Description                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------ |
+| `src/`             | Core library — all shared primitives, protocols, and APIs                            |
+| `src/discovery/`   | Peer discovery, announcement, and catalog synchronization                            |
+| `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria                     |
+| `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines                |
+| `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Register`, `Once`, `PriorityQueue` |
+| `src/network/`     | Transport layer, connection management, typed links                                  |
+| `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues                        |
+| `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)                  |
+| `tests/`           | Integration tests organized by subsystem                                             |
 
 # Getting Started
 

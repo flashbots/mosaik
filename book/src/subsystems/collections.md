@@ -8,12 +8,12 @@ synchronized across all participating nodes using Raft consensus.
 ┌────────────────────────────────────────────────────────────────────────┐
 │                   Collections                                          │
 │                                                                        │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ ┌─────────────────┐ │
-│  │   Map    │ │   Vec    │ │   Set    │ │  DEPQ  │ │   Register <T>  │ │
-│  │ <K, V>   │ │ <T>      │ │ <T>      │ │<P,K,V> │ │                 │ │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───┬────┘ └────────┬────────┘ │
-│       └────────────┴────────────┴─┬─────────┴───────────────┘          │
-│                                   │                                    │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ ┌──────────┐ ┌──────┐ │
+│  │   Map    │ │   Vec    │ │   Set    │ │  DEPQ  │ │ Register │ │ Once │ │
+│  │ <K, V>   │ │ <T>      │ │ <T>      │ │<P,K,V> │ │  <T>     │ │ <T>  │ │
+│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───┬────┘ └────┬─────┘ └──┬───┘ │
+│       └────────────┴────────────┴─┬─────────┴───────────┴──────────┘     │
+│                                   │                                     │
 │                                   │                                    │
 │                                   │                                    │
 │                  ┌────────────────▼───────────────────┐                │
@@ -53,10 +53,10 @@ assert_eq!(prices.get(&"ETH".into()), Some(3812.50));
 Every collection type offers two modes, distinguished at the **type level**
 using a const-generic boolean:
 
-| Mode       | Type alias                                                  | Can write? | Leadership priority |
-| ---------- | ----------------------------------------------------------- | ---------- | ------------------- |
-| **Writer** | `MapWriter<K,V>`, `VecWriter<T>`, `RegisterWriter<T>`, etc. | Yes        | Normal              |
-| **Reader** | `MapReader<K,V>`, `VecReader<T>`, `RegisterReader<T>`, etc. | No         | Deprioritized       |
+| Mode       | Type alias                                                                  | Can write? | Leadership priority |
+| ---------- | --------------------------------------------------------------------------- | ---------- | ------------------- |
+| **Writer** | `MapWriter<K,V>`, `VecWriter<T>`, `RegisterWriter<T>`, `OnceWriter<T>` etc. | Yes        | Normal              |
+| **Reader** | `MapReader<K,V>`, `VecReader<T>`, `RegisterReader<T>`, `OnceReader<T>` etc. | No         | Deprioritized       |
 
 Both modes provide identical read access. Readers automatically use
 `deprioritize_leadership()` in their consensus configuration to reduce the
@@ -78,12 +78,14 @@ let r = Map::<String, u64>::reader(&network, store_id);
 | [`Vec<T>`](collections/vec.md)                            | Ordered, index-addressable sequence | `im::Vector`                  |
 | [`Set<T>`](collections/set.md)                            | Unordered set of unique values      | `im::HashSet` (deterministic) |
 | [`Register<T>`](collections/register.md)                  | Single-value register               | `Option<T>`                   |
+| [`Once<T>`](collections/once.md)                          | Write-once register                 | `Option<T>`                   |
 | [`PriorityQueue<P, K, V>`](collections/priority-queue.md) | Double-ended priority queue         | `im::HashMap` + `im::OrdMap`  |
 
-All collections use the [`im` crate](https://docs.rs/im) for their internal
+Most collections use the [`im` crate](https://docs.rs/im) for their internal
 state, which provides **O(1) structural sharing** — cloning a snapshot of the
 entire collection is essentially free. This is critical for the snapshot-based
-state sync mechanism.
+state sync mechanism. `Register` and `Once` use a plain `Option<T>` since they
+hold at most one value.
 
 ## Trait requirements
 
@@ -103,13 +105,16 @@ bounds — you never need to implement them manually.
 
 Each collection derives its Raft group identity from:
 
-1. **A fixed prefix** per collection type (e.g., `"mosaik_collections_map"`)
+1. **A fixed prefix** per collection type (e.g., `"mosaik_collections_map"`,
+   `"mosaik_collections_once"`)
 2. **The `StoreId`** — a `UniqueId` you provide at construction time
 3. **The Rust type names** of the type parameters
 
 This means `Map::<String, u64>::writer(&net, id)` and
 `Map::<u32, u64>::writer(&net, id)` will join **different** groups even with
-the same `StoreId`, because the key type differs.
+the same `StoreId`, because the key type differs. Likewise, a `Once<String>`
+and a `Register<String>` with the same `StoreId` form separate groups because
+the prefix differs.
 
 ## Version tracking
 
