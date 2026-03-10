@@ -150,8 +150,11 @@ impl<P: Protocol> Link<P> {
 		};
 
 		let (tx, rx) = accept_result?;
-		let sender = FramedWrite::new(tx, LengthDelimitedCodec::new());
-		let receiver = FramedRead::new(rx, LengthDelimitedCodec::new());
+		let mut codec = LengthDelimitedCodec::new();
+		codec.set_max_frame_length(usize::MAX);
+
+		let sender = FramedWrite::new(tx, codec.clone());
+		let receiver = FramedRead::new(rx, codec);
 
 		Ok(Self {
 			connection,
@@ -211,8 +214,11 @@ impl<P: Protocol> Link<P> {
 			}
 		};
 
-		let sender = FramedWrite::new(tx, LengthDelimitedCodec::new());
-		let receiver = FramedRead::new(rx, LengthDelimitedCodec::new());
+		let mut codec = LengthDelimitedCodec::new();
+		codec.set_max_frame_length(usize::MAX);
+
+		let sender = FramedWrite::new(tx, codec.clone());
+		let receiver = FramedRead::new(rx, codec);
 
 		Ok(Self {
 			connection,
