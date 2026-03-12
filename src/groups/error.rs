@@ -1,11 +1,14 @@
-use crate::{
-	discovery::Error as DiscoveryError,
-	groups::{Groups, StateMachine},
-	network::{
-		self,
-		link::{Link, LinkError},
+use {
+	crate::{
+		discovery::Error as DiscoveryError,
+		groups::{Groups, StateMachine},
+		network::{
+			self,
+			link::{Link, LinkError},
+		},
+		primitives::EncodeError,
 	},
-	primitives::EncodeError,
+	core::fmt::Debug,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -28,7 +31,7 @@ pub enum Error {
 
 /// Errors that are communicated by the public API when issuing commands to the
 /// group.
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum CommandError<M: StateMachine> {
 	/// This is a temporary error indicating that the local node is currently
 	/// offline and cannot process the command. The error carries the unsent
@@ -53,9 +56,29 @@ pub enum CommandError<M: StateMachine> {
 	Encoding(Vec<M::Command>, EncodeError),
 }
 
+impl<M: StateMachine> Debug for CommandError<M> {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		match self {
+			Self::Offline(commands) => f
+				.debug_tuple("CommandError::Offline")
+				.field(&format!("{} commands", commands.len()))
+				.finish(),
+			Self::NoCommands => f.debug_tuple("CommandError::NoCommands").finish(),
+			Self::GroupTerminated => {
+				f.debug_tuple("CommandError::GroupTerminated").finish()
+			}
+			Self::Encoding(commands, err) => f
+				.debug_tuple("CommandError::Encoding")
+				.field(&format!("{} commands", commands.len()))
+				.field(err)
+				.finish(),
+		}
+	}
+}
+
 /// Errors that are communicated by the public API when issuing queries to the
 /// group.
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum QueryError<M: StateMachine> {
 	/// This is a temporary error indicating that the local node is currently
 	/// offline and cannot process the query. The error carries the unsent query,
@@ -75,6 +98,23 @@ pub enum QueryError<M: StateMachine> {
 	/// The provided query could not be encoded for sending over the network.
 	#[error("Query encoding error: {1}")]
 	Encoding(M::Query, EncodeError),
+}
+
+impl<M: StateMachine> Debug for QueryError<M> {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		match self {
+			Self::Offline(_) => {
+				f.debug_tuple("QueryError::Offline").finish_non_exhaustive()
+			}
+			Self::GroupTerminated => {
+				f.debug_tuple("QueryError::GroupTerminated").finish()
+			}
+			Self::Encoding(_, err) => f
+				.debug_tuple("QueryError::Encoding")
+				.field(err)
+				.finish_non_exhaustive(),
+		}
+	}
 }
 
 network::make_close_reason!(
