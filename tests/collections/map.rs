@@ -650,6 +650,59 @@ async fn remove_all_entries() -> anyhow::Result<()> {
 	Ok(())
 }
 
+// remove_many removes multiple keys in one command
+#[tokio::test]
+async fn remove_many() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Map::<u64, u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Map::<u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	let ver = timeout_s(
+		2,
+		w.extend(vec![(1, 10), (2, 20), (3, 30), (4, 40), (5, 50)]),
+	)
+	.await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 5);
+
+	// remove multiple keys at once
+	let ver = timeout_s(2, w.remove_many(vec![2, 4, 5])).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 2);
+	assert_eq!(r.get(&1), Some(10));
+	assert_eq!(r.get(&2), None);
+	assert_eq!(r.get(&3), Some(30));
+	assert_eq!(r.get(&4), None);
+	assert_eq!(r.get(&5), None);
+
+	// remove_many with non-existent keys is a no-op for those keys
+	let ver = timeout_s(2, w.remove_many(vec![1, 99, 100])).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 1);
+	assert_eq!(r.get(&1), None);
+	assert_eq!(r.get(&3), Some(30));
+
+	// remove_many with empty list is a no-op
+	let _ver_empty =
+		timeout_s(2, w.remove_many(Vec::<u64>::new())).await??;
+	assert_eq!(r.len(), 1);
+
+	// subsequent operations still work
+	let ver = timeout_s(2, w.insert(10, 100)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 2);
+
+	Ok(())
+}
+
 // compare_exchange succeeds when current value matches
 #[tokio::test]
 async fn compare_exchange_success() -> anyhow::Result<()> {

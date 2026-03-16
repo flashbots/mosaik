@@ -496,13 +496,55 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		let key = key.clone();
 		self
 			.execute(
-				DepqCommand::Remove { key: Encoded(key) },
+				DepqCommand::RemoveKeys {
+					keys: vec![Encoded(key)],
+				},
 				|cmd| match cmd {
-					DepqCommand::Remove { key } => Error::Offline(key.0),
+					DepqCommand::RemoveKeys { mut keys } => {
+						Error::Offline(keys.remove(0).0)
+					}
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					DepqCommand::Remove { key } => Error::Encoding(key.0, e),
+					DepqCommand::RemoveKeys { mut keys } => {
+						Error::Encoding(keys.remove(0).0, e)
+					}
+					_ => unreachable!(),
+				},
+			)
+			.await
+	}
+
+	/// Remove multiple entries by key.
+	pub async fn remove_keys(
+		&self,
+		keys: impl IntoIterator<Item = K>,
+	) -> Result<Version, Error<Vec<K>>> {
+		let keys: Vec<Encoded<K>> =
+			keys.into_iter().map(Encoded).collect();
+
+		if keys.is_empty() {
+			return Ok(Version(self.group.committed()));
+		}
+
+		self
+			.execute(
+				DepqCommand::RemoveKeys { keys },
+				|cmd| match cmd {
+					DepqCommand::RemoveKeys { keys } => {
+						Error::Offline(
+							keys.into_iter().map(|k| k.0).collect(),
+						)
+					}
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					DepqCommand::RemoveKeys { keys } => {
+						Error::Encoding(
+							keys.into_iter().map(|k| k.0).collect(),
+							e,
+						)
+					}
 					_ => unreachable!(),
 				},
 			)
@@ -774,8 +816,10 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 						self.apply_insert(p, key.0, value.0);
 					}
 				}
-				DepqCommand::Remove { key } => {
-					self.apply_remove(&key.0);
+				DepqCommand::RemoveKeys { keys } => {
+					for key in keys {
+						self.apply_remove(&key.0);
+					}
 				}
 				DepqCommand::RemoveRange { start, end } => {
 					let range = (
@@ -898,8 +942,8 @@ enum DepqCommand<P, K, V> {
 		expected: Encoded<V>,
 		new: Option<Encoded<V>>,
 	},
-	Remove {
-		key: Encoded<K>,
+	RemoveKeys {
+		keys: Vec<Encoded<K>>,
 	},
 	RemoveRange {
 		start: SerBound<Encoded<P>>,

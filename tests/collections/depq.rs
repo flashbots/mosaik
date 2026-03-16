@@ -921,6 +921,69 @@ async fn remove_all_entries() -> anyhow::Result<()> {
 	Ok(())
 }
 
+// remove_keys removes multiple entries by key in one command
+#[tokio::test]
+async fn remove_keys() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::PriorityQueue::<u64, u64, u64>::writer(&n0, store_id);
+	let r = collections::PriorityQueue::<u64, u64, u64>::reader(&n1, store_id);
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	let ver = timeout_s(
+		2,
+		w.extend(vec![
+			(10, 1, 100),
+			(20, 2, 200),
+			(30, 3, 300),
+			(40, 4, 400),
+			(50, 5, 500),
+		]),
+	)
+	.await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 5);
+
+	// remove multiple keys at once
+	let ver = timeout_s(2, w.remove_keys(vec![2, 4, 5])).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 2);
+	assert_eq!(r.get(&1), Some(100));
+	assert_eq!(r.get(&2), None);
+	assert_eq!(r.get(&3), Some(300));
+	assert_eq!(r.get(&4), None);
+	assert_eq!(r.get(&5), None);
+
+	// priority indexes are updated correctly
+	assert_eq!(r.min_priority(), Some(10));
+	assert_eq!(r.max_priority(), Some(30));
+
+	// remove_keys with non-existent keys is a no-op for those
+	let ver = timeout_s(2, w.remove_keys(vec![1, 99, 100])).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 1);
+	assert_eq!(r.get(&1), None);
+	assert_eq!(r.get(&3), Some(300));
+
+	// remove_keys with empty list is a no-op
+	let _ver =
+		timeout_s(2, w.remove_keys(Vec::<u64>::new())).await??;
+	assert_eq!(r.len(), 1);
+
+	// subsequent operations still work
+	let ver = timeout_s(2, w.insert(60, 10, 1000)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 2);
+
+	Ok(())
+}
+
 // remove_range on empty queue is a safe no-op
 #[tokio::test]
 async fn remove_range_empty() -> anyhow::Result<()> {

@@ -250,13 +250,55 @@ impl<T: Key> SetWriter<T> {
 		let value = Encoded(value.borrow().clone());
 		self
 			.execute(
-				SetCommand::Remove { value },
+				SetCommand::RemoveMany {
+					values: vec![value],
+				},
 				|cmd| match cmd {
-					SetCommand::Remove { value } => Error::Offline(value.0),
+					SetCommand::RemoveMany { mut values } => {
+						Error::Offline(values.remove(0).0)
+					}
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					SetCommand::Remove { value } => Error::Encoding(value.0, e),
+					SetCommand::RemoveMany { mut values } => {
+						Error::Encoding(values.remove(0).0, e)
+					}
+					_ => unreachable!(),
+				},
+			)
+			.await
+	}
+
+	/// Remove multiple values from the set.
+	pub async fn remove_many(
+		&self,
+		values: impl IntoIterator<Item = T>,
+	) -> Result<Version, Error<Vec<T>>> {
+		let values: Vec<Encoded<T>> =
+			values.into_iter().map(Encoded).collect();
+
+		if values.is_empty() {
+			return Ok(Version(self.group.committed()));
+		}
+
+		self
+			.execute(
+				SetCommand::RemoveMany { values },
+				|cmd| match cmd {
+					SetCommand::RemoveMany { values } => {
+						Error::Offline(
+							values.into_iter().map(|v| v.0).collect(),
+						)
+					}
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					SetCommand::RemoveMany { values } => {
+						Error::Encoding(
+							values.into_iter().map(|v| v.0).collect(),
+							e,
+						)
+					}
 					_ => unreachable!(),
 				},
 			)
@@ -417,8 +459,10 @@ impl<T: Key> StateMachine for SetStateMachine<T> {
 				SetCommand::Insert { value } => {
 					self.data.insert(value.0);
 				}
-				SetCommand::Remove { value } => {
-					self.data.remove(&value.0);
+				SetCommand::RemoveMany { values } => {
+					for value in values {
+						self.data.remove(&value.0);
+					}
 				}
 				SetCommand::Extend { entries } => {
 					for value in entries {
@@ -504,7 +548,7 @@ impl<T: Key> SnapshotStateMachine for SetStateMachine<T> {
 enum SetCommand<T> {
 	Clear,
 	Insert { value: Encoded<T> },
-	Remove { value: Encoded<T> },
+	RemoveMany { values: Vec<Encoded<T>> },
 	Extend { entries: Vec<Encoded<T>> },
 	TakeSnapshot(SnapshotRequest),
 }

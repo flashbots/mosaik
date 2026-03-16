@@ -322,13 +322,47 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 		let key = Encoded(key.clone());
 		self
 			.execute(
-				MapCommand::Remove { key },
+				MapCommand::RemoveMany { keys: vec![key] },
 				|cmd| match cmd {
-					MapCommand::Remove { key } => Error::Offline(key.0),
+					MapCommand::RemoveMany { mut keys } => {
+						Error::Offline(keys.remove(0).0)
+					}
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
-					MapCommand::Remove { key } => Error::Encoding(key.0, e),
+					MapCommand::RemoveMany { mut keys } => {
+						Error::Encoding(keys.remove(0).0, e)
+					}
+					_ => unreachable!(),
+				},
+			)
+			.await
+	}
+
+	/// Remove multiple key-value pairs from the map.
+	pub async fn remove_many(
+		&self,
+		keys: impl IntoIterator<Item = K>,
+	) -> Result<Version, Error<Vec<K>>> {
+		let keys: Vec<Encoded<K>> = keys.into_iter().map(Encoded).collect();
+
+		if keys.is_empty() {
+			return Ok(Version(self.group.committed()));
+		}
+
+		self
+			.execute(
+				MapCommand::RemoveMany { keys },
+				|cmd| match cmd {
+					MapCommand::RemoveMany { keys } => {
+						Error::Offline(keys.into_iter().map(|k| k.0).collect())
+					}
+					_ => unreachable!(),
+				},
+				|cmd, e| match cmd {
+					MapCommand::RemoveMany { keys } => {
+						Error::Encoding(keys.into_iter().map(|k| k.0).collect(), e)
+					}
 					_ => unreachable!(),
 				},
 			)
@@ -521,8 +555,10 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 						_ => {}
 					}
 				}
-				MapCommand::Remove { key } => {
-					self.data.remove(&key.0);
+				MapCommand::RemoveMany { keys } => {
+					for key in keys {
+						self.data.remove(&key.0);
+					}
 				}
 				MapCommand::Extend { entries } => {
 					for (key, value) in entries {
@@ -602,8 +638,8 @@ enum MapCommand<K, V> {
 		expected: Option<Encoded<V>>,
 		new: Option<Encoded<V>>,
 	},
-	Remove {
-		key: Encoded<K>,
+	RemoveMany {
+		keys: Vec<Encoded<K>>,
 	},
 	Extend {
 		entries: Vec<(Encoded<K>, Encoded<V>)>,
