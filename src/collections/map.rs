@@ -540,7 +540,9 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 				}
 				MapCommand::CompareExchange { key, expected, new } => {
 					match (self.data.get(&key.0), expected) {
-						(Some(current), Some(expected)) if current == &expected.0 => {
+						(Some(current), Some(expected))
+							if current.encode().ok() == expected.encode().ok() =>
+						{
 							if let Some(new) = new {
 								self.data.insert(key.0, new.0);
 							} else {

@@ -27,8 +27,8 @@ pub type StoreId = UniqueId;
 pub struct Version(pub crate::groups::Index);
 
 /// Type requirements for values stored in mosaik collections.
-pub trait Value: Clone + Datum + PartialEq + Sync {}
-impl<T> Value for T where T: Clone + Datum + PartialEq + Sync {}
+pub trait Value: Clone + Datum + Sync {}
+impl<T> Value for T where T: Clone + Datum + Sync {}
 
 /// Type requirements for keys in mosaik collections that support key-value
 /// pairs, such as `Map` or `Set` (key, ()).

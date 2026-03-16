@@ -520,8 +520,7 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 		&self,
 		keys: impl IntoIterator<Item = K>,
 	) -> Result<Version, Error<Vec<K>>> {
-		let keys: Vec<Encoded<K>> =
-			keys.into_iter().map(Encoded).collect();
+		let keys: Vec<Encoded<K>> = keys.into_iter().map(Encoded).collect();
 
 		if keys.is_empty() {
 			return Ok(Version(self.group.committed()));
@@ -532,18 +531,13 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 				DepqCommand::RemoveKeys { keys },
 				|cmd| match cmd {
 					DepqCommand::RemoveKeys { keys } => {
-						Error::Offline(
-							keys.into_iter().map(|k| k.0).collect(),
-						)
+						Error::Offline(keys.into_iter().map(|k| k.0).collect())
 					}
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
 					DepqCommand::RemoveKeys { keys } => {
-						Error::Encoding(
-							keys.into_iter().map(|k| k.0).collect(),
-							e,
-						)
+						Error::Encoding(keys.into_iter().map(|k| k.0).collect(), e)
 					}
 					_ => unreachable!(),
 				},
@@ -788,7 +782,7 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 				}
 				DepqCommand::CompareExchangeValue { key, expected, new } => {
 					if let Some((p, old_v)) = self.data.by_key.get(&key) {
-						if *old_v != expected.0 {
+						if old_v.encode().ok() != expected.0.encode().ok() {
 							continue;
 						}
 						let p = p.clone();

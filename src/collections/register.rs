@@ -400,7 +400,9 @@ impl<T: Value> StateMachine for RegisterStateMachine<T> {
 					self.data = Some(value.0);
 				}
 				RegisterCommand::CompareExchange { current, new } => {
-					if self.data == current.map(|v| v.0) {
+					if self.data.as_ref().map(|v| v.encode().ok())
+						== current.map(|v| v.encode().ok())
+					{
 						self.data = new.map(|v| v.0);
 					}
 				}

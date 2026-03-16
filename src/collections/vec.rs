@@ -142,17 +142,6 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 		self.data.borrow().head().cloned()
 	}
 
-	/// Test if a given element is in the vector.
-	///
-	/// Searches the vector for the first occurrence of a given value,
-	/// and returns `true` if it's there. If it's nowhere to be found
-	/// in the vector, it returns `false`.
-	///
-	/// Time: O(n)
-	pub fn contains(&self, value: &T) -> bool {
-		self.data.borrow().clone().contains(value)
-	}
-
 	/// Get a clone of the value at index `index` in a vector.
 	///
 	/// Returns `None` if the index is out of bounds.
@@ -160,17 +149,6 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	/// Time: O(log n)
 	pub fn get(&self, index: u64) -> Option<T> {
 		self.data.borrow().get(index as usize).cloned()
-	}
-
-	/// Get the index of a given element in the vector.
-	///
-	/// Searches the vector for the first occurrence of a given value,
-	/// and returns the index of the value if it's there. Otherwise,
-	/// it returns `None`.
-	///
-	/// Time: O(n)
-	pub fn index_of(&self, value: &T) -> Option<u64> {
-		self.data.borrow().clone().index_of(value).map(|i| i as u64)
 	}
 
 	/// Get an iterator over a vector.
@@ -190,6 +168,30 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	/// latest committed state.
 	pub fn version(&self) -> Version {
 		Version(self.group.committed())
+	}
+}
+
+impl<T: Value + PartialEq, const IS_WRITER: bool> Vec<T, IS_WRITER> {
+	/// Test if a given element is in the vector.
+	///
+	/// Searches the vector for the first occurrence of a given value,
+	/// and returns `true` if it's there. If it's nowhere to be found
+	/// in the vector, it returns `false`.
+	///
+	/// Time: O(n)
+	pub fn contains(&self, value: &T) -> bool {
+		self.data.borrow().clone().contains(value)
+	}
+
+	/// Get the index of a given element in the vector.
+	///
+	/// Searches the vector for the first occurrence of a given value,
+	/// and returns the index of the value if it's there. Otherwise,
+	/// it returns `None`.
+	///
+	/// Time: O(n)
+	pub fn index_of(&self, value: &T) -> Option<u64> {
+		self.data.borrow().clone().index_of(value).map(|i| i as u64)
 	}
 }
 
