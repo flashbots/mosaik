@@ -9,7 +9,7 @@ use {
 		*,
 	},
 	std::time::Instant,
-	tokio::join,
+	tokio::{join, task::JoinSet},
 };
 
 /// This test verifies that commands can be executed on leaders and followers,
@@ -303,6 +303,202 @@ async fn no_catchup_strong_query() -> anyhow::Result<()> {
 		 due to forwarding and waiting for response {dur_strong_follower:?} vs \
 		 {dur_weak_follower:?}"
 	);
+
+	Ok(())
+}
+
+/// Verifies that `execute` returns a `Send + Sync + 'static` future by
+/// spawning multiple concurrent commands onto a `JoinSet` from both the
+/// leader and a follower.
+#[tokio::test]
+async fn execute_is_send_sync_via_joinset() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let group_key = GroupKey::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	discover_all([&n0, &n1]).await?;
+
+	let g0 = n0
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	let g1 = n1
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	let timeout = 2
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
+
+	timeout_after(timeout, g0.when().online()).await?;
+	timeout_after(timeout, g1.when().online()).await?;
+
+	// Spawn multiple execute() calls into a JoinSet — this only compiles if
+	// the returned future is Send + 'static.
+	let mut set = JoinSet::new();
+	for i in 0..5 {
+		set.spawn(g0.execute(CounterCommand::Increment(i + 1)));
+	}
+	// Also spawn from the follower to exercise forwarding.
+	for i in 0..5 {
+		set.spawn(g1.execute(CounterCommand::Increment(i + 10)));
+	}
+
+	// Collect all results — every command should succeed.
+	while let Some(result) = set.join_next().await {
+		let index = result??;
+		tracing::info!("command committed at index {index}");
+	}
+
+	// All 10 commands should be committed: 1+2+3+4+5 + 10+11+12+13+14 = 75
+	timeout_s(2, g0.when().committed().reaches(10)).await?;
+	timeout_s(2, g1.when().committed().reaches(10)).await?;
+
+	let value = g0.query(CounterValueQuery, Consistency::Weak).await?;
+	tracing::info!("final counter value: {value}");
+	assert_eq!(value, 75);
+
+	Ok(())
+}
+
+/// Verifies that `execute_many` returns a `Send + Sync + 'static` future
+/// by spawning concurrent batch commands onto a `JoinSet`.
+#[tokio::test]
+async fn execute_many_is_send_sync_via_joinset() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let group_key = GroupKey::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	discover_all([&n0, &n1]).await?;
+
+	let g0 = n0
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	let g1 = n1
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	let timeout = 2
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
+
+	timeout_after(timeout, g0.when().online()).await?;
+	timeout_after(timeout, g1.when().online()).await?;
+
+	// Spawn batched execute_many() calls into a JoinSet from both nodes.
+	let mut set = JoinSet::new();
+
+	// Leader spawns two batches
+	set.spawn(g0.execute_many([
+		CounterCommand::Increment(1),
+		CounterCommand::Increment(2),
+		CounterCommand::Increment(3),
+	]));
+	set.spawn(g0.execute_many([
+		CounterCommand::Decrement(1),
+		CounterCommand::Increment(5),
+	]));
+
+	// Follower spawns two batches (exercising forwarding)
+	set.spawn(g1.execute_many([
+		CounterCommand::Increment(10),
+		CounterCommand::Increment(20),
+	]));
+	set.spawn(g1.execute_many([
+		CounterCommand::Decrement(5),
+		CounterCommand::Increment(15),
+	]));
+
+	// Collect all results — every batch should succeed.
+	while let Some(result) = set.join_next().await {
+		let range = result??;
+		tracing::info!("batch committed at range {}", Pretty(&range));
+	}
+
+	// Wait for both nodes to converge
+	timeout_s(2, g0.when().committed().reaches(9)).await?;
+	timeout_s(2, g1.when().committed().reaches(9)).await?;
+
+	// Expected: 1+2+3 -1+5 +10+20 -5+15 = 50
+	let value = g0.query(CounterValueQuery, Consistency::Weak).await?;
+	tracing::info!("final counter value: {value}");
+	assert_eq!(value, 50);
+
+	Ok(())
+}
+
+/// Verifies that `query` returns a `Send + Sync + 'static` future by
+/// spawning concurrent queries onto a `JoinSet` from both the leader and
+/// a follower, using both weak and strong consistency.
+#[tokio::test]
+async fn query_is_send_sync_via_joinset() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let group_key = GroupKey::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	discover_all([&n0, &n1]).await?;
+
+	let g0 = n0
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	let g1 = n1
+		.groups()
+		.with_key(group_key)
+		.with_state_machine(Counter::default())
+		.join();
+
+	let timeout = 2
+		* (g0.config().consensus().bootstrap_delay
+			+ g0.config().consensus().election_timeout
+			+ g0.config().consensus().election_timeout_jitter);
+
+	timeout_after(timeout, g0.when().online()).await?;
+	timeout_after(timeout, g1.when().online()).await?;
+
+	// Execute some commands so the state machine has a non-zero value.
+	timeout_s(2, g0.execute(CounterCommand::Increment(10))).await??;
+	timeout_s(2, g0.execute(CounterCommand::Increment(20))).await??;
+	timeout_s(2, g1.when().committed().reaches(2)).await?;
+
+	// Spawn concurrent queries onto a JoinSet — this only compiles if the
+	// returned future is Send + 'static.
+	let mut set = JoinSet::new();
+
+	// Weak queries from leader and follower
+	for _ in 0..3 {
+		set.spawn(g0.query(CounterValueQuery, Consistency::Weak));
+		set.spawn(g1.query(CounterValueQuery, Consistency::Weak));
+	}
+
+	// Strong queries from leader and follower
+	for _ in 0..3 {
+		set.spawn(g0.query(CounterValueQuery, Consistency::Strong));
+		set.spawn(g1.query(CounterValueQuery, Consistency::Strong));
+	}
+
+	// All queries should return the same value.
+	while let Some(result) = set.join_next().await {
+		let value = result??;
+		tracing::info!("query result: {value}");
+		assert_eq!(value, 30);
+	}
 
 	Ok(())
 }

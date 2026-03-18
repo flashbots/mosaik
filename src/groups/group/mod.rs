@@ -15,13 +15,14 @@ use {
 		},
 		primitives::Short,
 	},
-	core::{fmt, marker::PhantomData},
+	core::{fmt, fmt::Debug, marker::PhantomData},
 	dashmap::DashMap,
 	derive_more::Deref,
+	futures::FutureExt,
 	serde::{Deserialize, Serialize},
 	state::WorkerState,
 	std::sync::Arc,
-	tokio::sync::oneshot,
+	tokio::sync::{mpsc::error::SendError, oneshot},
 };
 
 pub(in crate::groups) mod state;
@@ -47,7 +48,7 @@ pub enum Consistency {
 /// Carries the result of executing a query against the group's state machine,
 /// along with the position of the state machine at which the query was
 /// executed.
-#[derive(Debug, Clone, Deref, Serialize, Deserialize)]
+#[derive(Clone, Deref, Serialize, Deserialize)]
 pub struct CommittedQueryResult<M: StateMachine> {
 	/// The result of executing the query against the state machine.
 	#[deref]
@@ -57,6 +58,15 @@ pub struct CommittedQueryResult<M: StateMachine> {
 	/// query was processed. This can be used by clients to determine how up to
 	/// date the query result is with respect to the current state of the group.
 	pub at_position: Index,
+}
+
+impl<M: StateMachine> Debug for CommittedQueryResult<M> {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.debug_struct("CommittedQueryResult")
+			.field("result", &"<query result>")
+			.field("at_position", &self.at_position)
+			.finish()
+	}
 }
 
 /// Public API for interacting with a joined group.
@@ -151,14 +161,14 @@ impl<M: StateMachine> Group<M> {
 	///
 	/// Consecutive calls to this method are guaranteed to be processed in the
 	/// order they were issued.
-	pub async fn execute(
+	pub fn execute(
 		&self,
 		command: M::Command,
-	) -> Result<Index, CommandError<M>> {
+	) -> impl Future<Output = Result<Index, CommandError<M>>> + Send + Sync + 'static
+	{
 		self
 			.execute_many([command])
-			.await
-			.map(|range| *range.start())
+			.map(|range| range.map(|r| *r.start()))
 	}
 
 	/// Issues a series of commands to the group, which will be replicated to all
@@ -179,13 +189,21 @@ impl<M: StateMachine> Group<M> {
 	///
 	/// Consecutive calls to this method are guaranteed to be processed in the
 	/// order they were issued.
-	pub async fn execute_many(
+	pub fn execute_many(
 		&self,
 		commands: impl IntoIterator<Item = M::Command>,
-	) -> Result<IndexRange, CommandError<M>> {
-		let assigned_ix = self.feed_many(commands).await?;
-		self.when().committed().reaches(assigned_ix.clone()).await;
-		Ok(assigned_ix)
+	) -> impl Future<Output = Result<IndexRange, CommandError<M>>>
+	+ Send
+	+ Sync
+	+ 'static {
+		let when = self.when().clone();
+		let assigned_ix_fut = self.feed_many(commands);
+
+		async move {
+			let assigned_ix = assigned_ix_fut.await?;
+			when.committed().reaches(assigned_ix.clone()).await;
+			Ok(assigned_ix)
+		}
 	}
 
 	/// Sends a command to the group leader without waiting for it to be committed
@@ -193,11 +211,14 @@ impl<M: StateMachine> Group<M> {
 	/// has been sent to the leader and the leader has acknowledged receipt of the
 	/// command and assigned it an index, but it does not guarantee that the
 	/// command has been committed to the state.
-	pub async fn feed(
+	pub fn feed(
 		&self,
 		command: M::Command,
-	) -> Result<Index, CommandError<M>> {
-		self.feed_many([command]).await.map(|range| *range.start())
+	) -> impl Future<Output = Result<Index, CommandError<M>>> + Send + Sync + 'static
+	{
+		self
+			.feed_many([command])
+			.map(|range| range.map(|r| *r.start()))
 	}
 
 	/// Sends a series of commands to the group leader without waiting for them to
@@ -205,32 +226,42 @@ impl<M: StateMachine> Group<M> {
 	/// the commands have been sent to the leader and the leader has acknowledged
 	/// receipt of the commands and assigned them indices but does not guarantee
 	/// that the commands have been committed to the state.
-	pub async fn feed_many(
+	pub fn feed_many(
 		&self,
 		commands: impl IntoIterator<Item = M::Command>,
-	) -> Result<IndexRange, CommandError<M>> {
+	) -> impl Future<Output = Result<IndexRange, CommandError<M>>>
+	+ Send
+	+ Sync
+	+ 'static {
 		let commands: Vec<_> = commands.into_iter().collect();
+		let (result_tx, result_rx) = oneshot::channel();
 
 		if commands.is_empty() {
-			return Err(CommandError::NoCommands);
+			#[expect(clippy::missing_panics_doc)]
+			result_tx
+				.send(Err(CommandError::NoCommands))
+				.expect("oneshot channel should be open");
+		} else if let Err(SendError(WorkerCommand::Raft(
+			WorkerRaftCommand::Feed(_, result_tx),
+		))) =
+			self
+				.state
+				.cmd_tx
+				.send(WorkerCommand::Raft(WorkerRaftCommand::Feed(
+					commands, result_tx,
+				))) {
+			#[expect(clippy::missing_panics_doc)]
+			result_tx
+				.send(Err(CommandError::GroupTerminated))
+				.expect("oneshot channel should be open");
 		}
 
-		let (result_tx, result_rx) = oneshot::channel();
-		if self
-			.state
-			.cmd_tx
-			.send(WorkerCommand::Raft(WorkerRaftCommand::Feed(
-				commands, result_tx,
-			)))
-			.is_err()
-		{
-			return Err(CommandError::GroupTerminated);
-		}
-
-		match result_rx.await {
-			Ok(Ok(index_range)) => Ok(index_range),
-			Ok(Err(e)) => Err(e), // command processing error (e.g. not leader)
-			Err(_) => Err(CommandError::GroupTerminated), // oneshot RecvError
+		async move {
+			match result_rx.await {
+				Ok(Ok(index_range)) => Ok(index_range),
+				Ok(Err(e)) => Err(e), // command processing error (e.g. not leader)
+				Err(_) => Err(CommandError::GroupTerminated), // oneshot RecvError
+			}
 		}
 	}
 
@@ -246,29 +277,41 @@ impl<M: StateMachine> Group<M> {
 	/// current leader of the group for processing, which guarantees that the
 	/// result is consistent with the current state of the group. However, this
 	/// may introduce additional latency if the local node is not the leader.
-	pub async fn query(
+	pub fn query(
 		&self,
 		query: M::Query,
 		consistency: Consistency,
-	) -> Result<CommittedQueryResult<M>, QueryError<M>> {
+	) -> impl Future<Output = Result<CommittedQueryResult<M>, QueryError<M>>>
+	+ Send
+	+ Sync
+	+ 'static {
 		let (result_tx, result_rx) = oneshot::channel();
-		if self
-			.state
-			.cmd_tx
-			.send(WorkerCommand::Raft(WorkerRaftCommand::Query(
-				query,
-				consistency,
-				result_tx,
-			)))
-			.is_err()
-		{
-			return Err(QueryError::GroupTerminated);
+
+		if let Err(SendError(WorkerCommand::Raft(WorkerRaftCommand::Query(
+			_,
+			_,
+			result_tx,
+		)))) =
+			self
+				.state
+				.cmd_tx
+				.send(WorkerCommand::Raft(WorkerRaftCommand::Query(
+					query,
+					consistency,
+					result_tx,
+				))) {
+			#[expect(clippy::missing_panics_doc)]
+			result_tx
+				.send(Err(QueryError::GroupTerminated))
+				.expect("oneshot channel should be open");
 		}
 
-		match result_rx.await {
-			Ok(Ok(result)) => Ok(result),
-			Ok(Err(e)) => Err(e), // query processing error
-			Err(_) => Err(QueryError::GroupTerminated), // oneshot RecvError
+		async move {
+			match result_rx.await {
+				Ok(Ok(result)) => Ok(result),
+				Ok(Err(e)) => Err(e), // query processing error
+				Err(_) => Err(QueryError::GroupTerminated), // oneshot RecvError
+			}
 		}
 	}
 }
