@@ -55,6 +55,11 @@ impl From<&Secret> for GroupKey {
 }
 
 impl GroupKey {
+	/// Creates a new `GroupKey` from the given secret `Digest`.
+	pub const fn new(secret: Secret) -> Self {
+		Self { secret }
+	}
+
 	/// Create a new `GroupKey` from the given secret `UniqueId`.
 	pub fn from_secret(secret: impl Into<Secret>) -> Self {
 		let secret = secret.into();
