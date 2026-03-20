@@ -55,6 +55,74 @@ Collection::reader_with_config(&network, store_id, sync_config)
 The `StoreId` and `SyncConfig` must match between writers and readers for them
 to join the same consensus group.
 
+### Construction from the `collection!` macro (recommended)
+
+The `collection!` macro declares a named collection definition with a
+compile-time `StoreId`. It generates a struct and implements
+`CollectionReader` and/or `CollectionWriter`, letting you create readers
+and writers without repeating the store ID.
+
+```rust,ignore
+use mosaik::{collection, collections::CollectionWriter, WriterOf};
+
+// Full — implements both CollectionReader and CollectionWriter
+collection!(pub Tags = mosaik::collections::Set<String>, "tags");
+
+let writer: WriterOf<Tags> = Tags::writer(&network);
+
+// Reader-only — implements CollectionReader only
+collection!(pub reader TagsReader = mosaik::collections::Set<String>, "tags");
+
+// Writer-only — implements CollectionWriter only
+collection!(pub writer TagsWriter = mosaik::collections::Set<String>, "tags");
+```
+
+Use `ReaderOf<C>` and `WriterOf<C>` (re-exported at `mosaik::ReaderOf` /
+`mosaik::WriterOf`) to refer to the concrete reader or writer types:
+
+```rust,ignore
+use mosaik::{collection, collections::CollectionReader, ReaderOf};
+
+collection!(pub reader Logs = mosaik::collections::Vec<String>, "app.logs");
+
+fn subscribe(network: &mosaik::Network) -> ReaderOf<Logs> {
+	Logs::reader(network)
+}
+```
+
+See the [collection! macro section](../collections.md#the-collection-macro-recommended)
+for the full syntax reference, mode table, and guidance on when to use the
+macro vs. direct constructors.
+
+### Construction from a `CollectionDef`
+
+As an alternative, you can define a collection's identity with `CollectionDef`
+and derive readers and writers from it. This is useful when you need an explicit
+definition value (e.g., passing it as a function argument).
+
+```rust,ignore
+use mosaik::{unique_id, collections::{CollectionDef, ReaderDef, WriterDef, Set}};
+
+// Full definition — can create both writers and readers
+const TAGS: CollectionDef<Set<String>> =
+	CollectionDef::new(unique_id!("tags"));
+
+let writer = TAGS.writer(&network);
+let reader = TAGS.reader(&network);
+
+// Narrowed definitions — expose only one side
+const TAGS_READER: ReaderDef<Set<String>> = TAGS.as_reader();
+const TAGS_WRITER: WriterDef<Set<String>> = TAGS.as_writer();
+
+let r = TAGS_READER.open(&network);
+let w = TAGS_WRITER.open(&network);
+```
+
+This pattern is especially useful for libraries that own a collection and want
+to export a `ReaderDef` so downstream code can subscribe without knowing the
+`StoreId`. See the [CollectionDef section](../collections.md#collection-definitions-collectiondef)
+for the full type-parameter mapping.
+
 ## How it works
 
 Internally, the const-generic boolean controls two things:
@@ -104,8 +172,7 @@ Required for all element and value types:
 
 ```rust,ignore
 pub trait Value:
-    Clone + Debug + Serialize + DeserializeOwned
-    + Hash + PartialEq + Eq + Send + Sync + 'static
+    Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static
 {}
 
 // Blanket impl — any conforming type is a Value

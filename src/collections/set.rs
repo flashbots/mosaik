@@ -1,5 +1,6 @@
 use {
 	super::{
+		CollectionFromDef,
 		Error,
 		READER,
 		SyncConfig,
@@ -274,8 +275,7 @@ impl<T: Key> SetWriter<T> {
 		&self,
 		values: impl IntoIterator<Item = T>,
 	) -> Result<Version, Error<Vec<T>>> {
-		let values: Vec<Encoded<T>> =
-			values.into_iter().map(Encoded).collect();
+		let values: Vec<Encoded<T>> = values.into_iter().map(Encoded).collect();
 
 		if values.is_empty() {
 			return Ok(Version(self.group.committed()));
@@ -286,18 +286,13 @@ impl<T: Key> SetWriter<T> {
 				SetCommand::RemoveMany { values },
 				|cmd| match cmd {
 					SetCommand::RemoveMany { values } => {
-						Error::Offline(
-							values.into_iter().map(|v| v.0).collect(),
-						)
+						Error::Offline(values.into_iter().map(|v| v.0).collect())
 					}
 					_ => unreachable!(),
 				},
 				|cmd, e| match cmd {
 					SetCommand::RemoveMany { values } => {
-						Error::Encoding(
-							values.into_iter().map(|v| v.0).collect(),
-							e,
-						)
+						Error::Encoding(values.into_iter().map(|v| v.0).collect(), e)
 					}
 					_ => unreachable!(),
 				},
@@ -364,6 +359,19 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 			group,
 			data,
 		}
+	}
+}
+
+impl<T: Key, const WRITER: bool> CollectionFromDef for Set<T, WRITER> {
+	type Reader = SetReader<T>;
+	type Writer = SetWriter<T>;
+
+	fn reader(network: &Network, store_id: StoreId) -> Self::Reader {
+		Self::Reader::reader(network, store_id)
+	}
+
+	fn writer(network: &Network, store_id: StoreId) -> Self::Writer {
+		Self::Writer::writer(network, store_id)
 	}
 }
 

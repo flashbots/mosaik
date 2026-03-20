@@ -1,6 +1,11 @@
 use {
 	crate::utils::{discover_all, timeout_s},
-	mosaik::{collections::StoreId, *},
+	mosaik::{
+		collections::{
+			CollectionDef, CollectionReader, CollectionWriter, StoreId,
+		},
+		*,
+	},
 	std::collections::HashMap,
 };
 
@@ -691,8 +696,7 @@ async fn remove_many() -> anyhow::Result<()> {
 	assert_eq!(r.get(&3), Some(30));
 
 	// remove_many with empty list is a no-op
-	let _ver_empty =
-		timeout_s(2, w.remove_many(Vec::<u64>::new())).await??;
+	let _ver_empty = timeout_s(2, w.remove_many(Vec::<u64>::new())).await??;
 	assert_eq!(r.len(), 1);
 
 	// subsequent operations still work
@@ -1120,6 +1124,65 @@ async fn compare_exchange_string_keys() -> anyhow::Result<()> {
 	timeout_s(2, r.when().reaches(ver)).await?;
 	assert_eq!(r.get("key"), None);
 	assert!(r.is_empty());
+
+	Ok(())
+}
+
+#[tokio::test]
+async fn construct_from_def() -> anyhow::Result<()> {
+	const DEF: CollectionDef<mosaik::collections::Map<String, String>> =
+		CollectionDef::new(unique_id!("test1"));
+
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = DEF.writer(&n0);
+	let r = DEF.reader(&n1);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	let ver = timeout_s(2, w.insert("hello".into(), "world".into())).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+
+	assert_eq!(w.len(), 1);
+
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 1);
+
+	assert_eq!(r.get("hello"), Some("world".into()));
+
+	Ok(())
+}
+
+#[tokio::test]
+async fn construct_from_macro() -> anyhow::Result<()> {
+	mosaik::collection!(
+		TestMap = mosaik::collections::Map<String, String>,
+		"test.map.macro"
+	);
+
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w: WriterOf<TestMap> = TestMap::writer(&n0);
+	let r: ReaderOf<TestMap> = TestMap::reader(&n1);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	let ver =
+		timeout_s(2, w.insert("hello".into(), "world".into())).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	assert_eq!(r.len(), 1);
+	assert_eq!(r.get("hello"), Some("world".into()));
 
 	Ok(())
 }

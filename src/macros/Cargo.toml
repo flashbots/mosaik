@@ -16,7 +16,7 @@ proc-macro = true
 
 [dependencies]
 blake3.workspace = true
-syn = "2"
+syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
 

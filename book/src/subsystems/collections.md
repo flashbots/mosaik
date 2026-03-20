@@ -5,22 +5,22 @@ structures that feel like local Rust collections but are automatically
 synchronized across all participating nodes using Raft consensus.
 
 ```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                   Collections                                          │
-│                                                                        │
+┌──────────────────────────────────────────────────────────────────────────┐
+│                   Collections                                            │
+│                                                                          │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ ┌──────────┐ ┌──────┐ │
 │  │   Map    │ │   Vec    │ │   Set    │ │  DEPQ  │ │ Register │ │ Once │ │
 │  │ <K, V>   │ │ <T>      │ │ <T>      │ │<P,K,V> │ │  <T>     │ │ <T>  │ │
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───┬────┘ └────┬─────┘ └──┬───┘ │
 │       └────────────┴────────────┴─┬─────────┴───────────┴──────────┘     │
-│                                   │                                     │
-│                                   │                                    │
-│                                   │                                    │
-│                  ┌────────────────▼───────────────────┐                │
-│                  │    Groups (Raft Consensus)         │                │
-│                  │    One group per collection        │                │
-│                  └────────────────────────────────────┘                │
-└────────────────────────────────────────────────────────────────────────┘
+│                                   │                                      │
+│                                   │                                      │
+│                                   │                                      │
+│                  ┌────────────────▼───────────────────┐                  │
+│                  │    Groups (Raft Consensus)         │                  │
+│                  │    One group per collection        │                  │
+│                  └────────────────────────────────────┘                  │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 Each collection instance creates its own Raft consensus group. Different
@@ -92,11 +92,11 @@ hold at most one value.
 Collections use blanket-implemented marker traits to constrain their type
 parameters:
 
-| Trait        | Required bounds                                                                                | Used by                         |
-| ------------ | ---------------------------------------------------------------------------------------------- | ------------------------------- |
-| `Value`      | `Clone + Debug + Serialize + DeserializeOwned + Hash + PartialEq + Eq + Send + Sync + 'static` | All element/value types         |
-| `Key`        | `Clone + Serialize + DeserializeOwned + Hash + PartialEq + Eq + Send + Sync + 'static`         | Map keys, Set elements, PQ keys |
-| `OrderedKey` | `Key + Ord`                                                                                    | PriorityQueue priorities        |
+| Trait        | Required bounds                                                                        | Used by                         |
+| ------------ | -------------------------------------------------------------------------------------- | ------------------------------- |
+| `Value`      | `Clone + Debug + Serialize + DeserializeOwned + Send + Sync + 'static`                 | All element/value types         |
+| `Key`        | `Clone + Serialize + DeserializeOwned + Hash + PartialEq + Eq + Send + Sync + 'static` | Map keys, Set elements, PQ keys |
+| `OrderedKey` | `Key + Ord`                                                                            | PriorityQueue priorities        |
 
 These traits are automatically implemented for any type that satisfies their
 bounds — you never need to implement them manually.
@@ -115,6 +115,157 @@ This means `Map::<String, u64>::writer(&net, id)` and
 the same `StoreId`, because the key type differs. Likewise, a `Once<String>`
 and a `Register<String>` with the same `StoreId` form separate groups because
 the prefix differs.
+
+## The `collection!` macro (recommended)
+
+The `collection!` macro is the recommended way to declare named collection
+definitions. It generates a struct with a compile-time `StoreId` and
+implements the `CollectionReader` and/or `CollectionWriter` traits, so you
+can create readers and writers without repeating the store ID at every call
+site.
+
+### Syntax
+
+```rust,ignore
+use mosaik::collection;
+
+// Full (reader + writer):
+collection!(pub Prices = mosaik::collections::Map<String, f64>, "prices");
+
+// Reader only:
+collection!(pub reader Prices = mosaik::collections::Map<String, f64>, "prices");
+
+// Writer only:
+collection!(pub writer Prices = mosaik::collections::Map<String, f64>, "prices");
+
+// With generics:
+collection!(pub Items<T> = mosaik::collections::Vec<T>, "app.items");
+```
+
+The three modes control which traits are implemented on the generated struct:
+
+| Mode            | Implements                                   |
+| --------------- | -------------------------------------------- |
+| *(default)*     | `CollectionReader` **and** `CollectionWriter` |
+| `reader`        | `CollectionReader` only                      |
+| `writer`        | `CollectionWriter` only                      |
+
+### Usage
+
+Call the trait methods on the generated struct to create reader or writer
+instances:
+
+```rust,ignore
+use mosaik::{collection, collections::CollectionReader, ReaderOf};
+
+collection!(pub MyVec = mosaik::collections::Vec<String>, "my.vec");
+
+struct MyType {
+	reader: ReaderOf<MyVec>,
+}
+
+impl MyType {
+	pub fn new(network: &mosaik::Network) -> Self {
+		Self { reader: MyVec::reader(network) }
+	}
+}
+```
+
+The `ReaderOf<C>` and `WriterOf<C>` type aliases (re-exported at the crate
+root) resolve to the concrete reader or writer type for a given collection
+definition:
+
+| Alias          | Expands to                        |
+| -------------- | --------------------------------- |
+| `ReaderOf<C>`  | `<C as CollectionReader>::Reader`  |
+| `WriterOf<C>`  | `<C as CollectionWriter>::Writer`  |
+
+### Store ID derivation
+
+The string literal you pass as the last argument is hashed with blake3 at
+compile time to produce the `StoreId`. If the string is exactly 64 hex
+characters, it is decoded directly instead of hashed. This matches the
+behavior of `unique_id!`.
+
+### When to use the macro vs. direct constructors
+
+Use the `collection!` macro when:
+
+- Multiple modules or crates reference the same collection.
+- You want a single source of truth for the store ID.
+- You want compile-time checked reader/writer type aliases via
+  `ReaderOf<C>` / `WriterOf<C>`.
+
+Use direct constructors (`Map::writer(&network, store_id)`) when:
+
+- You only need the collection in one place.
+- The store ID is computed at runtime.
+
+## Collection definitions (`CollectionDef`)
+
+> **Note:** The [`collection!` macro](#the-collection-macro-recommended) is
+> now the recommended approach for declaring named collection definitions.
+> `CollectionDef`, `ReaderDef`, and `WriterDef` still work and are useful
+> when you need an explicit value (e.g., passing a definition as a function
+> argument), but for most use cases the macro is more ergonomic.
+
+Instead of passing a `StoreId` to each constructor call, you can define a
+collection's identity once as a constant and create readers and writers from it.
+
+```rust,ignore
+use mosaik::{unique_id, collections::{CollectionDef, ReaderDef, Map}};
+
+// Define the collection identity as a compile-time constant
+const PRICES: CollectionDef<Map<String, f64>> =
+	CollectionDef::new(unique_id!("prices"));
+
+// Create writer and reader from the definition
+let w = PRICES.writer(&network);
+let r = PRICES.reader(&network);
+```
+
+The type parameter `T` on `CollectionDef<C, T>` encodes the collection's value
+types as a tuple. For single-type collections it is the type itself; for
+multi-type collections it is a tuple:
+
+| Collection               | `T` parameter |
+| ------------------------ | ------------- |
+| `Map<K, V>`              | `(K, V)`      |
+| `Vec<T>`                 | `T`           |
+| `Set<T>`                 | `T`           |
+| `Register<T>`            | `T`           |
+| `Once<T>`                | `T`           |
+| `PriorityQueue<P, K, V>` | `(P, K, V)`   |
+
+### Exporting reader-only or writer-only definitions
+
+`CollectionDef` can produce narrowed definitions that expose only one side of
+the writer/reader split. This is the recommended pattern when a library owns a
+collection and wants to let consumers read from it without granting write
+access:
+
+```rust,ignore
+// In your library crate:
+pub const PRICES: CollectionDef<Map<String, f64>> =
+	CollectionDef::new(unique_id!("prices"));
+
+// Export only a reader definition for downstream consumers
+pub const PRICES_READER: ReaderDef<Map<String, f64>> = PRICES.as_reader();
+```
+
+Downstream code uses `PRICES_READER` without needing the `StoreId`:
+
+```rust,ignore
+let reader = my_lib::PRICES_READER.open(&network);
+reader.when().online().await;
+```
+
+A `WriterDef` works the same way via `as_writer()`.
+
+All three definition types (`CollectionDef`, `ReaderDef`, `WriterDef`) are
+`const`-constructible and can be used as top-level constants. See
+[Writer/Reader Pattern](collections/writer-reader.md) for more on the
+writer/reader split.
 
 ## Version tracking
 

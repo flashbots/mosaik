@@ -54,8 +54,8 @@ use {
 struct Opts {
 	/// The secret key to use for the bootstrap node.
 	#[clap(
-		short, 
-		long, 
+		short,
+		long,
 		value_parser = parse_secret_key,
 		env = "MOSAIK_BOOTSTRAP_SECRET"
 	)]

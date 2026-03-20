@@ -1,5 +1,6 @@
 use {
 	super::{
+		CollectionFromDef,
 		Error,
 		READER,
 		SyncConfig,
@@ -458,6 +459,19 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 		let when = When::new(group.when().clone());
 
 		Vec::<T, W> { when, group, data }
+	}
+}
+
+impl<T: Value, const WRITER: bool> CollectionFromDef for Vec<T, WRITER> {
+	type Reader = VecReader<T>;
+	type Writer = VecWriter<T>;
+
+	fn reader(network: &Network, store_id: StoreId) -> Self::Reader {
+		Self::Reader::reader(network, store_id)
+	}
+
+	fn writer(network: &Network, store_id: StoreId) -> Self::Writer {
+		Self::Writer::writer(network, store_id)
 	}
 }
 

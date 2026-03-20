@@ -14,8 +14,8 @@ pub struct BeaconCommand {
 
 	/// The secret key to use for the bootstrap node. Ensures stable peer id.
 	#[clap(
-		short, 
-		long, 
+		short,
+		long,
 		value_parser = parse_secret_key,
 	)]
 	secret: Option<SecretKey>,

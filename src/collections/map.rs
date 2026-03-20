@@ -12,11 +12,14 @@ use {
 		Network,
 		PeerId,
 		UniqueId,
-		collections::sync::{
-			Snapshot,
-			SnapshotStateMachine,
-			SnapshotSync,
-			protocol::SnapshotRequest,
+		collections::{
+			CollectionFromDef,
+			sync::{
+				Snapshot,
+				SnapshotStateMachine,
+				SnapshotSync,
+				protocol::SnapshotRequest,
+			},
 		},
 		groups::{
 			ApplyContext,
@@ -367,6 +370,21 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 				},
 			)
 			.await
+	}
+}
+
+impl<K: Key, V: Value, const WRITER: bool> CollectionFromDef
+	for Map<K, V, WRITER>
+{
+	type Reader = MapReader<K, V>;
+	type Writer = MapWriter<K, V>;
+
+	fn reader(network: &crate::Network, store_id: StoreId) -> Self::Reader {
+		Self::Reader::reader(network, store_id)
+	}
+
+	fn writer(network: &crate::Network, store_id: StoreId) -> Self::Writer {
+		Self::Writer::writer(network, store_id)
 	}
 }
 

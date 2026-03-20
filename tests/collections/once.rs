@@ -1,6 +1,12 @@
 use {
 	crate::utils::{discover_all, timeout_s},
-	mosaik::{collections::StoreId, *},
+	mosaik::{
+		collections::{
+			CollectionDef, CollectionReader, CollectionWriter, ReaderDef,
+			StoreId,
+		},
+		*,
+	},
 };
 
 // Basic smoke: writer + reader, write-once semantics
@@ -221,6 +227,77 @@ async fn late_writer_catchup() -> anyhow::Result<()> {
 
 	assert_eq!(w0.read(), Some(42));
 	assert_eq!(w1.read(), Some(42));
+
+	Ok(())
+}
+
+#[tokio::test]
+async fn construct_from_def() -> anyhow::Result<()> {
+	const DEF: CollectionDef<mosaik::collections::Once<String>> =
+		CollectionDef::new(unique_id!("test1"));
+
+	const READER_DEF: ReaderDef<mosaik::collections::Once<String>> =
+		DEF.as_reader();
+
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = DEF.writer(&n0);
+	let r = DEF.reader(&n1);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	let ver = timeout_s(2, w.set("hello".into())).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+
+	assert!(w.is_some());
+
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert!(r.is_some());
+
+	let val = r.get();
+	assert_eq!(val, Some("hello".into()));
+
+	let n2 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1, &n2])).await??;
+
+	let r2 = READER_DEF.open(&n2);
+	timeout_s(10, r2.when().online()).await?;
+	timeout_s(10, r2.when().reaches(ver)).await?;
+	assert!(r2.is_some());
+	assert_eq!(r2.get(), Some("hello".into()));
+
+	Ok(())
+}
+
+#[tokio::test]
+async fn construct_from_macro() -> anyhow::Result<()> {
+	mosaik::collection!(
+		TestOnce = mosaik::collections::Once<String>,
+		"test.once.macro"
+	);
+
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w: WriterOf<TestOnce> = TestOnce::writer(&n0);
+	let r: ReaderOf<TestOnce> = TestOnce::reader(&n1);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	let ver = timeout_s(2, w.set("hello".into())).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	assert!(r.is_some());
+	assert_eq!(r.get(), Some("hello".into()));
 
 	Ok(())
 }

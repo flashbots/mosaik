@@ -24,7 +24,7 @@ pub enum Message<M: StateMachine> {
 	/// entries. When `entries` is empty, this is a pure heartbeat.
 	#[display(
 		"AppendEntries[t={}/pos={}/n={}/c={}/{}]/",
-		_0.term, _0.prev_log_position, _0.entries.len(), 
+		_0.term, _0.prev_log_position, _0.entries.len(),
 		_0.leader_commit, Short(_0.leader)
 	)]
 	AppendEntries(AppendEntries<M::Command>),

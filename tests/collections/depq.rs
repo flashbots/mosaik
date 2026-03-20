@@ -1,6 +1,11 @@
 use {
 	crate::utils::{discover_all, timeout_s},
-	mosaik::{collections::StoreId, *},
+	mosaik::{
+		collections::{
+			CollectionDef, CollectionReader, CollectionWriter, StoreId,
+		},
+		*,
+	},
 };
 
 // Basic smoke: writer + reader, all read/write operations, no late join
@@ -972,8 +977,7 @@ async fn remove_keys() -> anyhow::Result<()> {
 	assert_eq!(r.get(&3), Some(300));
 
 	// remove_keys with empty list is a no-op
-	let _ver =
-		timeout_s(2, w.remove_keys(Vec::<u64>::new())).await??;
+	let _ver = timeout_s(2, w.remove_keys(Vec::<u64>::new())).await??;
 	assert_eq!(r.len(), 1);
 
 	// subsequent operations still work
@@ -1456,6 +1460,70 @@ async fn compare_exchange_value_remove_affects_minmax() -> anyhow::Result<()> {
 	assert_eq!(r.min_priority(), Some(10)); // only entry left
 	assert_eq!(r.max_priority(), Some(10));
 	assert_eq!(r.len(), 1);
+
+	Ok(())
+}
+
+#[tokio::test]
+async fn construct_from_def() -> anyhow::Result<()> {
+	const DEF: CollectionDef<
+		mosaik::collections::PriorityQueue<u64, String, String>,
+	> = CollectionDef::new(unique_id!("test1"));
+
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = DEF.writer(&n0);
+	let r = DEF.reader(&n1);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	let ver =
+		timeout_s(2, w.insert(15, "hello".into(), "world".into())).await??;
+	timeout_s(2, w.when().reaches(ver)).await?;
+
+	assert_eq!(w.len(), 1);
+
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 1);
+
+	assert_eq!(r.get("hello"), Some("world".into()));
+	assert_eq!(r.get_priority("hello"), Some(15));
+
+	Ok(())
+}
+
+#[tokio::test]
+async fn construct_from_macro() -> anyhow::Result<()> {
+	mosaik::collection!(
+		TestPQ = collections::PriorityQueue<u64, String, String>,
+		"test.depq.macro"
+	);
+
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w: WriterOf<TestPQ> = TestPQ::writer(&n0);
+	let r: ReaderOf<TestPQ> = TestPQ::reader(&n1);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	let ver =
+		timeout_s(2, w.insert(15, "hello".into(), "world".into()))
+			.await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	assert_eq!(r.len(), 1);
+	assert_eq!(r.get("hello"), Some("world".into()));
+	assert_eq!(r.get_priority("hello"), Some(15));
 
 	Ok(())
 }

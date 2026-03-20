@@ -1,5 +1,6 @@
 use {
 	super::{
+		CollectionFromDef,
 		Error,
 		READER,
 		SyncConfig,
@@ -632,6 +633,21 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 			group,
 			data,
 		}
+	}
+}
+
+impl<P: OrderedKey, K: Key, V: Value, const WRITER: bool> CollectionFromDef
+	for PriorityQueue<P, K, V, WRITER>
+{
+	type Reader = PriorityQueueReader<P, K, V>;
+	type Writer = PriorityQueueWriter<P, K, V>;
+
+	fn reader(network: &crate::Network, store_id: StoreId) -> Self::Reader {
+		Self::Reader::reader(network, store_id)
+	}
+
+	fn writer(network: &crate::Network, store_id: StoreId) -> Self::Writer {
+		Self::Writer::writer(network, store_id)
 	}
 }
 
