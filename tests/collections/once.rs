@@ -1,8 +1,11 @@
 use {
-	crate::utils::{discover_all, timeout_s},
+	crate::utils::{discover_all, timeout_ms, timeout_s},
 	mosaik::{
 		collections::{
-			CollectionDef, CollectionReader, CollectionWriter, ReaderDef,
+			CollectionDef,
+			CollectionReader,
+			CollectionWriter,
+			ReaderDef,
 			StoreId,
 		},
 		*,
@@ -193,6 +196,39 @@ async fn writer_reads_own_write() -> anyhow::Result<()> {
 	timeout_s(2, w.when().reaches(ver)).await?;
 
 	assert_eq!(w.read(), Some("hello".into()));
+
+	Ok(())
+}
+
+// await_value blocks until a value is set, then returns it
+#[tokio::test]
+async fn await_value() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = mosaik::collections::Once::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Once::<u64>::reader(&n1, store_id);
+
+	// reader awaits a value that hasn't been written yet
+	let handle = tokio::spawn(async move { r.await_value().await });
+
+	// give the reader time to start waiting, then write
+	timeout_s(10, w.when().online()).await?;
+	let ver = timeout_s(2, w.write(42)).await??;
+
+	// await_value should resolve with the written value
+	let got = timeout_s(10, handle).await??;
+	assert_eq!(got, 42);
+
+	// calling await_value when a value is already present returns
+	// immediately
+	timeout_s(2, w.when().reaches(ver)).await?;
+	let got = timeout_ms(100, w.await_value()).await?;
+	assert_eq!(got, 42);
 
 	Ok(())
 }

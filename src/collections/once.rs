@@ -112,6 +112,19 @@ impl<T: Value, const IS_WRITER: bool> Once<T, IS_WRITER> {
 	pub fn version(&self) -> Version {
 		Version(self.group.committed())
 	}
+
+	/// Waits for the register to be set and returns its value.
+	pub async fn await_value(&self) -> T {
+		self.when().online().await;
+
+		loop {
+			let updated_fut = self.when().updated();
+			if let Some(value) = self.read() {
+				return value;
+			}
+			updated_fut.await;
+		}
+	}
 }
 
 // Mutable operations, only available to writers
