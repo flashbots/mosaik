@@ -92,6 +92,12 @@ pub type WriterOf<C> = <C as CollectionWriter>::Writer;
 ///
 /// // With generics:
 /// collection!(pub MyCollection<T> = Vec<T>, "my.store.id");
+///
+/// // With doc comments:
+/// collection!(
+///     /// The primary user registry.
+///     pub MyCollection = Map<String, User>, "my.store.id"
+/// );
 /// ```
 ///
 /// # Usage
@@ -113,6 +119,15 @@ pub type WriterOf<C> = <C as CollectionWriter>::Writer;
 /// ```
 #[macro_export]
 macro_rules! collection {
+	(#[$($meta:tt)*] $($rest:tt)*) => {
+		$crate::collection! { @attrs [#[$($meta)*]] $($rest)* }
+	};
+	(@attrs [$($attrs:tt)*] #[$($meta:tt)*] $($rest:tt)*) => {
+		$crate::collection! { @attrs [$($attrs)* #[$($meta)*]] $($rest)* }
+	};
+	(@attrs [$($attrs:tt)*] $($rest:tt)*) => {
+		$crate::__collection_impl! { @$crate; $($attrs)* $($rest)* }
+	};
 	($($tt:tt)*) => {
 		$crate::__collection_impl! { @$crate; $($tt)* }
 	};

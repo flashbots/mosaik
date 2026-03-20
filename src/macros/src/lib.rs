@@ -46,6 +46,7 @@ enum CollectionMode {
 
 struct CollectionInput {
 	krate: proc_macro2::TokenStream,
+	attrs: Vec<syn::Attribute>,
 	vis: syn::Visibility,
 	mode: CollectionMode,
 	name: syn::Ident,
@@ -64,6 +65,9 @@ impl syn::parse::Parse for CollectionInput {
 			krate.extend(core::iter::once(tt));
 		}
 		input.parse::<syn::Token![;]>()?;
+
+		// Parse optional outer attributes (e.g. #[doc = "..."]).
+		let attrs = input.call(syn::Attribute::parse_outer)?;
 
 		let vis: syn::Visibility = input.parse()?;
 
@@ -94,6 +98,7 @@ impl syn::parse::Parse for CollectionInput {
 
 		Ok(Self {
 			krate,
+			attrs,
 			vis,
 			mode,
 			name,
@@ -108,6 +113,7 @@ impl CollectionInput {
 	fn expand(self) -> proc_macro2::TokenStream {
 		let Self {
 			krate,
+			attrs,
 			vis,
 			mode,
 			name,
@@ -186,6 +192,7 @@ impl CollectionInput {
 		};
 
 		quote::quote! {
+			#(#attrs)*
 			#[allow(non_camel_case_types)]
 			#vis struct #name #generics #struct_body
 

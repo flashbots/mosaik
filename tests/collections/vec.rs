@@ -752,6 +752,7 @@ async fn writer_reads_own_writes() -> anyhow::Result<()> {
 #[tokio::test]
 async fn construct_from_macro() -> anyhow::Result<()> {
 	mosaik::collection!(
+		/// With rust doc comment
 		TestVec = mosaik::collections::Vec<String>,
 		"test.vec.macro"
 	);
