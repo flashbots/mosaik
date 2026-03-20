@@ -1,9 +1,7 @@
 use {
 	crate::utils::{discover_all, timeout_s},
 	mosaik::{
-		collections::{
-			CollectionDef, CollectionReader, CollectionWriter, StoreId,
-		},
+		collections::{CollectionDef, CollectionReader, CollectionWriter, StoreId},
 		*,
 	},
 };

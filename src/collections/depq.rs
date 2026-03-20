@@ -34,6 +34,7 @@ use {
 		hash::Hash,
 		ops::{Range, RangeBounds},
 	},
+	futures::{FutureExt, TryFutureExt},
 	iroh::endpoint_info::EncodingError,
 	serde::{Deserialize, Serialize},
 	std::hash::BuildHasherDefault,
@@ -305,44 +306,47 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 	/// updated.
 	///
 	/// Time: O(log n)
-	pub async fn insert(
+	pub fn insert(
 		&self,
 		priority: P,
 		key: K,
 		value: V,
-	) -> Result<Version, Error<(P, K, V)>> {
-		self
-			.execute(
+	) -> impl Future<Output = Result<Version, Error<(P, K, V)>>> + Send + Sync + 'static
+	{
+		self.execute(
+			DepqCommand::Insert {
+				priority: Encoded(priority),
+				key: Encoded(key),
+				value: Encoded(value),
+			},
+			|cmd| match cmd {
 				DepqCommand::Insert {
-					priority: Encoded(priority),
-					key: Encoded(key),
-					value: Encoded(value),
-				},
-				|cmd| match cmd {
-					DepqCommand::Insert {
-						priority,
-						key,
-						value,
-					} => Error::Offline((priority.0, key.0, value.0)),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					DepqCommand::Insert {
-						priority,
-						key,
-						value,
-					} => Error::Encoding((priority.0, key.0, value.0), e),
-					_ => unreachable!(),
-				},
-			)
-			.await
+					priority,
+					key,
+					value,
+				} => Error::Offline((priority.0, key.0, value.0)),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				DepqCommand::Insert {
+					priority,
+					key,
+					value,
+				} => Error::Encoding((priority.0, key.0, value.0), e),
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Insert multiple entries into the priority queue.
-	pub async fn extend<I>(
+	#[allow(clippy::type_complexity)]
+	pub fn extend<I>(
 		&self,
 		items: I,
-	) -> Result<Version, Error<Vec<(P, K, V)>>>
+	) -> impl Future<Output = Result<Version, Error<Vec<(P, K, V)>>>>
+	+ Send
+	+ Sync
+	+ 'static
 	where
 		I: IntoIterator<Item = (P, K, V)>,
 	{
@@ -351,34 +355,38 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 			.map(|(p, k, v)| (Encoded(p), Encoded(k), Encoded(v)))
 			.collect();
 
-		if entries.is_empty() {
-			return Ok(Version(self.group.committed()));
-		}
+		let is_empty = entries.is_empty();
+		let current_version = self.group.committed();
+		let fut = self.execute(
+			DepqCommand::Extend { entries },
+			|cmd| match cmd {
+				DepqCommand::Extend { entries } => Error::Offline(
+					entries
+						.into_iter()
+						.map(|(p, k, v)| (p.0, k.0, v.0))
+						.collect(),
+				),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				DepqCommand::Extend { entries } => Error::Encoding(
+					entries
+						.into_iter()
+						.map(|(p, k, v)| (p.0, k.0, v.0))
+						.collect(),
+					e,
+				),
+				_ => unreachable!(),
+			},
+		);
 
-		self
-			.execute(
-				DepqCommand::Extend { entries },
-				|cmd| match cmd {
-					DepqCommand::Extend { entries } => Error::Offline(
-						entries
-							.into_iter()
-							.map(|(p, k, v)| (p.0, k.0, v.0))
-							.collect(),
-					),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					DepqCommand::Extend { entries } => Error::Encoding(
-						entries
-							.into_iter()
-							.map(|(p, k, v)| (p.0, k.0, v.0))
-							.collect(),
-						e,
-					),
-					_ => unreachable!(),
-				},
-			)
-			.await
+		async move {
+			if is_empty {
+				Ok(Version(current_version))
+			} else {
+				fut.await
+			}
+		}
 	}
 
 	/// Update the priority of an existing key.
@@ -386,28 +394,27 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 	/// If the key does not exist, this is a no-op that still commits to the log.
 	///
 	/// Time: O(log n)
-	pub async fn update_priority(
+	pub fn update_priority(
 		&self,
 		key: &K,
 		new_priority: P,
-	) -> Result<Version, Error<K>> {
+	) -> impl Future<Output = Result<Version, Error<K>>> + Send + Sync + 'static
+	{
 		let key = key.clone();
-		self
-			.execute(
-				DepqCommand::UpdatePriority {
-					key: Encoded(key),
-					priority: Encoded(new_priority),
-				},
-				|cmd| match cmd {
-					DepqCommand::UpdatePriority { key, .. } => Error::Offline(key.0),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					DepqCommand::UpdatePriority { key, .. } => Error::Encoding(key.0, e),
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			DepqCommand::UpdatePriority {
+				key: Encoded(key),
+				priority: Encoded(new_priority),
+			},
+			|cmd| match cmd {
+				DepqCommand::UpdatePriority { key, .. } => Error::Offline(key.0),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				DepqCommand::UpdatePriority { key, .. } => Error::Encoding(key.0, e),
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Update the value of an existing key.
@@ -415,28 +422,27 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 	/// If the key does not exist, this is a no-op that still commits to the log.
 	///
 	/// Time: O(log n)
-	pub async fn update_value(
+	pub fn update_value(
 		&self,
 		key: &K,
 		new_value: V,
-	) -> Result<Version, Error<K>> {
+	) -> impl Future<Output = Result<Version, Error<K>>> + Send + Sync + 'static
+	{
 		let key = key.clone();
-		self
-			.execute(
-				DepqCommand::UpdateValue {
-					key: Encoded(key),
-					value: Encoded(new_value),
-				},
-				|cmd| match cmd {
-					DepqCommand::UpdateValue { key, .. } => Error::Offline(key.0),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					DepqCommand::UpdateValue { key, .. } => Error::Encoding(key.0, e),
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			DepqCommand::UpdateValue {
+				key: Encoded(key),
+				value: Encoded(new_value),
+			},
+			|cmd| match cmd {
+				DepqCommand::UpdateValue { key, .. } => Error::Offline(key.0),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				DepqCommand::UpdateValue { key, .. } => Error::Encoding(key.0, e),
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Atomically update the value of an existing key, but only if its current
@@ -446,104 +452,110 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 	/// If the key does not exist, this is a no-op that still commits to the log.
 	///
 	/// Time: O(log n)
-	pub async fn compare_exchange_value(
+	pub fn compare_exchange_value(
 		&self,
 		key: &K,
 		expected: V,
 		new: Option<V>,
-	) -> Result<Version, Error<K>> {
+	) -> impl Future<Output = Result<Version, Error<K>>> + Send + Sync + 'static
+	{
 		let key = key.clone();
-		self
-			.execute(
-				DepqCommand::CompareExchangeValue {
-					key: Encoded(key),
-					expected: Encoded(expected),
-					new: new.map(Encoded),
-				},
-				|cmd| match cmd {
-					DepqCommand::CompareExchangeValue { key, .. } => {
-						Error::Offline(key.0)
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					DepqCommand::CompareExchangeValue { key, .. } => {
-						Error::Encoding(key.0, e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			DepqCommand::CompareExchangeValue {
+				key: Encoded(key),
+				expected: Encoded(expected),
+				new: new.map(Encoded),
+			},
+			|cmd| match cmd {
+				DepqCommand::CompareExchangeValue { key, .. } => Error::Offline(key.0),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				DepqCommand::CompareExchangeValue { key, .. } => {
+					Error::Encoding(key.0, e)
+				}
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Discard all entries from the priority queue.
 	///
 	/// This leaves you with an empty queue, and all entries that were previously
 	/// inside it are dropped.
-	pub async fn clear(&self) -> Result<Version, Error<()>> {
-		self
-			.execute(
-				DepqCommand::Clear,
-				|_| Error::Offline(()),
-				|_, _| unreachable!(),
-			)
-			.await
+	pub fn clear(
+		&self,
+	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
+	{
+		self.execute(
+			DepqCommand::Clear,
+			|_| Error::Offline(()),
+			|_, _| unreachable!(),
+		)
 	}
 
 	/// Remove an entry by key.
 	///
 	/// Time: O(log n)
-	pub async fn remove(&self, key: &K) -> Result<Version, Error<K>> {
+	pub fn remove(
+		&self,
+		key: &K,
+	) -> impl Future<Output = Result<Version, Error<K>>> + Send + Sync + 'static
+	{
 		let key = key.clone();
-		self
-			.execute(
-				DepqCommand::RemoveKeys {
-					keys: vec![Encoded(key)],
-				},
-				|cmd| match cmd {
-					DepqCommand::RemoveKeys { mut keys } => {
-						Error::Offline(keys.remove(0).0)
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					DepqCommand::RemoveKeys { mut keys } => {
-						Error::Encoding(keys.remove(0).0, e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			DepqCommand::RemoveKeys {
+				keys: vec![Encoded(key)],
+			},
+			|cmd| match cmd {
+				DepqCommand::RemoveKeys { mut keys } => {
+					Error::Offline(keys.remove(0).0)
+				}
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				DepqCommand::RemoveKeys { mut keys } => {
+					Error::Encoding(keys.remove(0).0, e)
+				}
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Remove multiple entries by key.
-	pub async fn remove_keys(
+	pub fn remove_keys(
 		&self,
 		keys: impl IntoIterator<Item = K>,
-	) -> Result<Version, Error<Vec<K>>> {
+	) -> impl Future<Output = Result<Version, Error<Vec<K>>>> + Send + Sync + 'static
+	{
 		let keys: Vec<Encoded<K>> = keys.into_iter().map(Encoded).collect();
 
-		if keys.is_empty() {
-			return Ok(Version(self.group.committed()));
-		}
+		let is_empty = keys.is_empty();
+		let current_version = self.group.committed();
 
-		self
-			.execute(
-				DepqCommand::RemoveKeys { keys },
-				|cmd| match cmd {
-					DepqCommand::RemoveKeys { keys } => {
-						Error::Offline(keys.into_iter().map(|k| k.0).collect())
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					DepqCommand::RemoveKeys { keys } => {
-						Error::Encoding(keys.into_iter().map(|k| k.0).collect(), e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		let fut = self.execute(
+			DepqCommand::RemoveKeys { keys },
+			|cmd| match cmd {
+				DepqCommand::RemoveKeys { keys } => {
+					Error::Offline(keys.into_iter().map(|k| k.0).collect())
+				}
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				DepqCommand::RemoveKeys { keys } => {
+					Error::Encoding(keys.into_iter().map(|k| k.0).collect(), e)
+				}
+				_ => unreachable!(),
+			},
+		);
+
+		async move {
+			if is_empty {
+				Ok(Version(current_version))
+			} else {
+				fut.await
+			}
+		}
 	}
 
 	/// Remove all entries whose priority falls within the given range.
@@ -556,20 +568,19 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 	/// - `remove_range(lo..hi)` — remove priorities in `[lo, hi)`
 	/// - `remove_range(lo..=hi)` — remove priorities in `[lo, hi]`
 	/// - `remove_range(..)` — equivalent to `clear()`
-	pub async fn remove_range(
+	pub fn remove_range(
 		&self,
 		range: impl RangeBounds<P>,
-	) -> Result<Version, Error<()>> {
+	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
+	{
 		let start =
 			SerBound::from_std(range.start_bound().map(|r| Encoded(r.clone())));
 		let end = SerBound::from_std(range.end_bound().map(|r| Encoded(r.clone())));
-		self
-			.execute(
-				DepqCommand::RemoveRange { start, end },
-				|_| Error::Offline(()),
-				|_, e| Error::Encoding((), e),
-			)
-			.await
+		self.execute(
+			DepqCommand::RemoveRange { start, end },
+			|_| Error::Offline(()),
+			|_, e| Error::Encoding((), e),
+		)
 	}
 }
 
@@ -653,17 +664,22 @@ impl<P: OrderedKey, K: Key, V: Value, const WRITER: bool> CollectionFromDef
 
 // internal
 impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
-	async fn execute<TErr>(
+	fn execute<TErr>(
 		&self,
 		command: DepqCommand<P, K, V>,
-		offline_err: impl FnOnce(DepqCommand<P, K, V>) -> Error<TErr>,
-		encoding_err: impl FnOnce(DepqCommand<P, K, V>, EncodeError) -> Error<TErr>,
-	) -> Result<Version, Error<TErr>> {
+		offline_err: impl FnOnce(DepqCommand<P, K, V>) -> Error<TErr>
+		+ Send
+		+ Sync
+		+ 'static,
+		encoding_err: impl FnOnce(DepqCommand<P, K, V>, EncodeError) -> Error<TErr>
+		+ Send
+		+ Sync
+		+ 'static,
+	) -> impl Future<Output = Result<Version, Error<TErr>>> + Send + Sync + 'static
+	{
 		self
 			.group
 			.execute(command)
-			.await
-			.map(Version)
 			.map_err(|e| match e {
 				CommandError::Offline(mut items) => {
 					let command = items.remove(0);
@@ -676,6 +692,7 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),
 			})
+			.map(|pos| pos.map(Version))
 	}
 }
 

@@ -32,6 +32,7 @@ use {
 		primitives::{EncodeError, Encoded},
 	},
 	core::{any::type_name, borrow::Borrow, hash::Hash},
+	futures::{FutureExt, TryFutureExt},
 	serde::{Deserialize, Serialize},
 	std::hash::BuildHasherDefault,
 	tokio::sync::watch,
@@ -205,14 +206,15 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 	///
 	/// This leaves you with an empty map, and all entries that
 	/// were previously inside it are dropped.
-	pub async fn clear(&self) -> Result<Version, Error<()>> {
-		self
-			.execute(
-				MapCommand::Clear,
-				|_| Error::Offline(()),
-				|_, _| unreachable!(),
-			)
-			.await
+	pub fn clear(
+		&self,
+	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
+	{
+		self.execute(
+			MapCommand::Clear,
+			|_| Error::Offline(()),
+			|_, _| unreachable!(),
+		)
 	}
 
 	/// Insert a key-value pair into the map.
@@ -220,29 +222,28 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 	/// If the map already contained this key, the value is updated.
 	///
 	/// Time: O(log n)
-	pub async fn insert(
+	pub fn insert(
 		&self,
 		key: K,
 		value: V,
-	) -> Result<Version, Error<(K, V)>> {
+	) -> impl Future<Output = Result<Version, Error<(K, V)>>> + Send + Sync + 'static
+	{
 		let key = Encoded(key);
 		let value = Encoded(value);
 
-		self
-			.execute(
-				MapCommand::Insert { key, value },
-				|cmd| match cmd {
-					MapCommand::Insert { key, value } => Error::Offline((key.0, value.0)),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					MapCommand::Insert { key, value } => {
-						Error::Encoding((key.0, value.0), e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			MapCommand::Insert { key, value },
+			|cmd| match cmd {
+				MapCommand::Insert { key, value } => Error::Offline((key.0, value.0)),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				MapCommand::Insert { key, value } => {
+					Error::Encoding((key.0, value.0), e)
+				}
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Compare and exchange a key-value pair in the map.
@@ -255,121 +256,136 @@ impl<K: Key, V: Value> MapWriter<K, V> {
 	/// `expected` to `Some(value)` and `new` to `None`.
 	///
 	/// Time: O(log n)
-	pub async fn compare_exchange(
+	#[allow(clippy::type_complexity)]
+	pub fn compare_exchange(
 		&self,
 		key: K,
 		expected: Option<V>,
 		new: Option<V>,
-	) -> Result<Version, Error<(K, Option<V>, Option<V>)>> {
+	) -> impl Future<Output = Result<Version, Error<(K, Option<V>, Option<V>)>>>
+	+ Send
+	+ Sync
+	+ 'static {
 		let key = Encoded(key);
 		let expected = expected.map(Encoded);
 		let new = new.map(Encoded);
 
-		self
-			.execute(
-				MapCommand::CompareExchange { key, expected, new },
-				|cmd| match cmd {
-					MapCommand::CompareExchange { key, expected, new } => {
-						Error::Offline((key.0, expected.map(|v| v.0), new.map(|v| v.0)))
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					MapCommand::CompareExchange { key, expected, new } => {
-						Error::Encoding((key.0, expected.map(|v| v.0), new.map(|v| v.0)), e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			MapCommand::CompareExchange { key, expected, new },
+			|cmd| match cmd {
+				MapCommand::CompareExchange { key, expected, new } => {
+					Error::Offline((key.0, expected.map(|v| v.0), new.map(|v| v.0)))
+				}
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				MapCommand::CompareExchange { key, expected, new } => {
+					Error::Encoding((key.0, expected.map(|v| v.0), new.map(|v| v.0)), e)
+				}
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Insert multiple key-value pairs into the map.
-	pub async fn extend(
+	pub fn extend(
 		&self,
 		entries: impl IntoIterator<Item = (K, V)>,
-	) -> Result<Version, Error<Vec<(K, V)>>> {
+	) -> impl Future<Output = Result<Version, Error<Vec<(K, V)>>>>
+	+ Send
+	+ Sync
+	+ 'static {
 		let entries: Vec<(Encoded<K>, Encoded<V>)> = entries
 			.into_iter()
 			.map(|(k, v)| (Encoded(k), Encoded(v)))
 			.collect();
 
-		if entries.is_empty() {
-			return Ok(Version(self.group.committed()));
-		}
+		let is_empty = entries.is_empty();
+		let current_version = self.group.committed();
+		let fut = self.execute(
+			MapCommand::Extend { entries },
+			|cmd| match cmd {
+				MapCommand::Extend { entries } => {
+					Error::Offline(entries.into_iter().map(|(k, v)| (k.0, v.0)).collect())
+				}
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				MapCommand::Extend { entries } => Error::Encoding(
+					entries.into_iter().map(|(k, v)| (k.0, v.0)).collect(),
+					e,
+				),
+				_ => unreachable!(),
+			},
+		);
 
-		self
-			.execute(
-				MapCommand::Extend { entries },
-				|cmd| match cmd {
-					MapCommand::Extend { entries } => Error::Offline(
-						entries.into_iter().map(|(k, v)| (k.0, v.0)).collect(),
-					),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					MapCommand::Extend { entries } => Error::Encoding(
-						entries.into_iter().map(|(k, v)| (k.0, v.0)).collect(),
-						e,
-					),
-					_ => unreachable!(),
-				},
-			)
-			.await
+		async move {
+			if is_empty {
+				Ok(Version(current_version))
+			} else {
+				fut.await
+			}
+		}
 	}
 
 	/// Remove a key-value pair from the map.
 	///
 	/// Time: O(log n)
-	pub async fn remove(&self, key: &K) -> Result<Version, Error<K>> {
+	pub fn remove(
+		&self,
+		key: &K,
+	) -> impl Future<Output = Result<Version, Error<K>>> + Send + Sync + 'static
+	{
 		let key = Encoded(key.clone());
-		self
-			.execute(
-				MapCommand::RemoveMany { keys: vec![key] },
-				|cmd| match cmd {
-					MapCommand::RemoveMany { mut keys } => {
-						Error::Offline(keys.remove(0).0)
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					MapCommand::RemoveMany { mut keys } => {
-						Error::Encoding(keys.remove(0).0, e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			MapCommand::RemoveMany { keys: vec![key] },
+			|cmd| match cmd {
+				MapCommand::RemoveMany { mut keys } => Error::Offline(keys.remove(0).0),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				MapCommand::RemoveMany { mut keys } => {
+					Error::Encoding(keys.remove(0).0, e)
+				}
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Remove multiple key-value pairs from the map.
-	pub async fn remove_many(
+	pub fn remove_many(
 		&self,
 		keys: impl IntoIterator<Item = K>,
-	) -> Result<Version, Error<Vec<K>>> {
+	) -> impl Future<Output = Result<Version, Error<Vec<K>>>> + Send + Sync + 'static
+	{
 		let keys: Vec<Encoded<K>> = keys.into_iter().map(Encoded).collect();
 
-		if keys.is_empty() {
-			return Ok(Version(self.group.committed()));
-		}
+		let is_empty = keys.is_empty();
+		let current_version = self.group.committed();
 
-		self
-			.execute(
-				MapCommand::RemoveMany { keys },
-				|cmd| match cmd {
-					MapCommand::RemoveMany { keys } => {
-						Error::Offline(keys.into_iter().map(|k| k.0).collect())
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					MapCommand::RemoveMany { keys } => {
-						Error::Encoding(keys.into_iter().map(|k| k.0).collect(), e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		let fut = self.execute(
+			MapCommand::RemoveMany { keys },
+			|cmd| match cmd {
+				MapCommand::RemoveMany { keys } => {
+					Error::Offline(keys.into_iter().map(|k| k.0).collect())
+				}
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				MapCommand::RemoveMany { keys } => {
+					Error::Encoding(keys.into_iter().map(|k| k.0).collect(), e)
+				}
+				_ => unreachable!(),
+			},
+		);
+
+		async move {
+			if is_empty {
+				Ok(Version(current_version))
+			} else {
+				fut.await
+			}
+		}
 	}
 }
 
@@ -466,18 +482,23 @@ impl<K: Key, V: Value> SnapshotStateMachine for MapStateMachine<K, V> {
 
 // internal
 impl<K: Key, V: Value> Map<K, V, WRITER> {
-	async fn execute<TErr>(
+	fn execute<TErr>(
 		&self,
 		command: MapCommand<K, V>,
-		offline_err: impl FnOnce(MapCommand<K, V>) -> Error<TErr>,
-		encoding_err: impl FnOnce(MapCommand<K, V>, EncodeError) -> Error<TErr>,
-	) -> Result<Version, Error<TErr>> {
+		offline_err: impl FnOnce(MapCommand<K, V>) -> Error<TErr>
+		+ Send
+		+ Sync
+		+ 'static,
+		encoding_err: impl FnOnce(MapCommand<K, V>, EncodeError) -> Error<TErr>
+		+ Send
+		+ Sync
+		+ 'static,
+	) -> impl Future<Output = Result<Version, Error<TErr>>> + Send + Sync + 'static
+	{
 		self
 			.group
 			.execute(command)
-			.await
-			.map(Version)
-			.map_err(|e| match e {
+			.map_err(move |e| match e {
 				CommandError::Offline(mut items) => {
 					let command = items.remove(0);
 					offline_err(command)
@@ -489,6 +510,7 @@ impl<K: Key, V: Value> Map<K, V, WRITER> {
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),
 			})
+			.map(move |position| position.map(Version))
 	}
 }
 

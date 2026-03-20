@@ -29,6 +29,7 @@ use {
 		primitives::{EncodeError, Encoded},
 	},
 	core::{any::type_name, borrow::Borrow, hash::Hash, ops::Range},
+	futures::{FutureExt, TryFutureExt},
 	serde::{Deserialize, Serialize},
 	std::hash::BuildHasherDefault,
 	tokio::sync::watch,
@@ -179,14 +180,15 @@ impl<T: Key> SetWriter<T> {
 	///
 	/// This leaves you with an empty set, and all elements that
 	/// were previously inside it are dropped.
-	pub async fn clear(&self) -> Result<Version, Error<()>> {
-		self
-			.execute(
-				SetCommand::Clear,
-				|_| Error::Offline(()),
-				|_, _| unreachable!(),
-			)
-			.await
+	pub fn clear(
+		&self,
+	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
+	{
+		self.execute(
+			SetCommand::Clear,
+			|_| Error::Offline(()),
+			|_, _| unreachable!(),
+		)
 	}
 
 	/// Insert a value into the set.
@@ -194,110 +196,122 @@ impl<T: Key> SetWriter<T> {
 	/// If the set already contained this value, the operation is a no-op.
 	///
 	/// Time: O(log n)
-	pub async fn insert(&self, value: T) -> Result<Version, Error<T>> {
+	pub fn insert(
+		&self,
+		value: T,
+	) -> impl Future<Output = Result<Version, Error<T>>> + Send + Sync + 'static
+	{
 		let value = Encoded(value);
-		self
-			.execute(
-				SetCommand::Insert { value },
-				|cmd| match cmd {
-					SetCommand::Insert { value } => Error::Offline(value.0),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					SetCommand::Insert { value } => Error::Encoding(value.0, e),
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			SetCommand::Insert { value },
+			|cmd| match cmd {
+				SetCommand::Insert { value } => Error::Offline(value.0),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				SetCommand::Insert { value } => Error::Encoding(value.0, e),
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Insert multiple values into the set.
-	pub async fn extend(
+	pub fn extend(
 		&self,
 		values: impl IntoIterator<Item = T>,
-	) -> Result<Version, Error<Vec<T>>> {
+	) -> impl Future<Output = Result<Version, Error<Vec<T>>>> + Send + Sync + 'static
+	{
 		let entries: Vec<Encoded<T>> = values.into_iter().map(Encoded).collect();
 
-		if entries.is_empty() {
-			return Ok(Version(self.group.committed()));
-		}
+		let is_empty = entries.is_empty();
+		let current_version = self.group.committed();
+		let fut = self.execute(
+			SetCommand::Extend { entries },
+			|cmd| match cmd {
+				SetCommand::Extend { entries } => {
+					Error::Offline(entries.into_iter().map(|e| e.0).collect())
+				}
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				SetCommand::Extend { entries } => {
+					Error::Encoding(entries.into_iter().map(|e| e.0).collect(), e)
+				}
+				_ => unreachable!(),
+			},
+		);
 
-		self
-			.execute(
-				SetCommand::Extend { entries },
-				|cmd| match cmd {
-					SetCommand::Extend { entries } => {
-						Error::Offline(entries.into_iter().map(|e| e.0).collect())
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					SetCommand::Extend { entries } => {
-						Error::Encoding(entries.into_iter().map(|e| e.0).collect(), e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		async move {
+			if is_empty {
+				Ok(Version(current_version))
+			} else {
+				fut.await
+			}
+		}
 	}
 
 	/// Remove a value from the set.
 	///
 	/// Time: O(log n)
-	pub async fn remove<Q: Borrow<T>>(
+	pub fn remove<Q: Borrow<T>>(
 		&self,
 		value: &Q,
-	) -> Result<Version, Error<T>> {
+	) -> impl Future<Output = Result<Version, Error<T>>> + Send + Sync + 'static
+	{
 		let value = Encoded(value.borrow().clone());
-		self
-			.execute(
-				SetCommand::RemoveMany {
-					values: vec![value],
-				},
-				|cmd| match cmd {
-					SetCommand::RemoveMany { mut values } => {
-						Error::Offline(values.remove(0).0)
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					SetCommand::RemoveMany { mut values } => {
-						Error::Encoding(values.remove(0).0, e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			SetCommand::RemoveMany {
+				values: vec![value],
+			},
+			|cmd| match cmd {
+				SetCommand::RemoveMany { mut values } => {
+					Error::Offline(values.remove(0).0)
+				}
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				SetCommand::RemoveMany { mut values } => {
+					Error::Encoding(values.remove(0).0, e)
+				}
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Remove multiple values from the set.
-	pub async fn remove_many(
+	pub fn remove_many(
 		&self,
 		values: impl IntoIterator<Item = T>,
-	) -> Result<Version, Error<Vec<T>>> {
+	) -> impl Future<Output = Result<Version, Error<Vec<T>>>> + Send + Sync + 'static
+	{
 		let values: Vec<Encoded<T>> = values.into_iter().map(Encoded).collect();
 
-		if values.is_empty() {
-			return Ok(Version(self.group.committed()));
-		}
+		let is_empty = values.is_empty();
+		let current_version = self.group.committed();
 
-		self
-			.execute(
-				SetCommand::RemoveMany { values },
-				|cmd| match cmd {
-					SetCommand::RemoveMany { values } => {
-						Error::Offline(values.into_iter().map(|v| v.0).collect())
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					SetCommand::RemoveMany { values } => {
-						Error::Encoding(values.into_iter().map(|v| v.0).collect(), e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		let fut = self.execute(
+			SetCommand::RemoveMany { values },
+			|cmd| match cmd {
+				SetCommand::RemoveMany { values } => {
+					Error::Offline(values.into_iter().map(|v| v.0).collect())
+				}
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				SetCommand::RemoveMany { values } => {
+					Error::Encoding(values.into_iter().map(|v| v.0).collect(), e)
+				}
+				_ => unreachable!(),
+			},
+		);
+
+		async move {
+			if is_empty {
+				Ok(Version(current_version))
+			} else {
+				fut.await
+			}
+		}
 	}
 }
 
@@ -377,17 +391,19 @@ impl<T: Key, const WRITER: bool> CollectionFromDef for Set<T, WRITER> {
 
 // internal
 impl<T: Key> SetWriter<T> {
-	async fn execute<TErr>(
+	fn execute<TErr>(
 		&self,
 		command: SetCommand<T>,
-		offline_err: impl FnOnce(SetCommand<T>) -> Error<TErr>,
-		encoding_err: impl FnOnce(SetCommand<T>, EncodeError) -> Error<TErr>,
-	) -> Result<Version, Error<TErr>> {
+		offline_err: impl FnOnce(SetCommand<T>) -> Error<TErr> + Send + Sync + 'static,
+		encoding_err: impl FnOnce(SetCommand<T>, EncodeError) -> Error<TErr>
+		+ Send
+		+ Sync
+		+ 'static,
+	) -> impl Future<Output = Result<Version, Error<TErr>>> + Send + Sync + 'static
+	{
 		self
 			.group
 			.execute(command)
-			.await
-			.map(Version)
 			.map_err(|e| match e {
 				CommandError::Offline(mut items) => {
 					let command = items.remove(0);
@@ -400,6 +416,7 @@ impl<T: Key> SetWriter<T> {
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),
 			})
+			.map(|position| position.map(Version))
 	}
 }
 

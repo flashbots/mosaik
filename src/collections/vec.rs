@@ -24,6 +24,7 @@ use {
 	},
 	chrono::{DateTime, Utc},
 	core::{any::type_name, cmp::Ordering, ops::Range},
+	futures::{FutureExt, TryFutureExt},
 	serde::{Deserialize, Serialize},
 	tokio::sync::{broadcast, mpsc::UnboundedSender, watch},
 };
@@ -258,164 +259,182 @@ impl<T: Value> VecWriter<T> {
 	///
 	/// This leaves you with an empty vector, and all elements that
 	/// were previously inside it are dropped.
-	pub async fn clear(&self) -> Result<Version, Error<()>> {
-		self
-			.execute(
-				VecCommand::Clear,
-				|_| Error::Offline(()),
-				|_, _| unreachable!(),
-			)
-			.await
+	pub fn clear(
+		&self,
+	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
+	{
+		self.execute(
+			VecCommand::Clear,
+			|_| Error::Offline(()),
+			|_, _| unreachable!(),
+		)
 	}
 
 	/// Push a value to the back of a vector.
 	///
 	/// Time: O(1)*
-	pub async fn push_back(&self, value: T) -> Result<Version, Error<T>> {
+	pub fn push_back(
+		&self,
+		value: T,
+	) -> impl Future<Output = Result<Version, Error<T>>> + Send + Sync + 'static
+	{
 		let value = Encoded(value);
-		self
-			.execute(
-				VecCommand::PushBack { value },
-				|cmd| match cmd {
-					VecCommand::PushBack { value } => Error::Offline(value.0),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					VecCommand::PushBack { value } => Error::Encoding(value.0, e),
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			VecCommand::PushBack { value },
+			|cmd| match cmd {
+				VecCommand::PushBack { value } => Error::Offline(value.0),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				VecCommand::PushBack { value } => Error::Encoding(value.0, e),
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Push a value to the front of a vector.
 	///
 	/// Time: O(1)*
-	pub async fn push_front(&self, value: T) -> Result<Version, Error<T>> {
+	pub fn push_front(
+		&self,
+		value: T,
+	) -> impl Future<Output = Result<Version, Error<T>>> + Send + Sync + 'static
+	{
 		let value = Encoded(value);
-		self
-			.execute(
-				VecCommand::PushFront { value },
-				|cmd| match cmd {
-					VecCommand::PushFront { value } => Error::Offline(value.0),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					VecCommand::PushFront { value } => Error::Encoding(value.0, e),
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			VecCommand::PushFront { value },
+			|cmd| match cmd {
+				VecCommand::PushFront { value } => Error::Offline(value.0),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				VecCommand::PushFront { value } => Error::Encoding(value.0, e),
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Swap the elements at indices `i` and `j`.
-	pub async fn swap(&self, i: u64, j: u64) -> Result<Version, Error<()>> {
-		self
-			.execute(
-				VecCommand::Swap { i, j },
-				|_| Error::Offline(()),
-				|_, _| unreachable!(),
-			)
-			.await
+	pub fn swap(
+		&self,
+		i: u64,
+		j: u64,
+	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
+	{
+		self.execute(
+			VecCommand::Swap { i, j },
+			|_| Error::Offline(()),
+			|_, _| unreachable!(),
+		)
 	}
 
 	/// Insert an element into a vector.
 	///
 	/// Insert an element at position `index`, shifting all elements
 	/// after it to the right.
-	pub async fn insert(
+	pub fn insert(
 		&self,
 		index: u64,
 		value: T,
-	) -> Result<Version, Error<T>> {
+	) -> impl Future<Output = Result<Version, Error<T>>> + Send + Sync + 'static
+	{
 		let value = Encoded(value);
-		self
-			.execute(
-				VecCommand::Insert { index, value },
-				|cmd| match cmd {
-					VecCommand::Insert { value, .. } => Error::Offline(value.0),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					VecCommand::Insert { value, .. } => Error::Encoding(value.0, e),
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			VecCommand::Insert { index, value },
+			|cmd| match cmd {
+				VecCommand::Insert { value, .. } => Error::Offline(value.0),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				VecCommand::Insert { value, .. } => Error::Encoding(value.0, e),
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Append multiple values to the back of a vector.
-	pub async fn extend(
+	pub fn extend(
 		&self,
 		entries: impl IntoIterator<Item = T>,
-	) -> Result<Version, Error<std::vec::Vec<T>>> {
+	) -> impl Future<Output = Result<Version, Error<std::vec::Vec<T>>>>
+	+ Send
+	+ Sync
+	+ 'static {
 		let entries: std::vec::Vec<Encoded<T>> =
 			entries.into_iter().map(Encoded).collect();
 
-		if entries.is_empty() {
-			return Ok(Version(self.group.committed()));
-		}
+		let is_empty = entries.is_empty();
+		let current_version = self.group.committed();
+		let fut = self.execute(
+			VecCommand::Extend { entries },
+			|cmd| match cmd {
+				VecCommand::Extend { entries } => {
+					Error::Offline(entries.into_iter().map(|e| e.0).collect())
+				}
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				VecCommand::Extend { entries } => {
+					Error::Encoding(entries.into_iter().map(|e| e.0).collect(), e)
+				}
+				_ => unreachable!(),
+			},
+		);
 
-		self
-			.execute(
-				VecCommand::Extend { entries },
-				|cmd| match cmd {
-					VecCommand::Extend { entries } => {
-						Error::Offline(entries.into_iter().map(|e| e.0).collect())
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					VecCommand::Extend { entries } => {
-						Error::Encoding(entries.into_iter().map(|e| e.0).collect(), e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		async move {
+			if is_empty {
+				Ok(Version(current_version))
+			} else {
+				fut.await
+			}
+		}
 	}
 
 	/// Remove the last element from a vector and return it.
 	///
 	/// Time: O(1)*
-	pub async fn pop_back(&self) -> Result<Version, Error<()>> {
-		self
-			.execute(
-				VecCommand::PopBack,
-				|_| Error::Offline(()),
-				|_, _| unreachable!(),
-			)
-			.await
+	pub fn pop_back(
+		&self,
+	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
+	{
+		self.execute(
+			VecCommand::PopBack,
+			|_| Error::Offline(()),
+			|_, _| unreachable!(),
+		)
 	}
 
 	/// Remove the first element from a vector and return it.
 	///
 	/// Time: O(1)*
-	pub async fn pop_front(&self) -> Result<Version, Error<()>> {
-		self
-			.execute(
-				VecCommand::PopFront,
-				|_| Error::Offline(()),
-				|_, _| unreachable!(),
-			)
-			.await
+	pub fn pop_front(
+		&self,
+	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
+	{
+		self.execute(
+			VecCommand::PopFront,
+			|_| Error::Offline(()),
+			|_, _| unreachable!(),
+		)
 	}
 
 	/// Remove an element from a vector.
 	///
 	/// Remove the element from position 'index', shifting all
 	/// elements after it to the left, and return the removed element.
-	pub async fn remove(&self, index: u64) -> Result<Version, Error<u64>> {
-		self
-			.execute(
-				VecCommand::Remove { index },
-				|cmd| match cmd {
-					VecCommand::Remove { index } => Error::Offline(index),
-					_ => unreachable!(),
-				},
-				|_, _| unreachable!(),
-			)
-			.await
+	pub fn remove(
+		&self,
+		index: u64,
+	) -> impl Future<Output = Result<Version, Error<u64>>> + Send + Sync + 'static
+	{
+		self.execute(
+			VecCommand::Remove { index },
+			|cmd| match cmd {
+				VecCommand::Remove { index } => Error::Offline(index),
+				_ => unreachable!(),
+			},
+			|_, _| unreachable!(),
+		)
 	}
 
 	/// Truncate a vector to the given size.
@@ -423,15 +442,17 @@ impl<T: Value> VecWriter<T> {
 	/// Discards all elements in the vector beyond the given length.
 	///
 	/// Time: O(log n)
-	pub async fn truncate(&self, len: usize) -> Result<Version, Error<()>> {
+	pub fn truncate(
+		&self,
+		len: usize,
+	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
+	{
 		let len = len as u64;
-		self
-			.execute(
-				VecCommand::Truncate { len },
-				|_| Error::Offline(()),
-				|_, _| unreachable!(),
-			)
-			.await
+		self.execute(
+			VecCommand::Truncate { len },
+			|_| Error::Offline(()),
+			|_, _| unreachable!(),
+		)
 	}
 }
 
@@ -477,17 +498,19 @@ impl<T: Value, const WRITER: bool> CollectionFromDef for Vec<T, WRITER> {
 
 // internal
 impl<T: Value> Vec<T, WRITER> {
-	async fn execute<TErr>(
+	fn execute<TErr>(
 		&self,
 		command: VecCommand<T>,
-		offline_err: impl FnOnce(VecCommand<T>) -> Error<TErr>,
-		encoding_err: impl FnOnce(VecCommand<T>, EncodeError) -> Error<TErr>,
-	) -> Result<Version, Error<TErr>> {
+		offline_err: impl FnOnce(VecCommand<T>) -> Error<TErr> + Send + Sync + 'static,
+		encoding_err: impl FnOnce(VecCommand<T>, EncodeError) -> Error<TErr>
+		+ Send
+		+ Sync
+		+ 'static,
+	) -> impl Future<Output = Result<Version, Error<TErr>>> + Send + Sync + 'static
+	{
 		self
 			.group
 			.execute(command)
-			.await
-			.map(Version)
 			.map_err(|e| match e {
 				CommandError::Offline(mut items) => {
 					let command = items.remove(0);
@@ -500,6 +523,7 @@ impl<T: Value> Vec<T, WRITER> {
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),
 			})
+			.map(|position| position.map(Version))
 	}
 }
 

@@ -1,9 +1,7 @@
 use {
 	crate::utils::{discover_all, timeout_s},
 	mosaik::{
-		collections::{
-			CollectionDef, CollectionReader, CollectionWriter, StoreId,
-		},
+		collections::{CollectionDef, CollectionReader, CollectionWriter, StoreId},
 		*,
 	},
 	std::collections::HashMap,
@@ -1177,8 +1175,7 @@ async fn construct_from_macro() -> anyhow::Result<()> {
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
-	let ver =
-		timeout_s(2, w.insert("hello".into(), "world".into())).await??;
+	let ver = timeout_s(2, w.insert("hello".into(), "world".into())).await??;
 	timeout_s(2, r.when().reaches(ver)).await?;
 
 	assert_eq!(r.len(), 1);

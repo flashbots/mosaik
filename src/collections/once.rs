@@ -32,6 +32,7 @@ use {
 		any::type_name,
 		ops::{Deref, Range},
 	},
+	futures::{FutureExt, TryFutureExt},
 	serde::{Deserialize, Serialize},
 	tokio::sync::watch,
 };
@@ -175,21 +176,23 @@ impl<T: Value> OnceWriter<T> {
 	/// value does not change.
 	///
 	/// Time: O(1)
-	pub async fn write(&self, value: T) -> Result<Version, Error<T>> {
+	pub fn write(
+		&self,
+		value: T,
+	) -> impl Future<Output = Result<Version, Error<T>>> + Send + Sync + 'static
+	{
 		let value = Encoded(value);
-		self
-			.execute(
-				OnceCommand::Write { value },
-				|cmd| match cmd {
-					OnceCommand::Write { value } => Error::Offline(value.0),
-					OnceCommand::TakeSnapshot(_) => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					OnceCommand::Write { value } => Error::Encoding(value.0, e),
-					OnceCommand::TakeSnapshot(_) => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			OnceCommand::Write { value },
+			|cmd| match cmd {
+				OnceCommand::Write { value } => Error::Offline(value.0),
+				OnceCommand::TakeSnapshot(_) => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				OnceCommand::Write { value } => Error::Encoding(value.0, e),
+				OnceCommand::TakeSnapshot(_) => unreachable!(),
+			},
+		)
 	}
 
 	/// Set the value of the register.
@@ -197,8 +200,12 @@ impl<T: Value> OnceWriter<T> {
 	/// This is an alias for the `write` method.
 	///
 	/// Time: O(1)
-	pub async fn set(&self, value: T) -> Result<Version, Error<T>> {
-		self.write(value).await
+	pub fn set(
+		&self,
+		value: T,
+	) -> impl Future<Output = Result<Version, Error<T>>> + Send + Sync + 'static
+	{
+		self.write(value)
 	}
 }
 
@@ -266,17 +273,19 @@ impl<T: Value, const WRITER: bool> CollectionFromDef for Once<T, WRITER> {
 
 // internal
 impl<T: Value> OnceWriter<T> {
-	async fn execute<TErr>(
+	fn execute<TErr>(
 		&self,
 		command: OnceCommand<T>,
-		offline_err: impl FnOnce(OnceCommand<T>) -> Error<TErr>,
-		encoding_err: impl FnOnce(OnceCommand<T>, EncodeError) -> Error<TErr>,
-	) -> Result<Version, Error<TErr>> {
+		offline_err: impl FnOnce(OnceCommand<T>) -> Error<TErr> + Send + Sync + 'static,
+		encoding_err: impl FnOnce(OnceCommand<T>, EncodeError) -> Error<TErr>
+		+ Send
+		+ Sync
+		+ 'static,
+	) -> impl Future<Output = Result<Version, Error<TErr>>> + Send + Sync + 'static
+	{
 		self
 			.group
 			.execute(command)
-			.await
-			.map(Version)
 			.map_err(|err| match err {
 				CommandError::Offline(mut items) => offline_err(items.remove(0)),
 				CommandError::Encoding(mut items, err) => {
@@ -285,6 +294,7 @@ impl<T: Value> OnceWriter<T> {
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),
 			})
+			.map(|pos| pos.map(Version))
 	}
 }
 

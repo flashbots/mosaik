@@ -32,6 +32,7 @@ use {
 		any::type_name,
 		ops::{Deref, Range},
 	},
+	futures::{FutureExt, TryFutureExt},
 	serde::{Deserialize, Serialize},
 	tokio::sync::watch,
 };
@@ -174,28 +175,34 @@ impl<T: Value> RegisterWriter<T> {
 	/// Write a new value to the register, replacing the previous one.
 	///
 	/// Time: O(1)
-	pub async fn write(&self, value: T) -> Result<Version, Error<T>> {
+	pub fn write(
+		&self,
+		value: T,
+	) -> impl Future<Output = Result<Version, Error<T>>> + Send + Sync + 'static
+	{
 		let value = Encoded(value);
-		self
-			.execute(
-				RegisterCommand::Write { value },
-				|cmd| match cmd {
-					RegisterCommand::Write { value } => Error::Offline(value.0),
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					RegisterCommand::Write { value } => Error::Encoding(value.0, e),
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			RegisterCommand::Write { value },
+			|cmd| match cmd {
+				RegisterCommand::Write { value } => Error::Offline(value.0),
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				RegisterCommand::Write { value } => Error::Encoding(value.0, e),
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Write a new value to the register, replacing the previous one.
 	///
 	/// Time: O(1)
-	pub async fn set(&self, value: T) -> Result<Version, Error<T>> {
-		self.write(value).await
+	pub fn set(
+		&self,
+		value: T,
+	) -> impl Future<Output = Result<Version, Error<T>>> + Send + Sync + 'static
+	{
+		self.write(value)
 	}
 
 	/// Compare the current value of the register with an expected value, and if
@@ -203,31 +210,33 @@ impl<T: Value> RegisterWriter<T> {
 	/// match the expected value, no write occurs.
 	///
 	/// Time: O(1)
-	pub async fn compare_exchange(
+	#[allow(clippy::type_complexity)]
+	pub fn compare_exchange(
 		&self,
 		current: Option<T>,
 		new: Option<T>,
-	) -> Result<Version, Error<(Option<T>, Option<T>)>> {
+	) -> impl Future<Output = Result<Version, Error<(Option<T>, Option<T>)>>>
+	+ Send
+	+ Sync
+	+ 'static {
 		let current = current.map(Encoded);
 		let new = new.map(Encoded);
 
-		self
-			.execute(
-				RegisterCommand::CompareExchange { current, new },
-				|cmd| match cmd {
-					RegisterCommand::CompareExchange { current, new } => {
-						Error::Offline((current.map(|v| v.0), new.map(|v| v.0)))
-					}
-					_ => unreachable!(),
-				},
-				|cmd, e| match cmd {
-					RegisterCommand::CompareExchange { current, new } => {
-						Error::Encoding((current.map(|v| v.0), new.map(|v| v.0)), e)
-					}
-					_ => unreachable!(),
-				},
-			)
-			.await
+		self.execute(
+			RegisterCommand::CompareExchange { current, new },
+			|cmd| match cmd {
+				RegisterCommand::CompareExchange { current, new } => {
+					Error::Offline((current.map(|v| v.0), new.map(|v| v.0)))
+				}
+				_ => unreachable!(),
+			},
+			|cmd, e| match cmd {
+				RegisterCommand::CompareExchange { current, new } => {
+					Error::Encoding((current.map(|v| v.0), new.map(|v| v.0)), e)
+				}
+				_ => unreachable!(),
+			},
+		)
 	}
 
 	/// Clear the register, removing the stored value.
@@ -235,14 +244,15 @@ impl<T: Value> RegisterWriter<T> {
 	/// After this operation, `read()` will return `None`.
 	///
 	/// Time: O(1)
-	pub async fn clear(&self) -> Result<Version, Error<()>> {
-		self
-			.execute(
-				RegisterCommand::Clear,
-				|_| Error::Offline(()),
-				|_, _| unreachable!(),
-			)
-			.await
+	pub fn clear(
+		&self,
+	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
+	{
+		self.execute(
+			RegisterCommand::Clear,
+			|_| Error::Offline(()),
+			|_, _| unreachable!(),
+		)
 	}
 }
 
@@ -330,17 +340,22 @@ impl<T: Value, const WRITER: bool> CollectionFromDef for Register<T, WRITER> {
 
 // internal
 impl<T: Value> RegisterWriter<T> {
-	async fn execute<TErr>(
+	fn execute<TErr>(
 		&self,
 		command: RegisterCommand<T>,
-		offline_err: impl FnOnce(RegisterCommand<T>) -> Error<TErr>,
-		encoding_err: impl FnOnce(RegisterCommand<T>, EncodeError) -> Error<TErr>,
-	) -> Result<Version, Error<TErr>> {
+		offline_err: impl FnOnce(RegisterCommand<T>) -> Error<TErr>
+		+ Send
+		+ Sync
+		+ 'static,
+		encoding_err: impl FnOnce(RegisterCommand<T>, EncodeError) -> Error<TErr>
+		+ Send
+		+ Sync
+		+ 'static,
+	) -> impl Future<Output = Result<Version, Error<TErr>>> + Send + Sync + 'static
+	{
 		self
 			.group
 			.execute(command)
-			.await
-			.map(Version)
 			.map_err(|err| match err {
 				CommandError::Offline(mut items) => offline_err(items.remove(0)),
 				CommandError::Encoding(mut items, err) => {
@@ -349,6 +364,7 @@ impl<T: Value> RegisterWriter<T> {
 				CommandError::GroupTerminated => Error::NetworkDown,
 				CommandError::NoCommands => unreachable!(),
 			})
+			.map(|pos| pos.map(Version))
 	}
 }
 
