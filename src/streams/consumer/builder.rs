@@ -4,7 +4,13 @@ use {
 		StreamId,
 		discovery::PeerEntry,
 		primitives::BackoffFactory,
-		streams::{Consumer, Datum, Streams, consumer::worker},
+		streams::{
+			Consumer,
+			Datum,
+			Streams,
+			consumer::worker,
+			status::ChannelConditions,
+		},
 	},
 	backoff::backoff::Backoff,
 	core::marker::PhantomData,
@@ -26,6 +32,16 @@ pub struct ConsumerConfig {
 	/// The backoff policy for retrying stream subscription connections on
 	/// recoverable failures.
 	pub backoff: BackoffFactory,
+
+	/// A function that specifies conditions under which the consumer is
+	/// considered online. Here you can specify conditions such as minimum
+	/// number of connected producers, required tags, or custom predicates.
+	///
+	/// This follows the same API as the `consumer.when().subscribed()`
+	/// method. By default this is set to always consider the consumer
+	/// online as soon as it starts (minimum of 0 producers).
+	pub online_when:
+		Box<dyn Fn(ChannelConditions) -> ChannelConditions + Send + Sync>,
 }
 
 /// Configurable builder for assembling a new consumer instance for a specific
@@ -76,6 +92,22 @@ impl<D: Datum> Builder<'_, D> {
 		self.config.stream_id = stream_id.into();
 		self
 	}
+
+	/// A function that produces channel conditions under which the consumer
+	/// is considered online. Here you can specify conditions such as minimum
+	/// number of connected producers, required tags, or custom predicates.
+	///
+	/// This follows the same API as the `consumer.when().subscribed()`
+	/// method. By default the consumer is always considered online as soon
+	/// as it starts.
+	#[must_use]
+	pub fn online_when<F>(mut self, f: F) -> Self
+	where
+		F: Fn(ChannelConditions) -> ChannelConditions + Send + Sync + 'static,
+	{
+		self.config.online_when = Box::new(f);
+		self
+	}
 }
 
 impl<D: Datum> Builder<'_, D> {
@@ -93,6 +125,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 				criteria: Criteria::default(),
 				subscribe_if: Box::new(|_| true),
 				backoff: streams.config.backoff.clone(),
+				online_when: Box::new(|c| c.minimum_of(0)),
 			},
 			streams,
 			_marker: PhantomData,

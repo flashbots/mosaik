@@ -9,7 +9,7 @@ use {
 			Consumer,
 			Streams,
 			consumer::{builder::ConsumerConfig, receiver::Receiver},
-			status::{ActiveChannelsMap, State, Stats, When},
+			status::{ActiveChannelsMap, ChannelConditions, State, Stats, When},
 		},
 	},
 	core::pin::Pin,
@@ -58,9 +58,13 @@ pub(super) struct ConsumerWorker<D: Datum> {
 	/// corresponding receiver.
 	receiver_cancels: HashMap<Digest, CancellationToken>,
 
-	/// A one-time set handle that is completed when the consumer worker loop is
-	/// ready.
+	/// Sets the online status of the consumer when the configured online
+	/// conditions are met.
 	online: watch::Sender<bool>,
+
+	/// A future that resolves when the consumer meets the configured online
+	/// conditions.
+	online_when: ChannelConditions,
 }
 
 impl<D: Datum> ConsumerWorker<D> {
@@ -73,8 +77,13 @@ impl<D: Datum> ConsumerWorker<D> {
 		let local = streams.local.clone();
 		let cancel = local.termination().child_token();
 		let active = watch::Sender::new(ActiveChannelsMap::new());
-		let online = watch::Sender::new(true);
+		let online = watch::Sender::new(false);
 		let (data_tx, data_rx) = mpsc::unbounded_channel();
+
+		let when = When::new(active.subscribe(), online.subscribe());
+		let online_when = (config.online_when)(when.subscribed());
+
+		online.send_replace(online_when.is_condition_met());
 
 		let worker = Self {
 			local,
@@ -86,6 +95,7 @@ impl<D: Datum> ConsumerWorker<D> {
 			status_rx: StateUpdatesStream::new(),
 			receiver_cancels: HashMap::new(),
 			online: online.clone(),
+			online_when,
 		};
 
 		tokio::spawn(worker.run());
@@ -108,15 +118,18 @@ impl<D: Datum> ConsumerWorker<D> {
 		let mut catalog = self.discovery.catalog_watch();
 		catalog.mark_changed();
 
-		// mark the consumer as ready after initial setup is done
-		let _ = self.online.send(true);
-
 		loop {
 			tokio::select! {
 				// Triggered when the consumer is dropped or the network is shutting down
 				() = self.cancel.cancelled() => {
 					self.on_terminated();
 					break;
+				}
+
+				// Triggered when the online conditions for this consumer
+				// are met.
+				() = &mut self.online_when => {
+					self.on_online();
 				}
 
 				// Triggered when new peers are discovered or existing peers are updated
@@ -252,7 +265,34 @@ impl<D: Datum> ConsumerWorker<D> {
 				criteria = ?self.config.criteria,
 				"connection with producer terminated"
 			);
+
+			if !self.online_when.is_condition_met() {
+				tracing::trace!(
+					stream_id = %Short(self.config.stream_id),
+					producers = %self.active.borrow().len(),
+					"consumer is offline",
+				);
+				self.online.send_replace(false);
+			}
 		}
+	}
+
+	/// Triggered when the online conditions for this consumer are met.
+	fn on_online(&self) {
+		tracing::trace!(
+			stream_id = %Short(self.config.stream_id),
+			producers = %self.active.borrow().len(),
+			"consumer is online",
+		);
+
+		self.online.send_if_modified(|status| {
+			if *status {
+				false
+			} else {
+				*status = true;
+				true
+			}
+		});
 	}
 
 	/// Gracefully closes all connections with remote producers.

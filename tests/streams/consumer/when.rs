@@ -1,6 +1,6 @@
 use {
 	super::*,
-	crate::utils::{poll_once, timeout_s},
+	crate::utils::{discover_all, poll_once, timeout_s},
 	core::task::Poll,
 	mosaik::*,
 };
@@ -119,6 +119,85 @@ async fn smoke() -> anyhow::Result<()> {
 	assert!(!condition3.is_condition_met());
 	assert_eq!(poll_once(&mut condition2.clone()), Poll::Ready(()));
 	assert_eq!(poll_once(&mut condition3.clone()), Poll::Pending);
+
+	Ok(())
+}
+
+/// Verifies that a consumer configured with `online_when` is not considered
+/// online until the specified conditions are met, and transitions back to
+/// offline when they are no longer satisfied.
+#[tokio::test]
+async fn online_when() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder() //
+				.with_tags(["t1", "t2"]),
+		)
+		.build()
+		.await?;
+	let n2 = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder() //
+				.with_tags(["t1", "t2"]),
+		)
+		.build()
+		.await?;
+
+	tracing::debug!("n0: {}", n0.local().id());
+	tracing::debug!("n1: {}", n1.local().id());
+	tracing::debug!("n2: {}", n2.local().id());
+
+	// Consumer requires at least 2 producers with tags "t1" and "t2"
+	let c0 = n0
+		.streams()
+		.consumer::<Data1>()
+		.online_when(|c| c.minimum_of(2).with_tags(["t1", "t2"]))
+		.build();
+
+	// Consumer should not be online yet (no producers)
+	assert!(!c0.is_online());
+
+	// Discover peers
+	discover_all([&n0, &n1, &n2]).await?;
+
+	// Start one producer — still not enough for the condition
+	let _p1 = n1.streams().produce::<Data1>();
+
+	timeout_s(3, c0.when().subscribed()).await?;
+	assert!(!c0.is_online(), "should not be online with only 1 producer");
+
+	// Start second producer — condition should now be met
+	let _p2 = n2.streams().produce::<Data1>();
+
+	timeout_s(3, c0.when().online()).await?;
+	assert!(c0.is_online(), "should be online with 2 tagged producers");
+
+	// Drop one producer — condition should no longer be met
+	drop(n2);
+
+	timeout_s(3, c0.when().offline()).await?;
+	assert!(!c0.is_online(), "should be offline after losing a producer");
+
+	Ok(())
+}
+
+/// Verifies that a consumer with the default `online_when` (no conditions)
+/// is immediately online even without any producers.
+#[tokio::test]
+async fn online_when_default_is_immediate() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let n0 = Network::new(network_id).await?;
+
+	let c0 = n0.streams().consume::<Data1>();
+
+	// Default consumer should be online immediately
+	assert!(c0.is_online());
+
+	// The online future should resolve immediately
+	timeout_s(1, c0.when().online()).await?;
 
 	Ok(())
 }

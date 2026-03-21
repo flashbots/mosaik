@@ -79,7 +79,7 @@ anyhow.workspace = true
 rand.workspace = true
 blake3.workspace = true
 
-mosaik-macros = { version = "0.2.36", path = "src/macros" }
+mosaik-macros = { version = "0.2.37", path = "src/macros" }
 
 thiserror = "2.0"
 postcard = "1.1.3"

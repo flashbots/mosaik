@@ -729,9 +729,11 @@ async fn construct_from_def() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn construct_from_macro() -> anyhow::Result<()> {
+	const SET_ID: StoreId = unique_id!("test.set.macro");
+
 	mosaik::collection!(
 		TestSet = mosaik::collections::Set<String>,
-		"test.set.macro"
+		SET_ID
 	);
 
 	let network_id = NetworkId::random();

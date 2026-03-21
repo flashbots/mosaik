@@ -10,7 +10,7 @@ pub mod primitives;
 pub mod streams;
 
 #[doc(hidden)]
-pub use mosaik_macros::{__collection_impl, __unique_id_impl};
+pub use mosaik_macros::{__collection_impl, __stream_impl, __unique_id_impl};
 pub use {
 	bytes::{Bytes, BytesMut},
 	collections::{
@@ -32,5 +32,17 @@ pub use {
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},
 	primitives::{Datum, Digest, Tag, UniqueId},
-	streams::{Criteria, StreamDef, StreamId},
+	streams::{
+		ConsumerOf,
+		Criteria,
+		ProducerOf,
+		StreamConsumer,
+		StreamDef,
+		StreamId,
+		StreamProducer,
+	},
 };
+
+pub mod declare {
+	pub use crate::{collection, stream};
+}

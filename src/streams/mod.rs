@@ -43,6 +43,171 @@ pub use {
 	producer::Producer,
 };
 
+/// Trait for stream definitions that provide a producer constructor.
+///
+/// Implemented automatically by the [`stream!`] macro. The generated
+/// implementation bakes in any `accept_if`, `online_when`, or other
+/// producer configuration specified in the macro invocation.
+pub trait StreamProducer {
+	type Producer;
+	fn producer(network: &crate::Network) -> Self::Producer;
+}
+
+/// Trait for stream definitions that provide a consumer constructor.
+///
+/// Implemented automatically by the [`stream!`] macro. The generated
+/// implementation bakes in any `subscribe_if` or other consumer
+/// configuration specified in the macro invocation.
+pub trait StreamConsumer {
+	type Consumer;
+	fn consumer(network: &crate::Network) -> Self::Consumer;
+}
+
+/// Convenience type alias for the producer type of a stream definition.
+pub type ProducerOf<S> = <S as StreamProducer>::Producer;
+
+/// Convenience type alias for the consumer type of a stream definition.
+pub type ConsumerOf<S> = <S as StreamConsumer>::Consumer;
+
+/// A compile-time definition of a stream producer that can be used to create
+/// a pre-configured [`producer::Builder`] for a given datum type with an
+/// optional predefined [`StreamId`].
+pub struct ProducerDef<T: Datum> {
+	pub stream_id: Option<StreamId>,
+	_marker: core::marker::PhantomData<fn(&T)>,
+}
+
+impl<T: Datum> ProducerDef<T> {
+	pub const fn new(stream_id: Option<StreamId>) -> Self {
+		Self {
+			stream_id,
+			_marker: core::marker::PhantomData,
+		}
+	}
+
+	/// Returns a [`producer::Builder`] with the stream id pre-configured.
+	pub fn open<'s>(
+		&self,
+		network: &'s crate::Network,
+	) -> producer::Builder<'s, T> {
+		let mut builder = network.streams().producer::<T>();
+		if let Some(id) = self.stream_id {
+			builder = builder.with_stream_id(id);
+		}
+		builder
+	}
+}
+
+/// A compile-time definition of a stream consumer that can be used to create
+/// a pre-configured [`consumer::Builder`] for a given datum type with an
+/// optional predefined [`StreamId`].
+pub struct ConsumerDef<T: Datum> {
+	pub stream_id: Option<StreamId>,
+	_marker: core::marker::PhantomData<fn(&T)>,
+}
+
+impl<T: Datum> ConsumerDef<T> {
+	pub const fn new(stream_id: Option<StreamId>) -> Self {
+		Self {
+			stream_id,
+			_marker: core::marker::PhantomData,
+		}
+	}
+
+	/// Returns a [`consumer::Builder`] with the stream id pre-configured.
+	pub fn open<'s>(
+		&self,
+		network: &'s crate::Network,
+	) -> consumer::Builder<'s, T> {
+		let mut builder = network.streams().consumer::<T>();
+		if let Some(id) = self.stream_id {
+			builder = builder.with_stream_id(id);
+		}
+		builder
+	}
+}
+
+/// Declares a named stream definition with an optional compile-time
+/// `StreamId` and baked-in configuration.
+///
+/// # Syntax
+///
+/// ```ignore
+/// // Type-derived StreamId (most common):
+/// stream!(pub MyStream = String);
+///
+/// // Explicit StreamId:
+/// stream!(pub MyStream = String, "my.stream.id");
+///
+/// // With configuration:
+/// stream!(pub MyStream = PriceUpdate, "oracle.price",
+///     accept_if: |peer| peer.tags().contains(&tag!("trusted")),
+///     online_when: |c| c.minimum_of(2),
+///     subscribe_if: |peer| true,
+/// );
+///
+/// // Side-prefixed config (producer/consumer specific):
+/// stream!(pub MyStream = PriceUpdate,
+///     producer online_when: |c| c.minimum_of(2),
+///     consumer online_when: |c| c.minimum_of(1),
+/// );
+///
+/// // Producer only:
+/// stream!(pub producer MyStream = String, "my.stream.id",
+///     accept_if: |peer| true,
+/// );
+///
+/// // Consumer only:
+/// stream!(pub consumer MyStream = String,
+///     subscribe_if: |peer| true,
+/// );
+/// ```
+///
+/// # Configuration keys
+///
+/// Producer-side (inferred):
+/// - `accept_if` — predicate for accepting consumer connections
+/// - `max_consumers` — maximum number of consumers
+/// - `buffer_size` — internal channel buffer size
+/// - `disconnect_lagging` — disconnect slow consumers
+///
+/// Consumer-side (inferred):
+/// - `subscribe_if` — predicate for selecting eligible producers
+/// - `criteria` — data range criteria
+/// - `backoff` — retry backoff policy
+///
+/// Both sides (prefix with `producer`/`consumer` to target one):
+/// - `online_when` — conditions under which the stream is online
+///
+/// # Usage
+///
+/// ```ignore
+/// use mosaik::streams::{StreamProducer, StreamConsumer};
+///
+/// stream!(pub PriceFeed = PriceUpdate, "oracle.price",
+///     accept_if: |peer| true,
+///     producer online_when: |c| c.minimum_of(2),
+/// );
+///
+/// let producer = PriceFeed::producer(&network);
+/// let consumer = PriceFeed::consumer(&network);
+/// ```
+#[macro_export]
+macro_rules! stream {
+	(#[$($meta:tt)*] $($rest:tt)*) => {
+		$crate::stream! { @attrs [#[$($meta)*]] $($rest)* }
+	};
+	(@attrs [$($attrs:tt)*] #[$($meta:tt)*] $($rest:tt)*) => {
+		$crate::stream! { @attrs [$($attrs)* #[$($meta)*]] $($rest)* }
+	};
+	(@attrs [$($attrs:tt)*] $($rest:tt)*) => {
+		$crate::__stream_impl! { @$crate; $($attrs)* $($rest)* }
+	};
+	($($tt:tt)*) => {
+		$crate::__stream_impl! { @$crate; $($tt)* }
+	};
+}
+
 /// A unique identifier for a stream within the Mosaik network.
 ///
 /// By default this id is derived from the stream datum type.
