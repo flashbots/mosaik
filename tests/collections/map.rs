@@ -1169,11 +1169,8 @@ async fn construct_from_macro() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w: WriterOf<TestMap> = TestMap::writer(&n0);
-	let r: ReaderOf<TestMap> = TestMap::reader(&n1);
-
-	timeout_s(10, w.when().online()).await?;
-	timeout_s(10, r.when().online()).await?;
+	let w: WriterOf<TestMap> = timeout_s(10, TestMap::online_writer(&n0)).await?;
+	let r: ReaderOf<TestMap> = timeout_s(10, TestMap::online_reader(&n1)).await?;
 
 	let ver = timeout_s(2, w.insert("hello".into(), "world".into())).await??;
 	timeout_s(2, r.when().reaches(ver)).await?;

@@ -129,3 +129,182 @@ Config::builder()
 | `backoff` | Exponential (max 5 min) | Default backoff policy for consumer connection retries |
 
 Individual producers and consumers can override this via their respective builders.
+
+## The `stream!` macro (recommended)
+
+The `stream!` macro is the recommended way to declare named stream
+definitions. It generates a struct with a compile-time `StreamId` and
+implements the `StreamProducer` and/or `StreamConsumer` traits, so you
+can create producers and consumers without repeating the stream ID or
+configuration at every call site.
+
+### Syntax
+
+```rust,ignore
+use mosaik::*;
+
+// Type-derived StreamId (most common):
+declare::stream!(pub PriceFeed = PriceUpdate);
+
+// Explicit StreamId:
+declare::stream!(pub PriceFeed = PriceUpdate, "oracle.price");
+
+// Producer only:
+declare::stream!(pub producer PriceFeed = PriceUpdate, "oracle.price");
+
+// Consumer only:
+declare::stream!(pub consumer PriceFeed = PriceUpdate, "oracle.price");
+```
+
+The three modes control which traits are implemented on the generated struct:
+
+| Mode        | Implements                                |
+| ----------- | ----------------------------------------- |
+| *(default)* | `StreamProducer` **and** `StreamConsumer` |
+| `producer`  | `StreamProducer` only                     |
+| `consumer`  | `StreamConsumer` only                     |
+
+### Baked-in configuration
+
+Configuration keys can be added after the stream ID. The macro routes
+each key to the correct builder (producer or consumer) automatically:
+
+```rust,ignore
+declare::stream!(pub PriceFeed = PriceUpdate, "oracle.price",
+    accept_if: |peer| peer.tags().contains(&tag!("trusted")),
+    producer online_when: |c| c.minimum_of(2),
+    subscribe_if: |peer| true,
+);
+```
+
+#### Producer-side keys (inferred automatically)
+
+| Key                  | Description                                  |
+| -------------------- | -------------------------------------------- |
+| `accept_if`          | Predicate for accepting consumer connections |
+| `max_consumers`      | Maximum number of concurrent consumers       |
+| `buffer_size`        | Internal channel buffer size                 |
+| `disconnect_lagging` | Disconnect slow consumers after duration     |
+
+#### Consumer-side keys (inferred automatically)
+
+| Key            | Description                                |
+| -------------- | ------------------------------------------ |
+| `subscribe_if` | Predicate for selecting eligible producers |
+| `criteria`     | Data range criteria                        |
+| `backoff`      | Retry backoff policy                       |
+
+#### Ambiguous keys (prefix with `producer` or `consumer`)
+
+| Key           | Description                                       |
+| ------------- | ------------------------------------------------- |
+| `online_when` | Conditions for the stream to be considered online |
+
+Without a prefix, `online_when` applies to **both** sides. Use
+`producer online_when` or `consumer online_when` to target one:
+
+```rust,ignore
+stream!(pub PriceFeed = PriceUpdate,
+    producer online_when: |c| c.minimum_of(2),
+    consumer online_when: |c| c.minimum_of(1),
+);
+```
+
+### Usage
+
+Call the trait methods on the generated struct to create producer or
+consumer instances:
+
+```rust,ignore
+use mosaik::*;
+
+declare::stream!(pub PriceFeed = PriceUpdate, "oracle.price");
+
+struct MyType {
+	producer: ProducerOf<PriceFeed>,
+}
+
+impl MyType {
+	pub fn new(network: &mosaik::Network) -> Self {
+		Self { producer: PriceFeed::producer(network) }
+	}
+}
+```
+
+The `ProducerOf<S>` and `ConsumerOf<S>` type aliases (re-exported at
+the crate root) resolve to the concrete producer or consumer type for
+a given stream definition:
+
+| Alias           | Expands to                        |
+| --------------- | --------------------------------- |
+| `ProducerOf<S>` | `<S as StreamProducer>::Producer` |
+| `ConsumerOf<S>` | `<S as StreamConsumer>::Consumer` |
+
+### Stream ID derivation
+
+When no stream ID argument is provided, the `StreamId` is derived from
+the datum type's Rust type name via `Datum::derived_stream_id()`. When
+a string literal is provided, it is hashed with blake3 at compile time
+(or decoded directly if exactly 64 hex characters). You can also pass
+a `const` expression:
+
+```rust,ignore
+use mosaik::*;
+
+const MY_STREAM: StreamId = unique_id!("my.stream");
+declare::stream!(pub MyStream = String, MY_STREAM);
+```
+
+### Doc comments
+
+Doc comments can be placed before the visibility modifier:
+
+```rust,ignore
+declare::stream!(
+    /// The primary price oracle feed.
+    pub PriceFeed = PriceUpdate, "oracle.price"
+);
+```
+
+### When to use the macro vs. direct constructors
+
+Use the `stream!` macro when:
+
+- Multiple modules or crates reference the same stream.
+- You want a single source of truth for the stream ID and configuration.
+- You want compile-time checked producer/consumer type aliases via
+  `ProducerOf<S>` / `ConsumerOf<S>`.
+
+Use direct constructors (`network.streams().produce::<T>()`) when:
+
+- You only need the stream in one place.
+- The stream ID or configuration is computed at runtime.
+
+## Stream definitions (`ProducerDef` / `ConsumerDef`)
+
+> **Note:** The [`stream!` macro](#the-stream-macro-recommended) is
+> now the recommended approach for declaring named stream definitions.
+> `ProducerDef` and `ConsumerDef` still work and are useful when you
+> need an explicit definition value (e.g., passing a definition as a
+> function argument).
+
+Instead of passing a `StreamId` to each builder call, you can define a
+stream's identity once as a constant and create builders from it.
+
+```rust,ignore
+use mosaik::{unique_id, streams::{ProducerDef, ConsumerDef}};
+
+const PRICES: ProducerDef<PriceUpdate> =
+	ProducerDef::new(Some(unique_id!("prices")));
+
+// Returns a pre-configured builder
+let producer = PRICES.open(&network).build()?;
+```
+
+| Type             | Description                                      |
+| ---------------- | ------------------------------------------------ |
+| `ProducerDef<T>` | Producer definition — creates a producer builder |
+| `ConsumerDef<T>` | Consumer definition — creates a consumer builder |
+
+Both types are `const`-constructible and can be used as top-level
+constants.

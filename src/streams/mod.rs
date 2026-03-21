@@ -50,7 +50,13 @@ pub use {
 /// producer configuration specified in the macro invocation.
 pub trait StreamProducer {
 	type Producer;
+
 	fn producer(network: &crate::Network) -> Self::Producer;
+
+	/// Creates a producer and waits for it to come online.
+	fn online_producer(
+		network: &crate::Network,
+	) -> impl Future<Output = Self::Producer> + Send + Sync + 'static;
 }
 
 /// Trait for stream definitions that provide a consumer constructor.
@@ -60,7 +66,13 @@ pub trait StreamProducer {
 /// configuration specified in the macro invocation.
 pub trait StreamConsumer {
 	type Consumer;
+
 	fn consumer(network: &crate::Network) -> Self::Consumer;
+
+	/// Creates a consumer and waits for it to come online.
+	fn online_consumer(
+		network: &crate::Network,
+	) -> impl Future<Output = Self::Consumer> + Send + Sync + 'static;
 }
 
 /// Convenience type alias for the producer type of a stream definition.

@@ -127,28 +127,29 @@ site.
 ### Syntax
 
 ```rust,ignore
-use mosaik::collection;
+
+use mosaik::*;
 
 // Full (reader + writer):
-collection!(pub Prices = mosaik::collections::Map<String, f64>, "prices");
+declare::collection!(pub Prices = mosaik::collections::Map<String, f64>, "prices");
 
 // Reader only:
-collection!(pub reader Prices = mosaik::collections::Map<String, f64>, "prices");
+declare::collection!(pub reader Prices = mosaik::collections::Map<String, f64>, "prices");
 
 // Writer only:
-collection!(pub writer Prices = mosaik::collections::Map<String, f64>, "prices");
+declare::collection!(pub writer Prices = mosaik::collections::Map<String, f64>, "prices");
 
 // With generics:
-collection!(pub Items<T> = mosaik::collections::Vec<T>, "app.items");
+declare::collection!(pub Items<T> = mosaik::collections::Vec<T>, "app.items");
 ```
 
 The three modes control which traits are implemented on the generated struct:
 
-| Mode            | Implements                                   |
-| --------------- | -------------------------------------------- |
-| *(default)*     | `CollectionReader` **and** `CollectionWriter` |
-| `reader`        | `CollectionReader` only                      |
-| `writer`        | `CollectionWriter` only                      |
+| Mode        | Implements                                    |
+| ----------- | --------------------------------------------- |
+| *(default)* | `CollectionReader` **and** `CollectionWriter` |
+| `reader`    | `CollectionReader` only                       |
+| `writer`    | `CollectionWriter` only                       |
 
 ### Usage
 
@@ -156,9 +157,9 @@ Call the trait methods on the generated struct to create reader or writer
 instances:
 
 ```rust,ignore
-use mosaik::{collection, collections::CollectionReader, ReaderOf};
+use mosaik::*;
 
-collection!(pub MyVec = mosaik::collections::Vec<String>, "my.vec");
+declare::collection!(pub MyVec = mosaik::collections::Vec<String>, "my.vec");
 
 struct MyType {
 	reader: ReaderOf<MyVec>,
@@ -175,10 +176,10 @@ The `ReaderOf<C>` and `WriterOf<C>` type aliases (re-exported at the crate
 root) resolve to the concrete reader or writer type for a given collection
 definition:
 
-| Alias          | Expands to                        |
-| -------------- | --------------------------------- |
-| `ReaderOf<C>`  | `<C as CollectionReader>::Reader`  |
-| `WriterOf<C>`  | `<C as CollectionWriter>::Writer`  |
+| Alias         | Expands to                        |
+| ------------- | --------------------------------- |
+| `ReaderOf<C>` | `<C as CollectionReader>::Reader` |
+| `WriterOf<C>` | `<C as CollectionWriter>::Writer` |
 
 ### Store ID derivation
 

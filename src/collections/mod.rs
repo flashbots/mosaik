@@ -59,7 +59,13 @@ pub enum Error<T> {
 /// Implemented automatically by the [`collection!`] macro.
 pub trait CollectionReader {
 	type Reader;
+
 	fn reader(network: &crate::Network) -> Self::Reader;
+
+	/// Creates a reader and waits for it to come online.
+	fn online_reader(
+		network: &crate::Network,
+	) -> impl Future<Output = Self::Reader> + Send + Sync + 'static;
 }
 
 /// Trait for collection definitions that provide a writer constructor.
@@ -67,7 +73,13 @@ pub trait CollectionReader {
 /// Implemented automatically by the [`collection!`] macro.
 pub trait CollectionWriter {
 	type Writer;
+
 	fn writer(network: &crate::Network) -> Self::Writer;
+
+	/// Creates a writer and waits for it to come online.
+	fn online_writer(
+		network: &crate::Network,
+	) -> impl Future<Output = Self::Writer> + Send + Sync + 'static;
 }
 
 /// Convenience type alias for the reader type of a collection definition.
