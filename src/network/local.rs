@@ -150,11 +150,12 @@ impl LocalNode {
 		&self,
 		addrs: impl IntoIterOrSingle<&'a EndpointAddr, V>,
 	) {
+		let Ok(addr_lookup) = self.endpoint().address_lookup() else {
+			return; // endpoint closed
+		};
+
 		for addr in addrs.iterator() {
-			self
-				.endpoint()
-				.address_lookup()
-				.publish(&addr.clone().into());
+			addr_lookup.publish(&addr.clone().into());
 		}
 	}
 

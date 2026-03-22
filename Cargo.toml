@@ -6,7 +6,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.93"
-version = "0.2.39"
+version = "0.2.40"
 license = "MIT"
 homepage = "https://github.com/flashbots/mosaik"
 repository = "https://github.com/flashbots/mosaik"
@@ -100,11 +100,11 @@ backoff = { version = "0.4", features = ["futures", "tokio"] }
 humansize = "2.0.0"
 humantime = "2.3"
 itertools = "0.14"
-iroh = { version = "0.96.1", features = [
+iroh = { version = "0.97.0", features = [
   "address-lookup-pkarr-dht",
   "address-lookup-mdns",
 ] }
-iroh-gossip = "0.96.0"
+iroh-gossip = "0.97.0"
 pkarr = "5.0"
 b58 = "0.1"
 arrayvec = "0.7"

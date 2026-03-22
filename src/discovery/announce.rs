@@ -183,13 +183,13 @@ impl Announce {
 	pub async fn dial<V>(&self, peers: impl IntoIterOrSingle<EndpointAddr, V>) {
 		let (tx, rx) = oneshot::channel::<()>();
 
+		let Ok(addr_lookup) = self.local.endpoint().address_lookup() else {
+			return; // endpoint closed
+		};
+
 		let peers = peers.iterator().into_iter().collect::<Vec<_>>();
 		for peer in &peers {
-			self
-				.local
-				.endpoint()
-				.address_lookup()
-				.publish(&peer.clone().into());
+			addr_lookup.publish(&peer.clone().into());
 		}
 
 		self.dials.send((peers, tx)).ok();

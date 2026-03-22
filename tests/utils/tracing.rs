@@ -33,6 +33,7 @@ fn init_test_logging() {
 			"swarm_discovery",
 			"mainline",
 			"pkarr",
+			"noq_proto",
 		];
 
 		// disable disabling noisy modules tracing

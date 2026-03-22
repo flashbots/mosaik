@@ -12,6 +12,7 @@ use {
 	iroh::{
 		Endpoint,
 		address_lookup::{MemoryLookup, mdns::MdnsAddressLookupBuilder},
+		endpoint::presets::N0,
 		protocol::Router,
 	},
 	std::collections::BTreeSet,
@@ -123,7 +124,7 @@ impl NetworkBuilder {
 /// Internal helpers
 impl NetworkConfig {
 	async fn bind_endpoint(&self) -> Result<Endpoint, Error> {
-		let mut endpoint_builder = Endpoint::builder()
+		let mut endpoint_builder = Endpoint::builder(N0)
 			.secret_key(self.secret_key.clone())
 			.relay_mode(self.relay_mode.clone())
 			.address_lookup(MemoryLookup::new());

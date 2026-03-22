@@ -3,7 +3,13 @@ use {
 	colored::Colorize,
 	core::{net::SocketAddr, str::FromStr, time::Duration},
 	futures::{SinkExt, StreamExt, future::join_all},
-	iroh::{Endpoint, EndpointAddr, RelayUrl, TransportAddr},
+	iroh::{
+		Endpoint,
+		EndpointAddr,
+		RelayUrl,
+		TransportAddr,
+		endpoint::presets::N0,
+	},
 	mosaik::{NetworkId, PeerId, discovery::SignedPeerEntry, primitives},
 	pkarr::{
 		Client,
@@ -57,7 +63,7 @@ impl DhtCommand {
 		let mut unhealthy = 0u32;
 
 		let local_endpoint = if self.check_status {
-			Some(Endpoint::builder().bind().await?)
+			Some(Endpoint::builder(N0).bind().await?)
 		} else {
 			None
 		};
