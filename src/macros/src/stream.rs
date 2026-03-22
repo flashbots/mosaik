@@ -96,7 +96,7 @@ impl syn::parse::Parse for StreamInput {
 			} else if input.peek(syn::Ident) && input.peek2(syn::Ident) {
 				// Check for side-prefixed config: `producer ident :`
 				let fork = input.fork();
-				let prefix: syn::Ident = fork.parse().unwrap();
+				let prefix: syn::Ident = fork.parse()?;
 				(prefix == "producer" || prefix == "consumer")
 					&& fork.peek(syn::Ident)
 					&& fork.peek2(syn::Token![:])

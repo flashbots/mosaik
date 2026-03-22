@@ -158,7 +158,7 @@ pub trait CollectionFromDef {
 
 /// A compile-time definition of a collection that can be used to create reader
 /// and writer instances for that collection with a predefined `StoreId`.
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CollectionDef<C: CollectionFromDef> {
 	pub store_id: StoreId,
 	_marker: core::marker::PhantomData<fn(&C)>,
@@ -194,10 +194,12 @@ impl<C: CollectionFromDef> CollectionDef<C> {
 		WriterDef::new(self.store_id)
 	}
 
+	#[inline]
 	pub fn reader(&self, network: &crate::Network) -> C::Reader {
 		C::reader(network, self.store_id)
 	}
 
+	#[inline]
 	pub fn writer(&self, network: &crate::Network) -> C::Writer {
 		C::writer(network, self.store_id)
 	}
@@ -209,6 +211,7 @@ impl<C: CollectionFromDef> CollectionDef<C> {
 /// This is most often exported by libraries that own the writer side of a
 /// collection, to allow users to create readers that connect to the writer's
 /// collection instance without needing to know the `StoreId`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ReaderDef<C: CollectionFromDef> {
 	pub store_id: StoreId,
 	_marker: core::marker::PhantomData<fn(&C)>,

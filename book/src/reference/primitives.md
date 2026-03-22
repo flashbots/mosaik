@@ -131,8 +131,10 @@ collection!(pub writer Prices = mosaik::collections::Map<String, f64>, "prices")
 collection!(pub Items<T> = mosaik::collections::Vec<T>, "app.items");
 ```
 
-The store ID string is hashed with blake3 at compile time (or decoded
-directly if it is exactly 64 hex characters).
+The store ID string is **intent-addressed** — hashed with blake3 at compile
+time (or decoded directly if it is exactly 64 hex characters). Two nodes that
+independently declare the same string converge on the same `StoreId` without
+coordination.
 
 See [Collections > collection! macro](../subsystems/collections.md#the-collection-macro-recommended)
 for the full syntax reference, mode table, and usage examples.
@@ -188,9 +190,11 @@ stream!(pub PriceFeed = PriceUpdate, "oracle.price",
 );
 ```
 
-The stream ID string is hashed with blake3 at compile time (or decoded
-directly if it is exactly 64 hex characters). When omitted, the
-`StreamId` is derived from the datum type name.
+The stream ID string is **intent-addressed** — hashed with blake3 at compile
+time (or decoded directly if it is exactly 64 hex characters). When omitted,
+the `StreamId` is derived from the datum type name. Two nodes that
+independently declare the same string converge on the same `StreamId` without
+coordination.
 
 See [Streams > stream! macro](../subsystems/streams.md#the-stream-macro-recommended)
 for the full syntax reference, configuration keys, and usage examples.

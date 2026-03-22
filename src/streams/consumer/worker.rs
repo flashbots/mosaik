@@ -231,19 +231,29 @@ impl<D: Datum> ConsumerWorker<D> {
 			})
 			.collect();
 
-		for (sub_id, peer_id) in to_disconnect {
+		for (sub_id, peer_id) in &to_disconnect {
 			tracing::info!(
-				producer_id = %Short(&peer_id),
+				producer_id = %Short(peer_id),
 				stream_id = %Short(self.config.stream_id),
 				"disconnecting producer that no longer satisfies eligibility criteria"
 			);
 
-			if let Some(cancel) = self.receiver_cancels.remove(&sub_id) {
+			if let Some(cancel) = self.receiver_cancels.remove(sub_id) {
 				cancel.cancel();
 			}
 			self
 				.active
-				.send_if_modified(|active| active.remove(&sub_id).is_some());
+				.send_if_modified(|active| active.remove(sub_id).is_some());
+		}
+
+		if !to_disconnect.is_empty() && !self.online_when.is_condition_met()
+		{
+			tracing::trace!(
+				stream_id = %Short(self.config.stream_id),
+				producers = %self.active.borrow().len(),
+				"consumer is offline",
+			);
+			self.online.send_replace(false);
 		}
 	}
 

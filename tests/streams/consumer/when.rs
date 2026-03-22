@@ -161,7 +161,7 @@ async fn online_when() -> anyhow::Result<()> {
 	assert!(!c0.is_online());
 
 	// Discover peers
-	discover_all([&n0, &n1, &n2]).await?;
+	timeout_s(10, discover_all([&n0, &n1, &n2])).await??;
 
 	// Start one producer — still not enough for the condition
 	let _p1 = n1.streams().produce::<Data1>();
@@ -180,6 +180,63 @@ async fn online_when() -> anyhow::Result<()> {
 
 	timeout_s(3, c0.when().offline()).await?;
 	assert!(!c0.is_online(), "should be offline after losing a producer");
+
+	Ok(())
+}
+
+/// Verifies that a consumer transitions to offline when a producer is removed
+/// from the discovery catalog (e.g., tag removal) rather than via connection
+/// termination. This exercises the `on_catalog_update` path where producers
+/// are disconnected because they no longer satisfy eligibility criteria.
+#[tokio::test]
+async fn online_when_catalog_removal() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder() //
+				.with_tags(["trusted"]),
+		)
+		.build()
+		.await?;
+	let n2 = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder() //
+				.with_tags(["trusted"]),
+		)
+		.build()
+		.await?;
+
+	// Consumer requires 2 producers tagged "trusted" and only subscribes
+	// to those with the "trusted" tag.
+	let c0 = n0
+		.streams()
+		.consumer::<Data1>()
+		.subscribe_if(|peer| peer.tags().contains(&"trusted".into()))
+		.online_when(|c| c.minimum_of(2))
+		.build();
+
+	let _p1 = n1.streams().produce::<Data1>();
+	let _p2 = n2.streams().produce::<Data1>();
+
+	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
+
+	// Both producers are connected — consumer should be online
+	timeout_s(3, c0.when().online()).await?;
+	assert!(c0.is_online(), "should be online with 2 tagged producers");
+
+	// Remove the "trusted" tag from n1 and feed the update to n0.
+	// This triggers catalog-based disconnection (not connection termination).
+	n1.discovery().remove_tags("trusted");
+	n0.discovery().feed(n1.discovery().me());
+
+	// Consumer should transition to offline because only 1 producer remains
+	timeout_s(3, c0.when().offline()).await?;
+	assert!(
+		!c0.is_online(),
+		"should be offline after catalog-based producer removal"
+	);
 
 	Ok(())
 }

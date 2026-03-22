@@ -98,6 +98,7 @@ impl<T: Datum> ProducerDef<T> {
 	}
 
 	/// Returns a [`producer::Builder`] with the stream id pre-configured.
+	#[inline]
 	pub fn open<'s>(
 		&self,
 		network: &'s crate::Network,
@@ -127,6 +128,7 @@ impl<T: Datum> ConsumerDef<T> {
 	}
 
 	/// Returns a [`consumer::Builder`] with the stream id pre-configured.
+	#[inline]
 	pub fn open<'s>(
 		&self,
 		network: &'s crate::Network,

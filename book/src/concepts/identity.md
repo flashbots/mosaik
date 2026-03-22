@@ -1,6 +1,8 @@
 # Identity & Networking
 
-Mosaik's identity system is built on cryptographic keys and content-addressed hashing. Every identifier in the system — networks, peers, streams, groups, collections — is a 32-byte `Digest` (blake3 hash).
+Mosaik's identity system is built on cryptographic keys and **intent-addressed** hashing. Every identifier in the system — networks, peers, streams, groups, collections — is a 32-byte `Digest` (blake3 hash).
+
+Unlike content-addressed systems (Git, IPFS) where names are derived from the data itself, mosaik identifiers are derived from the *intent* — a human-readable string describing the resource's purpose. Two nodes that independently declare the same intent (e.g., `"prices"`) converge on the same identifier without any prior coordination. This makes forward references and independent declaration possible: you can name a resource before it exists.
 
 ## UniqueId: The Universal Identifier
 
