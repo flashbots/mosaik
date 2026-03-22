@@ -231,6 +231,23 @@ impl MyType {
 }
 ```
 
+#### `online_producer` / `online_consumer`
+
+Each trait also provides a convenience method that creates the handle and
+awaits `.when().online()` in a single call:
+
+```rust,ignore
+// These two are equivalent:
+let producer = PriceFeed::producer(&network);
+producer.when().online().await;
+
+let producer = PriceFeed::online_producer(&network).await;
+```
+
+This is useful when you don't need to do anything between construction and
+the online check — it reduces the common two-step pattern to a single
+expression.
+
 The `ProducerOf<S>` and `ConsumerOf<S>` type aliases (re-exported at
 the crate root) resolve to the concrete producer or consumer type for
 a given stream definition:

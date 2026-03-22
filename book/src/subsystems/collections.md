@@ -172,6 +172,23 @@ impl MyType {
 }
 ```
 
+#### `online_reader` / `online_writer`
+
+Each trait also provides a convenience method that creates the handle and
+awaits `.when().online()` in a single call:
+
+```rust,ignore
+// These two are equivalent:
+let reader = MyVec::reader(&network);
+reader.when().online().await;
+
+let reader = MyVec::online_reader(&network).await;
+```
+
+This is useful when you don't need to do anything between construction and
+the online check — it reduces the common two-step pattern to a single
+expression.
+
 The `ReaderOf<C>` and `WriterOf<C>` type aliases (re-exported at the crate
 root) resolve to the concrete reader or writer type for a given collection
 definition:
