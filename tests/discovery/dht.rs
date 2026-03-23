@@ -1,6 +1,6 @@
 use {
 	core::time::Duration,
-	futures::future::join_all,
+	futures::future::try_join_all,
 	mosaik::*,
 	rstest::rstest,
 };
@@ -23,15 +23,8 @@ async fn auto_bootstrap(#[case] num_nodes: usize) -> anyhow::Result<()> {
 		 {network_id:?}"
 	);
 
-	let mut nodes = Vec::with_capacity(num_nodes);
-	for _ in 0..num_nodes {
-		nodes.push(Network::new(network_id));
-	}
-
-	let nodes = join_all(nodes)
-		.await
-		.into_iter()
-		.collect::<Result<Vec<_>, _>>()?;
+	let nodes =
+		try_join_all((0..num_nodes).map(|_| Network::new(network_id))).await?;
 
 	// every node should have discovered all other nodes within the network
 	let mut success = false;

@@ -1,7 +1,7 @@
 use {
 	crate::utils::{discover_all, timeout_s},
 	core::time::Duration,
-	futures::{StreamExt, stream::SelectAll},
+	futures::{StreamExt, future::try_join_all, stream::SelectAll},
 	mosaik::*,
 	std::time::Instant,
 	tokio::time::interval,
@@ -23,18 +23,15 @@ async fn converge_with_bootstrap() -> anyhow::Result<()> {
 		n0.network_id()
 	);
 
-	let mut nodes = vec![];
-
-	for _ in 0..PEERS_COUNT {
-		let node = Network::builder(network_id)
+	let nodes = try_join_all((0..PEERS_COUNT).map(|_| {
+		Network::builder(network_id)
 			.with_discovery(
 				discovery::Config::builder() //
 					.with_bootstrap(n0.local().id()),
 			)
 			.build()
-			.await?;
-		nodes.push(node);
-	}
+	}))
+	.await?;
 
 	let mut updates: SelectAll<_> = nodes
 		.iter()
@@ -134,12 +131,13 @@ async fn different_networks_are_isolated() -> anyhow::Result<()> {
 	let netid1 = NetworkId::random();
 	let netid2 = NetworkId::random();
 
-	let n0 = Network::new(netid1).await?;
-	let n1 = Network::new(netid1).await?;
-
-	let n2 = Network::new(netid2).await?;
-	let n3 = Network::new(netid2).await?;
-	let n4 = Network::new(netid2).await?;
+	let (n0, n1, n2, n3, n4) = tokio::try_join!(
+		Network::new(netid1),
+		Network::new(netid1),
+		Network::new(netid2),
+		Network::new(netid2),
+		Network::new(netid2),
+	)?;
 
 	// perform full mesh syncs within each network
 	timeout_s(15, discover_all([&n0, &n1, &n2, &n3, &n4])).await??;

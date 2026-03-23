@@ -295,7 +295,12 @@ impl WorkerLoop {
 				.await
 			{
 				// Healthy peer — emit it to the discovery system.
-				let _ = self.updates_tx.send(peer_entry.address().clone());
+				if self.updates_tx.send(peer_entry.address().clone()).is_err() {
+					tracing::warn!(
+						network = %Short(network_id),
+						"discovery channel closed, peer update lost"
+					);
+				}
 			} else {
 				// Unhealthy peer — candidate for replacement.
 				tracing::trace!(
@@ -328,15 +333,44 @@ impl WorkerLoop {
 	) -> Option<(EndpointAddr, Timestamp)> {
 		let packet = client.resolve_most_recent(network.public_key()).await?;
 
-		let peer_id_record = packet.resource_records("_id").next()?;
+		let Some(peer_id_record) = packet.resource_records("_id").next() else {
+			tracing::trace!(
+				network = %Short(network.network_id),
+				"DHT record has no _id resource record"
+			);
+			return None;
+		};
 		let peer_id = if let RData::TXT(record) = &peer_id_record.rdata {
-			PeerId::from_bytes(
-				&b58::decode(record.attributes().iter().next()?.0)
-					.ok()?
-					.try_into()
-					.ok()?,
-			)
-			.ok()?
+			let attrs = record.attributes();
+			let attr = attrs.iter().next()?.0;
+			let decoded = b58::decode(attr)
+				.inspect_err(|e| {
+					tracing::trace!(
+						network = %Short(network.network_id),
+						error = %e,
+						"failed to base58-decode peer ID from DHT record"
+					);
+				})
+				.ok()?;
+			let bytes: [u8; 32] = decoded
+				.try_into()
+				.inspect_err(|v: &Vec<u8>| {
+					tracing::trace!(
+						network = %Short(network.network_id),
+						len = v.len(),
+						"invalid peer ID byte length in DHT record (expected 32)"
+					);
+				})
+				.ok()?;
+			PeerId::from_bytes(&bytes)
+				.inspect_err(|e| {
+					tracing::trace!(
+						network = %Short(network.network_id),
+						error = %e,
+						"failed to parse peer ID from DHT record"
+					);
+				})
+				.ok()?
 		} else {
 			tracing::debug!(
 				network = %Short(network.network_id),
@@ -349,17 +383,43 @@ impl WorkerLoop {
 
 		for record in packet.resource_records("_ip") {
 			if let RData::TXT(ip) = &record.rdata {
-				endpoint.addrs.insert(TransportAddr::Ip(
-					SocketAddr::from_str(ip.attributes().iter().next()?.0).ok()?,
-				));
+				let attrs = ip.attributes();
+				let Some(attr) = attrs.iter().next() else {
+					continue;
+				};
+				match SocketAddr::from_str(attr.0) {
+					Ok(addr) => {
+						endpoint.addrs.insert(TransportAddr::Ip(addr));
+					}
+					Err(e) => {
+						tracing::trace!(
+							network = %Short(network.network_id),
+							error = %e,
+							"failed to parse IP address from DHT record"
+						);
+					}
+				}
 			}
 		}
 
 		for record in packet.resource_records("_r") {
 			if let RData::TXT(relay) = &record.rdata {
-				endpoint.addrs.insert(TransportAddr::Relay(
-					RelayUrl::from_str(relay.attributes().iter().next()?.0).ok()?,
-				));
+				let attrs = relay.attributes();
+				let Some(attr) = attrs.iter().next() else {
+					continue;
+				};
+				match RelayUrl::from_str(attr.0) {
+					Ok(url) => {
+						endpoint.addrs.insert(TransportAddr::Relay(url));
+					}
+					Err(e) => {
+						tracing::trace!(
+							network = %Short(network.network_id),
+							error = %e,
+							"failed to parse relay URL from DHT record"
+						);
+					}
+				}
 			}
 		}
 
