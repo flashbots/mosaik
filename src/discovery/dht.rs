@@ -380,7 +380,7 @@ impl WorkerLoop {
 		let addr = self.handle.local.addr();
 		let mut packet = SignedPacket::builder().txt(
 			"_id".try_into().unwrap(),
-			b58::encode(addr.id.as_bytes()).as_str().try_into().unwrap(),
+			b58::encode(addr.id.as_bytes()).as_str().try_into()?,
 			PEER_RECORD_TTL.as_secs() as u32,
 		);
 
@@ -389,14 +389,14 @@ impl WorkerLoop {
 				TransportAddr::Ip(ip) => {
 					packet = packet.txt(
 						"_ip".try_into().unwrap(),
-						ip.to_string().as_str().try_into().unwrap(),
+						ip.to_string().as_str().try_into()?,
 						PEER_RECORD_TTL.as_secs() as u32,
 					);
 				}
 				TransportAddr::Relay(relay_url) => {
 					packet = packet.txt(
 						"_r".try_into().unwrap(),
-						relay_url.to_string().as_str().try_into().unwrap(),
+						relay_url.to_string().as_str().try_into()?,
 						PEER_RECORD_TTL.as_secs() as u32,
 					);
 				}
@@ -499,4 +499,7 @@ enum PublishError {
 
 	#[error("Failed to publish to DHT: {0}")]
 	PublishError(#[from] pkarr::errors::PublishError),
+
+	#[error("DNS entry encoding error: {0}")]
+	Encoding(#[from] dns::SimpleDnsError),
 }
