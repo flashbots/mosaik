@@ -47,8 +47,26 @@ use {
 type HashMap<K, V> =
 	im::HashMap<K, V, BuildHasherDefault<std::hash::DefaultHasher>>;
 
-pub type PriorityQueueWriter<P, K, V> = PriorityQueue<P, K, V, WRITER>;
-pub type PriorityQueueReader<P, K, V> = PriorityQueue<P, K, V, READER>;
+pub type PriorityQueueWriter<P, K, V, const CAP: u64 = { u64::MAX }> =
+	PriorityQueue<P, K, V, CAP, WRITER>;
+
+pub type PriorityQueueReader<P, K, V, const CAP: u64 = { u64::MAX }> =
+	PriorityQueue<P, K, V, CAP, READER>;
+
+/// A priority queue with no upper bound on the number of elements.
+pub type UnboundedPriorityQueue<P, K, V, const IS_WRITER: bool = WRITER> =
+	PriorityQueue<P, K, V, { u64::MAX }, IS_WRITER>;
+
+/// A priority queue with a compile-time upper bound on the number of
+/// elements. When the queue is full and a new element is inserted, the
+/// element with the lowest priority is evicted.
+pub type BoundedPriorityQueue<
+	P,
+	K,
+	V,
+	const CAP: u64,
+	const IS_WRITER: bool = WRITER,
+> = PriorityQueue<P, K, V, CAP, IS_WRITER>;
 
 /// Replicated, eventually consistent double-ended priority queue (DEPQ).
 ///
@@ -58,20 +76,25 @@ pub type PriorityQueueReader<P, K, V> = PriorityQueue<P, K, V, READER>;
 ///
 /// Keys must be unique. Inserting a key that already exists will update its
 /// priority and value.
+///
+/// The `CAP` const generic controls the maximum number of elements. When the
+/// queue exceeds this limit, the element with the lowest priority is
+/// automatically evicted. Defaults to `u64::MAX` (effectively unbounded).
 pub struct PriorityQueue<
 	P: OrderedKey,
 	K: Key,
 	V: Value,
+	const CAP: u64 = { u64::MAX },
 	const IS_WRITER: bool = WRITER,
 > {
 	when: When,
-	group: Group<DepqStateMachine<P, K, V>>,
+	group: Group<DepqStateMachine<P, K, V, CAP>>,
 	data: watch::Receiver<PriorityQueueSnapshot<P, K, V>>,
 }
 
 // read-only access, available to both writers and readers
-impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
-	PriorityQueue<P, K, V, IS_WRITER>
+impl<P: OrderedKey, K: Key, V: Value, const CAP: u64, const IS_WRITER: bool>
+	PriorityQueue<P, K, V, CAP, IS_WRITER>
 {
 	/// Get the number of entries in the priority queue.
 	///
@@ -85,6 +108,15 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	/// Time: O(1)
 	pub fn is_empty(&self) -> bool {
 		self.data.borrow().by_key.is_empty()
+	}
+
+	/// Returns the maximum capacity of the priority queue.
+	///
+	/// The capacity is the maximum number of entries it can hold. When the number
+	/// of entries exceeds the capacity, the entry with the lowest priority is
+	/// automatically evicted to maintain the capacity constraint.
+	pub const fn capacity(&self) -> u64 {
+		CAP
 	}
 
 	/// Test whether the priority queue contains a given key.
@@ -233,7 +265,9 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 }
 
 // write access, only available to writers
-impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
+impl<P: OrderedKey, K: Key, V: Value, const CAP: u64>
+	PriorityQueueWriter<P, K, V, CAP>
+{
 	/// Create a new priority queue in writer mode.
 	///
 	/// The returned writer can be used to modify the queue, and it also provides
@@ -585,8 +619,8 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 }
 
 // construction, available to both writers and readers
-impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
-	PriorityQueue<P, K, V, IS_WRITER>
+impl<P: OrderedKey, K: Key, V: Value, const CAP: u64, const IS_WRITER: bool>
+	PriorityQueue<P, K, V, CAP, IS_WRITER>
 {
 	/// Create a new priority queue in reader mode.
 	///
@@ -599,7 +633,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	pub fn reader(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-	) -> PriorityQueueReader<P, K, V> {
+	) -> PriorityQueueReader<P, K, V, CAP> {
 		Self::reader_with_config(network, store_id, SyncConfig::default())
 	}
 
@@ -615,7 +649,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 		network: &Network,
 		store_id: impl Into<StoreId>,
 		config: SyncConfig,
-	) -> PriorityQueueReader<P, K, V> {
+	) -> PriorityQueueReader<P, K, V, CAP> {
 		Self::create::<READER>(network, store_id, config)
 	}
 
@@ -623,9 +657,9 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 		network: &Network,
 		store_id: impl Into<StoreId>,
 		config: SyncConfig,
-	) -> PriorityQueue<P, K, V, W> {
+	) -> PriorityQueue<P, K, V, CAP, W> {
 		let store_id = store_id.into();
-		let machine = DepqStateMachine::new(
+		let machine = DepqStateMachine::<P, K, V, CAP>::new(
 			store_id, //
 			W,
 			config,
@@ -639,7 +673,7 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 			.with_state_machine(machine)
 			.join();
 
-		PriorityQueue::<P, K, V, W> {
+		PriorityQueue::<P, K, V, CAP, W> {
 			when: When::new(group.when().clone()),
 			group,
 			data,
@@ -647,11 +681,11 @@ impl<P: OrderedKey, K: Key, V: Value, const IS_WRITER: bool>
 	}
 }
 
-impl<P: OrderedKey, K: Key, V: Value, const WRITER: bool> CollectionFromDef
-	for PriorityQueue<P, K, V, WRITER>
+impl<P: OrderedKey, K: Key, V: Value, const CAP: u64, const WRITER: bool>
+	CollectionFromDef for PriorityQueue<P, K, V, CAP, WRITER>
 {
-	type Reader = PriorityQueueReader<P, K, V>;
-	type Writer = PriorityQueueWriter<P, K, V>;
+	type Reader = PriorityQueueReader<P, K, V, CAP>;
+	type Writer = PriorityQueueWriter<P, K, V, CAP>;
 
 	fn reader(network: &crate::Network, store_id: StoreId) -> Self::Reader {
 		Self::Reader::reader(network, store_id)
@@ -663,7 +697,9 @@ impl<P: OrderedKey, K: Key, V: Value, const WRITER: bool> CollectionFromDef
 }
 
 // internal
-impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
+impl<P: OrderedKey, K: Key, V: Value, const CAP: u64>
+	PriorityQueueWriter<P, K, V, CAP>
+{
 	fn execute<TErr>(
 		&self,
 		command: DepqCommand<P, K, V>,
@@ -696,7 +732,12 @@ impl<P: OrderedKey, K: Key, V: Value> PriorityQueueWriter<P, K, V> {
 	}
 }
 
-struct DepqStateMachine<P: OrderedKey, K: Key, V: Value> {
+struct DepqStateMachine<
+	P: OrderedKey,
+	K: Key,
+	V: Value,
+	const CAP: u64 = { u64::MAX },
+> {
 	data: PriorityQueueSnapshot<P, K, V>,
 	latest: watch::Sender<PriorityQueueSnapshot<P, K, V>>,
 	store_id: StoreId,
@@ -705,7 +746,9 @@ struct DepqStateMachine<P: OrderedKey, K: Key, V: Value> {
 	is_writer: bool,
 }
 
-impl<P: OrderedKey, K: Key, V: Value> DepqStateMachine<P, K, V> {
+impl<P: OrderedKey, K: Key, V: Value, const CAP: u64>
+	DepqStateMachine<P, K, V, CAP>
+{
 	pub fn new(
 		store_id: StoreId,
 		is_writer: bool,
@@ -763,6 +806,26 @@ impl<P: OrderedKey, K: Key, V: Value> DepqStateMachine<P, K, V> {
 		let mut bucket = bucket;
 		bucket.insert(key, value);
 		self.data.by_priority.insert(priority, bucket);
+
+		// Evict lowest-priority entries while over capacity
+		while self.data.by_key.len() as u64 > CAP {
+			if let Some((min_p, min_bucket)) = self
+				.data
+				.by_priority
+				.get_min()
+				.map(|(p, b)| (p.clone(), b.clone()))
+			{
+				// Pick an arbitrary key from the lowest-priority bucket
+				if let Some((evict_key, _)) = min_bucket.iter().next() {
+					let evict_key = evict_key.clone();
+					self.apply_remove(&evict_key);
+				} else {
+					break;
+				}
+			} else {
+				break;
+			}
+		}
 	}
 
 	/// Remove an entry by key from both indexes.
@@ -781,8 +844,8 @@ impl<P: OrderedKey, K: Key, V: Value> DepqStateMachine<P, K, V> {
 	}
 }
 
-impl<P: OrderedKey, K: Key, V: Value> StateMachine
-	for DepqStateMachine<P, K, V>
+impl<P: OrderedKey, K: Key, V: Value, const CAP: u64> StateMachine
+	for DepqStateMachine<P, K, V, CAP>
 {
 	type Command = DepqCommand<P, K, V>;
 	type Query = ();
@@ -904,6 +967,7 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 			.derive(type_name::<P>())
 			.derive(type_name::<K>())
 			.derive(type_name::<V>())
+			.derive(CAP.to_le_bytes())
 	}
 
 	/// This state machine doesn't support external queries, because all of its
@@ -926,8 +990,8 @@ impl<P: OrderedKey, K: Key, V: Value> StateMachine
 	}
 }
 
-impl<P: OrderedKey, K: Key, V: Value> SnapshotStateMachine
-	for DepqStateMachine<P, K, V>
+impl<P: OrderedKey, K: Key, V: Value, const CAP: u64> SnapshotStateMachine
+	for DepqStateMachine<P, K, V, CAP>
 {
 	type Snapshot = PriorityQueueSnapshot<P, K, V>;
 

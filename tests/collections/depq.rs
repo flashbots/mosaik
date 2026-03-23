@@ -1524,3 +1524,206 @@ async fn construct_from_macro() -> anyhow::Result<()> {
 
 	Ok(())
 }
+
+/// Inserting beyond capacity evicts the lowest-priority entry.
+#[tokio::test]
+async fn bounded_evicts_lowest_priority() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::BoundedPriorityQueue::<u64, u64, u64, 3>::writer(
+		&n0, store_id,
+	);
+	let r = collections::BoundedPriorityQueue::<u64, u64, u64, 3>::reader(
+		&n1, store_id,
+	);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// Fill to capacity
+	let ver = timeout_s(2, w.insert(10, 1, 100)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	let ver = timeout_s(2, w.insert(20, 2, 200)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	let ver = timeout_s(2, w.insert(30, 3, 300)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 3);
+
+	// Inserting a 4th entry with higher priority evicts the lowest (key 1,
+	// priority 10)
+	let ver = timeout_s(2, w.insert(40, 4, 400)).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+	assert_eq!(r.len(), 3);
+	assert!(!r.contains_key(&1)); // evicted
+	assert!(r.contains_key(&2));
+	assert!(r.contains_key(&3));
+	assert!(r.contains_key(&4));
+	assert_eq!(r.min_priority(), Some(20));
+	assert_eq!(r.max_priority(), Some(40));
+
+	Ok(())
+}
+
+/// Inserting an entry with priority lower than the current minimum still
+/// triggers eviction (the new entry itself gets evicted if it is the new min).
+#[tokio::test]
+async fn bounded_insert_lower_than_all() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let w = collections::BoundedPriorityQueue::<u64, u64, u64, 2>::writer(
+		&n0, store_id,
+	);
+	timeout_s(10, w.when().online()).await?;
+
+	timeout_s(2, w.insert(10, 1, 100)).await??;
+	timeout_s(2, w.insert(20, 2, 200)).await??;
+	assert_eq!(w.len(), 2);
+
+	// Insert priority 5, which is lower than both existing entries.
+	// After insert we have {5,10,20} → evict min → evicts key with
+	// priority 5.
+	timeout_s(2, w.insert(5, 3, 300)).await??;
+	assert_eq!(w.len(), 2);
+	assert!(!w.contains_key(&3)); // the new entry was itself evicted
+	assert!(w.contains_key(&1));
+	assert!(w.contains_key(&2));
+
+	Ok(())
+}
+
+/// Extend that exceeds capacity evicts multiple lowest-priority entries.
+#[tokio::test]
+async fn bounded_extend_evicts_multiple() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w = collections::BoundedPriorityQueue::<u64, u64, u64, 3>::writer(
+		&n0, store_id,
+	);
+	let r = collections::BoundedPriorityQueue::<u64, u64, u64, 3>::reader(
+		&n1, store_id,
+	);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// Insert 2 entries, then extend with 3 more → 5 total, cap 3 → evict 2
+	// lowest
+	timeout_s(2, w.insert(1, 1, 100)).await??;
+	timeout_s(2, w.insert(2, 2, 200)).await??;
+
+	let ver = timeout_s(2, w.extend(vec![(3, 3, 300), (4, 4, 400), (5, 5, 500)]))
+		.await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	assert_eq!(r.len(), 3);
+	// The 3 highest priorities (3, 4, 5) should remain
+	assert!(r.contains_key(&3));
+	assert!(r.contains_key(&4));
+	assert!(r.contains_key(&5));
+	assert!(!r.contains_key(&1));
+	assert!(!r.contains_key(&2));
+
+	Ok(())
+}
+
+/// Updating priority can trigger eviction if the updated entry becomes the
+/// new minimum.
+#[tokio::test]
+async fn bounded_update_priority_no_eviction() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let w = collections::BoundedPriorityQueue::<u64, u64, u64, 3>::writer(
+		&n0, store_id,
+	);
+	timeout_s(10, w.when().online()).await?;
+
+	timeout_s(2, w.insert(10, 1, 100)).await??;
+	timeout_s(2, w.insert(20, 2, 200)).await??;
+	timeout_s(2, w.insert(30, 3, 300)).await??;
+	assert_eq!(w.len(), 3);
+
+	// Update priority of key 1 from 10 to 50. This is an in-place update,
+	// no new key added, so no eviction.
+	timeout_s(2, w.update_priority(&1, 50)).await??;
+	assert_eq!(w.len(), 3);
+	assert!(w.contains_key(&1));
+	assert_eq!(w.get_priority(&1), Some(50));
+	assert_eq!(w.min_priority(), Some(20));
+	assert_eq!(w.max_priority(), Some(50));
+
+	Ok(())
+}
+
+/// Reinserting an existing key (upsert) does not change the count and thus
+/// does not trigger eviction.
+#[tokio::test]
+async fn bounded_upsert_no_eviction() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+	let store_id = StoreId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let w = collections::BoundedPriorityQueue::<u64, u64, u64, 2>::writer(
+		&n0, store_id,
+	);
+	timeout_s(10, w.when().online()).await?;
+
+	timeout_s(2, w.insert(10, 1, 100)).await??;
+	timeout_s(2, w.insert(20, 2, 200)).await??;
+	assert_eq!(w.len(), 2);
+
+	// Upsert key 1 with a new priority and value
+	timeout_s(2, w.insert(5, 1, 150)).await??;
+	assert_eq!(w.len(), 2); // still at capacity, no eviction
+	assert_eq!(w.get(&1), Some(150));
+	assert_eq!(w.get_priority(&1), Some(5));
+	assert!(w.contains_key(&2));
+
+	Ok(())
+}
+
+/// Bounded queue works with the `collection!` macro.
+#[tokio::test]
+async fn bounded_collection_macro() -> anyhow::Result<()> {
+	collection!(TestBounded = collections::BoundedPriorityQueue<u64, String, String, 5>, "bounded_depq_macro_test");
+
+	let network_id = NetworkId::random();
+
+	let n0 = Network::new(network_id).await?;
+	let n1 = Network::new(network_id).await?;
+	timeout_s(10, discover_all([&n0, &n1])).await??;
+
+	let w: WriterOf<TestBounded> = TestBounded::writer(&n0);
+	let r: ReaderOf<TestBounded> = TestBounded::reader(&n1);
+
+	timeout_s(10, w.when().online()).await?;
+	timeout_s(10, r.when().online()).await?;
+
+	// Fill to capacity
+	for i in 0u64..5 {
+		timeout_s(2, w.insert(i, format!("k{i}"), format!("v{i}"))).await??;
+	}
+
+	// Insert a 6th, should evict priority 0 (key "k0")
+	let ver = timeout_s(2, w.insert(10, "k5".into(), "v5".into())).await??;
+	timeout_s(2, r.when().reaches(ver)).await?;
+
+	assert_eq!(r.len(), 5);
+	assert!(!r.contains_key("k0"));
+	assert!(r.contains_key("k5"));
+
+	Ok(())
+}

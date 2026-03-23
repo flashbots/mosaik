@@ -18,7 +18,13 @@ mod when;
 
 pub use {
 	cell::{Cell, CellReader, CellWriter},
-	depq::{PriorityQueue, PriorityQueueReader, PriorityQueueWriter},
+	depq::{
+		BoundedPriorityQueue,
+		PriorityQueue,
+		PriorityQueueReader,
+		PriorityQueueWriter,
+		UnboundedPriorityQueue,
+	},
 	map::{Map, MapReader, MapWriter},
 	once::{Once, OnceReader, OnceWriter},
 	primitives::{StoreId, Version},
