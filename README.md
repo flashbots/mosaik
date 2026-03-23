@@ -397,31 +397,31 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 │  │   Collections   │  │   Transport (iroh)  │  │
 │  │                 │  │                     │  │
 │  │ Map · Vec · Set │  │ QUIC · Relay · mDNS │  │
-│  │ Cell · Once │  │                     │  │
-│  │      DEPQ       │  │                     │  │
+│  │   Cell · Once   │  │        pkarr        │  │
+│  │  PriorityQueue  │  │                     │  │
 │  └─────────────────┘  └─────────────────────┘  │
 └────────────────────────────────────────────────┘
 ```
 
 # Repository Layout
 
-| Path               | Description                                                                          |
-| ------------------ | ------------------------------------------------------------------------------------ |
-| `src/`             | Core library — all shared primitives, protocols, and APIs                            |
-| `src/discovery/`   | Peer discovery, announcement, and catalog synchronization                            |
-| `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria                     |
-| `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines                |
+| Path               | Description                                                                      |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `src/`             | Core library — all shared primitives, protocols, and APIs                        |
+| `src/discovery/`   | Peer discovery, announcement, and catalog synchronization                        |
+| `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria                 |
+| `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines            |
 | `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue` |
-| `src/network/`     | Transport layer, connection management, typed links                                  |
-| `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues                        |
-| `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)                  |
-| `tests/`           | Integration tests organized by subsystem                                             |
+| `src/network/`     | Transport layer, connection management, typed links                              |
+| `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues                    |
+| `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)              |
+| `tests/`           | Integration tests organized by subsystem                                         |
 
 # Getting Started
 
 ## Prerequisites
 
-- Rust toolchain **≥ 1.89** — install with `rustup toolchain install 1.89`
+- Rust toolchain **≥ 1.93**.
 
 ## Usage
 
