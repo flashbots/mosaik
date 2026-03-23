@@ -9,7 +9,7 @@ synchronized across all participating nodes using Raft consensus.
 │                   Collections                                            │
 │                                                                          │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ ┌──────────┐ ┌──────┐ │
-│  │   Map    │ │   Vec    │ │   Set    │ │  DEPQ  │ │ Register │ │ Once │ │
+│  │   Map    │ │   Vec    │ │   Set    │ │  DEPQ  │ │ Cell │ │ Once │ │
 │  │ <K, V>   │ │ <T>      │ │ <T>      │ │<P,K,V> │ │  <T>     │ │ <T>  │ │
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └───┬────┘ └────┬─────┘ └──┬───┘ │
 │       └────────────┴────────────┴─┬─────────┴───────────┴──────────┘     │
@@ -55,8 +55,8 @@ using a const-generic boolean:
 
 | Mode       | Type alias                                                                  | Can write? | Leadership priority |
 | ---------- | --------------------------------------------------------------------------- | ---------- | ------------------- |
-| **Writer** | `MapWriter<K,V>`, `VecWriter<T>`, `RegisterWriter<T>`, `OnceWriter<T>` etc. | Yes        | Normal              |
-| **Reader** | `MapReader<K,V>`, `VecReader<T>`, `RegisterReader<T>`, `OnceReader<T>` etc. | No         | Deprioritized       |
+| **Writer** | `MapWriter<K,V>`, `VecWriter<T>`, `CellWriter<T>`, `OnceWriter<T>` etc. | Yes        | Normal              |
+| **Reader** | `MapReader<K,V>`, `VecReader<T>`, `CellReader<T>`, `OnceReader<T>` etc. | No         | Deprioritized       |
 
 Both modes provide identical read access. Readers automatically use
 `deprioritize_leadership()` in their consensus configuration to reduce the
@@ -77,14 +77,14 @@ let r = Map::<String, u64>::reader(&network, store_id);
 | [`Map<K, V>`](collections/map.md)                         | Unordered key-value map             | `im::HashMap` (deterministic) |
 | [`Vec<T>`](collections/vec.md)                            | Ordered, index-addressable sequence | `im::Vector`                  |
 | [`Set<T>`](collections/set.md)                            | Unordered set of unique values      | `im::HashSet` (deterministic) |
-| [`Register<T>`](collections/register.md)                  | Single-value register               | `Option<T>`                   |
-| [`Once<T>`](collections/once.md)                          | Write-once register                 | `Option<T>`                   |
+| [`Cell<T>`](collections/cell.md)                  | Single-value cell               | `Option<T>`                   |
+| [`Once<T>`](collections/once.md)                          | Write-once cell                 | `Option<T>`                   |
 | [`PriorityQueue<P, K, V>`](collections/priority-queue.md) | Double-ended priority queue         | `im::HashMap` + `im::OrdMap`  |
 
 Most collections use the [`im` crate](https://docs.rs/im) for their internal
 state, which provides **O(1) structural sharing** — cloning a snapshot of the
 entire collection is essentially free. This is critical for the snapshot-based
-state sync mechanism. `Register` and `Once` use a plain `Option<T>` since they
+state sync mechanism. `Cell` and `Once` use a plain `Option<T>` since they
 hold at most one value.
 
 ## Trait requirements
@@ -113,7 +113,7 @@ Each collection derives its Raft group identity from:
 This means `Map::<String, u64>::writer(&net, id)` and
 `Map::<u32, u64>::writer(&net, id)` will join **different** groups even with
 the same `StoreId`, because the key type differs. Likewise, a `Once<String>`
-and a `Register<String>` with the same `StoreId` form separate groups because
+and a `Cell<String>` with the same `StoreId` form separate groups because
 the prefix differs.
 
 ## The `collection!` macro (recommended)
@@ -251,7 +251,7 @@ multi-type collections it is a tuple:
 | `Map<K, V>`              | `(K, V)`      |
 | `Vec<T>`                 | `T`           |
 | `Set<T>`                 | `T`           |
-| `Register<T>`            | `T`           |
+| `Cell<T>`            | `T`           |
 | `Once<T>`                | `T`           |
 | `PriorityQueue<P, K, V>` | `(P, K, V)`   |
 

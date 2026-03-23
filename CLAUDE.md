@@ -62,7 +62,7 @@ Mosaik is a Rust library (`src/lib.rs`) providing a runtime for self-organizing,
   - `storage.rs` — pluggable log storage (built-in: `InMemory`)
 
 - **`src/collections/`** — Replicated data structures layered on Groups:
-  - `Map<K,V>`, `Vec<T>`, `Set<T>`, `Register<T>`, `PriorityQueue<P,K,V>`
+  - `Map<K,V>`, `Vec<T>`, `Set<T>`, `Cell<T>`, `PriorityQueue<P,K,V>`
   - Each has a **writer** (mutates via Raft commands) and a **reader** (read-only replica)
   - Mutations return a `Version`; readers support `.when().reaches(ver)` for convergence checks
   - `StoreId` identifies a collection instance on the network

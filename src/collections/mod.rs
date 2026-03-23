@@ -6,22 +6,22 @@
 
 #![allow(unreachable_code, unused)]
 
+mod cell;
 mod depq;
 mod map;
 mod once;
 mod primitives;
-mod register;
 mod set;
 mod sync;
 mod vec;
 mod when;
 
 pub use {
+	cell::{Cell, CellReader, CellWriter},
 	depq::{PriorityQueue, PriorityQueueReader, PriorityQueueWriter},
 	map::{Map, MapReader, MapWriter},
 	once::{Once, OnceReader, OnceWriter},
 	primitives::{StoreId, Version},
-	register::{Register, RegisterReader, RegisterWriter},
 	set::{Set, SetReader, SetWriter},
 	sync::Config as SyncConfig,
 	vec::{Vec, VecReader, VecWriter},

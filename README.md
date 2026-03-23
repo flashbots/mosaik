@@ -201,14 +201,14 @@ assert!(!reader.contains(&7));
 assert_eq!(reader.len(), 3);
 ```
 
-### `Register<T>`
+### `Cell<T>`
 
-Replicated single-value register. Holds at most one value at a time — writing replaces the previous value. This is the distributed equivalent of a `tokio::sync::watch` channel.
+Replicated single-value cell. Holds at most one value at a time — writing replaces the previous value. This is the distributed equivalent of a `tokio::sync::watch` channel.
 
 ```rust
 let store_id = StoreId::random();
 
-let reg = mosaik::collections::Register::<String>::new(&network, store_id);
+let reg = mosaik::collections::Cell::<String>::new(&network, store_id);
 reg.when().online().await;
 
 reg.write("v1".into()).await?;
@@ -219,7 +219,7 @@ reg.write("v2".into()).await?;
 assert_eq!(reg.read(), Some("v2".into()));
 
 // On a reader node
-let reader = mosaik::collections::Register::<String>::reader(&network, store_id);
+let reader = mosaik::collections::Cell::<String>::reader(&network, store_id);
 reader.when().online().await;
 assert_eq!(reader.read(), Some("v2".into()));
 
@@ -230,7 +230,7 @@ assert!(reader.is_empty());
 
 ### `Once<T>`
 
-Replicated write-once register. Holds at most one value — once a value has been set, subsequent writes are silently ignored. This is the distributed equivalent of a `tokio::sync::OnceCell`.
+Replicated write-once cell. Holds at most one value — once a value has been set, subsequent writes are silently ignored. This is the distributed equivalent of a `tokio::sync::OnceCell`.
 
 ```rust
 let store_id = StoreId::random();
@@ -397,7 +397,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 │  │   Collections   │  │   Transport (iroh)  │  │
 │  │                 │  │                     │  │
 │  │ Map · Vec · Set │  │ QUIC · Relay · mDNS │  │
-│  │ Register · Once │  │                     │  │
+│  │ Cell · Once │  │                     │  │
 │  │      DEPQ       │  │                     │  │
 │  └─────────────────┘  └─────────────────────┘  │
 └────────────────────────────────────────────────┘
@@ -411,7 +411,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 | `src/discovery/`   | Peer discovery, announcement, and catalog synchronization                            |
 | `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria                     |
 | `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines                |
-| `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Register`, `Once`, `PriorityQueue` |
+| `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue` |
 | `src/network/`     | Transport layer, connection management, typed links                                  |
 | `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues                        |
 | `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)                  |

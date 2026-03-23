@@ -246,8 +246,7 @@ impl<D: Datum> ConsumerWorker<D> {
 				.send_if_modified(|active| active.remove(sub_id).is_some());
 		}
 
-		if !to_disconnect.is_empty() && !self.online_when.is_condition_met()
-		{
+		if !to_disconnect.is_empty() && !self.online_when.is_condition_met() {
 			tracing::trace!(
 				stream_id = %Short(self.config.stream_id),
 				producers = %self.active.borrow().len(),

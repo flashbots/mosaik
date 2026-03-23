@@ -16,8 +16,8 @@ async fn smoke_no_catchup() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::new(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::new(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
@@ -60,7 +60,7 @@ async fn catchup_single_reader() -> anyhow::Result<()> {
 	let store_id = StoreId::random();
 
 	let n0 = Network::new(network_id).await?;
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
 	timeout_s(10, w.when().online()).await?;
 
 	// build a non-trivial history: overwrite many times
@@ -75,11 +75,11 @@ async fn catchup_single_reader() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, r.when().online()).await?;
 	timeout_s(10, r.when().reaches(ver)).await?;
 
-	// register only holds the latest value
+	// cell only holds the latest value
 	assert_eq!(r.read(), Some(999));
 
 	// writer can continue operating after reader caught up
@@ -102,10 +102,10 @@ async fn multiple_readers() -> anyhow::Result<()> {
 	let n_r3 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n_w, &n_r1, &n_r2, &n_r3])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n_w, store_id);
-	let r1 = mosaik::collections::Register::<u64>::reader(&n_r1, store_id);
-	let r2 = mosaik::collections::Register::<u64>::reader(&n_r2, store_id);
-	let r3 = mosaik::collections::Register::<u64>::reader(&n_r3, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n_w, store_id);
+	let r1 = mosaik::collections::Cell::<u64>::reader(&n_r1, store_id);
+	let r2 = mosaik::collections::Cell::<u64>::reader(&n_r2, store_id);
+	let r3 = mosaik::collections::Cell::<u64>::reader(&n_r3, store_id);
 
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r1.when().online()).await?;
@@ -158,9 +158,9 @@ async fn multiple_writers() -> anyhow::Result<()> {
 	let n2 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1, &n2])).await??;
 
-	let w0 = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let w1 = mosaik::collections::Register::<u64>::writer(&n1, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n2, store_id);
+	let w0 = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let w1 = mosaik::collections::Cell::<u64>::writer(&n1, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n2, store_id);
 
 	timeout_s(10, w0.when().online()).await?;
 	timeout_s(10, w1.when().online()).await?;
@@ -196,7 +196,7 @@ async fn catchup_multiple_readers() -> anyhow::Result<()> {
 	let store_id = StoreId::random();
 
 	let n_w = Network::new(network_id).await?;
-	let w = mosaik::collections::Register::<u64>::writer(&n_w, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n_w, store_id);
 	timeout_s(10, w.when().online()).await?;
 
 	// build history
@@ -209,7 +209,7 @@ async fn catchup_multiple_readers() -> anyhow::Result<()> {
 	// first late reader
 	let n_r1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n_w, &n_r1])).await??;
-	let r1 = mosaik::collections::Register::<u64>::reader(&n_r1, store_id);
+	let r1 = mosaik::collections::Cell::<u64>::reader(&n_r1, store_id);
 	timeout_s(10, r1.when().online()).await?;
 	timeout_s(10, r1.when().reaches(mid_ver)).await?;
 	assert_eq!(r1.read(), Some(999));
@@ -224,7 +224,7 @@ async fn catchup_multiple_readers() -> anyhow::Result<()> {
 	// second late reader joins even later
 	let n_r2 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n_w, &n_r1, &n_r2])).await??;
-	let r2 = mosaik::collections::Register::<u64>::reader(&n_r2, store_id);
+	let r2 = mosaik::collections::Cell::<u64>::reader(&n_r2, store_id);
 	timeout_s(10, r2.when().online()).await?;
 	timeout_s(10, r2.when().reaches(late_ver)).await?;
 
@@ -247,8 +247,8 @@ async fn overwrite_keeps_latest() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
@@ -280,8 +280,8 @@ async fn clear_then_write() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
@@ -302,7 +302,7 @@ async fn clear_then_write() -> anyhow::Result<()> {
 	Ok(())
 }
 
-// Clear on empty register is a safe no-op
+// Clear on empty cell is a safe no-op
 #[tokio::test]
 async fn clear_empty() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
@@ -312,8 +312,8 @@ async fn clear_empty() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
@@ -342,10 +342,10 @@ async fn many_writers_many_readers() -> anyhow::Result<()> {
 	let n3 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1, &n2, &n3])).await??;
 
-	let w0 = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let w1 = mosaik::collections::Register::<u64>::writer(&n1, store_id);
-	let r0 = mosaik::collections::Register::<u64>::reader(&n2, store_id);
-	let r1 = mosaik::collections::Register::<u64>::reader(&n3, store_id);
+	let w0 = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let w1 = mosaik::collections::Cell::<u64>::writer(&n1, store_id);
+	let r0 = mosaik::collections::Cell::<u64>::reader(&n2, store_id);
+	let r1 = mosaik::collections::Cell::<u64>::reader(&n3, store_id);
 
 	timeout_s(10, w0.when().online()).await?;
 	timeout_s(10, w1.when().online()).await?;
@@ -395,7 +395,7 @@ async fn late_writer_catchup() -> anyhow::Result<()> {
 	let store_id = StoreId::random();
 
 	let n0 = Network::new(network_id).await?;
-	let w0 = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let w0 = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
 	timeout_s(10, w0.when().online()).await?;
 
 	// build up some state
@@ -406,7 +406,7 @@ async fn late_writer_catchup() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w1 = mosaik::collections::Register::<u64>::writer(&n1, store_id);
+	let w1 = mosaik::collections::Cell::<u64>::writer(&n1, store_id);
 	timeout_s(10, w1.when().online()).await?;
 	timeout_s(10, w1.when().reaches(ver)).await?;
 
@@ -430,7 +430,7 @@ async fn writer_reads_own_writes() -> anyhow::Result<()> {
 	let store_id = StoreId::random();
 
 	let n0 = Network::new(network_id).await?;
-	let w = mosaik::collections::Register::<String>::writer(&n0, store_id);
+	let w = mosaik::collections::Cell::<String>::writer(&n0, store_id);
 	timeout_s(10, w.when().online()).await?;
 
 	let ver = timeout_s(2, w.write("hello".into())).await??;
@@ -457,8 +457,8 @@ async fn compare_exchange_success() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
@@ -475,7 +475,7 @@ async fn compare_exchange_success() -> anyhow::Result<()> {
 	Ok(())
 }
 
-// compare_exchange on empty register: None -> Some
+// compare_exchange on empty cell: None -> Some
 #[tokio::test]
 async fn compare_exchange_from_none() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
@@ -485,12 +485,12 @@ async fn compare_exchange_from_none() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
-	// register starts empty
+	// cell starts empty
 	assert!(r.is_empty());
 
 	// compare_exchange: None -> Some(10)
@@ -511,8 +511,8 @@ async fn compare_exchange_to_none() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
@@ -539,8 +539,8 @@ async fn compare_exchange_mismatch_no_change() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
@@ -561,7 +561,7 @@ async fn compare_exchange_mismatch_no_change() -> anyhow::Result<()> {
 	Ok(())
 }
 
-// compare_exchange mismatch on empty register
+// compare_exchange mismatch on empty cell
 #[tokio::test]
 async fn compare_exchange_mismatch_on_empty() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
@@ -571,14 +571,14 @@ async fn compare_exchange_mismatch_on_empty() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
 	assert!(r.is_empty());
 
-	// compare_exchange expecting Some on empty register — no change
+	// compare_exchange expecting Some on empty cell — no change
 	let ver = timeout_s(2, w.compare_exchange(Some(42), Some(99))).await??;
 	timeout_s(2, r.when().reaches(ver)).await?;
 	assert!(r.is_empty());
@@ -597,9 +597,9 @@ async fn compare_exchange_replicates_to_readers() -> anyhow::Result<()> {
 	let n_r2 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n_w, &n_r1, &n_r2])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n_w, store_id);
-	let r1 = mosaik::collections::Register::<u64>::reader(&n_r1, store_id);
-	let r2 = mosaik::collections::Register::<u64>::reader(&n_r2, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n_w, store_id);
+	let r1 = mosaik::collections::Cell::<u64>::reader(&n_r1, store_id);
+	let r2 = mosaik::collections::Cell::<u64>::reader(&n_r2, store_id);
 
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r1.when().online()).await?;
@@ -631,8 +631,8 @@ async fn compare_exchange_chained() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
@@ -666,8 +666,8 @@ async fn compare_exchange_mixed_with_write_clear() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
@@ -708,8 +708,8 @@ async fn compare_exchange_none_to_none() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
@@ -733,7 +733,7 @@ async fn compare_exchange_catchup() -> anyhow::Result<()> {
 	let store_id = StoreId::random();
 
 	let n0 = Network::new(network_id).await?;
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
 	timeout_s(10, w.when().online()).await?;
 
 	// build state with compare_exchange
@@ -748,7 +748,7 @@ async fn compare_exchange_catchup() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, r.when().online()).await?;
 	timeout_s(10, r.when().reaches(ver)).await?;
 
@@ -768,8 +768,8 @@ async fn write_clear_cycle() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w = mosaik::collections::Register::<u64>::writer(&n0, store_id);
-	let r = mosaik::collections::Register::<u64>::reader(&n1, store_id);
+	let w = mosaik::collections::Cell::<u64>::writer(&n0, store_id);
+	let r = mosaik::collections::Cell::<u64>::reader(&n1, store_id);
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;
 
@@ -793,7 +793,7 @@ async fn write_clear_cycle() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn construct_from_def() -> anyhow::Result<()> {
-	const DEF: CollectionDef<mosaik::collections::Register<String>> =
+	const DEF: CollectionDef<mosaik::collections::Cell<String>> =
 		CollectionDef::new(unique_id!("test1"));
 
 	let network_id = NetworkId::random();
@@ -825,8 +825,8 @@ async fn construct_from_def() -> anyhow::Result<()> {
 #[tokio::test]
 async fn construct_from_macro() -> anyhow::Result<()> {
 	mosaik::collection!(
-		TestRegister = mosaik::collections::Register<String>,
-		"test.register.macro"
+		TestCell = mosaik::collections::Cell<String>,
+		"test.cell.macro"
 	);
 
 	let network_id = NetworkId::random();
@@ -835,8 +835,8 @@ async fn construct_from_macro() -> anyhow::Result<()> {
 	let n1 = Network::new(network_id).await?;
 	timeout_s(10, discover_all([&n0, &n1])).await??;
 
-	let w: WriterOf<TestRegister> = TestRegister::writer(&n0);
-	let r: ReaderOf<TestRegister> = TestRegister::reader(&n1);
+	let w: WriterOf<TestCell> = TestCell::writer(&n0);
+	let r: ReaderOf<TestCell> = TestCell::reader(&n1);
 
 	timeout_s(10, w.when().online()).await?;
 	timeout_s(10, r.when().online()).await?;

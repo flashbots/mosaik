@@ -30,7 +30,7 @@ Each collection provides convenient type aliases:
 | `Map<K, V>`              | `MapWriter<K, V>`              | `MapReader<K, V>`              |
 | `Vec<T>`                 | `VecWriter<T>`                 | `VecReader<T>`                 |
 | `Set<T>`                 | `SetWriter<T>`                 | `SetReader<T>`                 |
-| `Register<T>`            | `RegisterWriter<T>`            | `RegisterReader<T>`            |
+| `Cell<T>`            | `CellWriter<T>`            | `CellReader<T>`            |
 | `Once<T>`                | `OnceWriter<T>`                | `OnceReader<T>`                |
 | `PriorityQueue<P, K, V>` | `PriorityQueueWriter<P, K, V>` | `PriorityQueueReader<P, K, V>` |
 

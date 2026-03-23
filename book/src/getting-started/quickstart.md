@@ -184,4 +184,4 @@ async fn main() -> anyhow::Result<()> {
 - **[Tutorials](../tutorials/bootstrap.md)** — Walk through the included examples
 - **[Streams](../subsystems/streams.md)** — Producer/consumer configuration, filtering, backpressure
 - **[Groups](../subsystems/groups.md)** — Raft consensus and replicated state machines
-- **[Collections](../subsystems/collections.md)** — Distributed Map, Vec, Set, Register, Once, PriorityQueue
+- **[Collections](../subsystems/collections.md)** — Distributed Map, Vec, Set, Cell, Once, PriorityQueue

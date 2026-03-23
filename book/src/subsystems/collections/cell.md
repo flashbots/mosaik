@@ -1,32 +1,32 @@
-# Register
+# Cell
 
-`Register<T>` is a replicated single-value register. It holds at most one
+`Cell<T>` is a replicated single-value cell. It holds at most one
 value at a time — writing a new value replaces the previous one entirely. This
 is the distributed equivalent of a `tokio::sync::watch` channel: all nodes
 observe the latest value.
 
-Internally the state is simply an `Option<T>`, making the Register the
+Internally the state is simply an `Option<T>`, making the Cell the
 simplest collection in the mosaik toolkit.
 
 ## Construction
 
 ```rust,ignore
-use mosaik::collections::{Register, StoreId, SyncConfig};
+use mosaik::collections::{Cell, StoreId, SyncConfig};
 
 // Writer — can read and write
-let reg = Register::<String>::writer(&network, StoreId::from("config"));
+let reg = Cell::<String>::writer(&network, StoreId::from("config"));
 
 // Writer with custom sync config
-let reg = Register::<String>::writer_with_config(&network, store_id, config);
+let reg = Cell::<String>::writer_with_config(&network, store_id, config);
 
 // Reader — read-only, deprioritized for leadership
-let reg = Register::<String>::reader(&network, store_id);
+let reg = Cell::<String>::reader(&network, store_id);
 
 // Reader with custom sync config
-let reg = Register::<String>::reader_with_config(&network, store_id, config);
+let reg = Cell::<String>::reader_with_config(&network, store_id, config);
 
 // Aliases: new() == writer(), new_with_config() == writer_with_config()
-let reg = Register::<String>::new(&network, store_id);
+let reg = Cell::<String>::new(&network, store_id);
 ```
 
 ## Read operations
@@ -38,7 +38,7 @@ state and never touch the network.
 | ---------------------- | ---- | ---------------------------------- |
 | `read() -> Option<T>`  | O(1) | Get the current value              |
 | `get() -> Option<T>`   | O(1) | Alias for `read()`                 |
-| `is_empty() -> bool`   | O(1) | Whether the register holds a value |
+| `is_empty() -> bool`   | O(1) | Whether the cell holds a value     |
 | `version() -> Version` | O(1) | Current committed state version    |
 | `when() -> &When`      | O(1) | Access the state observer          |
 
@@ -56,7 +56,7 @@ if reg.is_empty() {
 
 ## Write operations
 
-Only available on `RegisterWriter<T>`.
+Only available on `CellWriter<T>`.
 
 | Method                                                                                     | Time | Description                                 |
 | ------------------------------------------------------------------------------------------ | ---- | ------------------------------------------- |
@@ -98,15 +98,15 @@ assert!(reg.is_empty());
 
 ### Compare-and-swap semantics
 
-`compare_exchange` atomically checks the current value of the register and
+`compare_exchange` atomically checks the current value of the cell and
 only applies the write if it matches the `current` parameter. This is useful
 for optimistic concurrency control — multiple writers can attempt a swap, and
 only the one whose expectation matches the actual state will succeed.
 
-- **`current`**: The expected current value (`None` means the register must be
+- **`current`**: The expected current value (`None` means the cell must be
   empty).
 - **`new`**: The value to write if the expectation holds (`None` clears the
-  register).
+  cell).
 
 If the current value does not match `current`, the operation is a **no-op** —
 it still commits to the Raft log (incrementing the version) but does not
@@ -149,7 +149,7 @@ reg.when().offline().await;
 
 ## Group identity
 
-The group key for a `Register<T>` is derived from:
+The group key for a `Cell<T>` is derived from:
 
 ```text
 UniqueId::from("mosaik_collections_register")
@@ -160,9 +160,9 @@ UniqueId::from("mosaik_collections_register")
 Two registers with the same `StoreId` but different value types will be in
 separate consensus groups.
 
-## When to use Register
+## When to use Cell
 
-Register is ideal for:
+Cell is ideal for:
 
 - **Configuration** — a single shared config object replicated across the cluster
 - **Leader state** — the current leader's address or identity

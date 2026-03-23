@@ -167,7 +167,7 @@ this path.
 
 ## Collections and state sync
 
-All built-in collection types (`Map`, `Vec`, `Set`, `Register`, `Once`,
+All built-in collection types (`Map`, `Vec`, `Set`, `Cell`, `Once`,
 `PriorityQueue`) implement `SnapshotStateMachine`. Their internal state
 machines produce snapshots:
 
@@ -175,12 +175,12 @@ machines produce snapshots:
 MapStateMachine  ──snapshot()──► MapSnapshot (HashMap entries)
 VecStateMachine  ──snapshot()──► VecSnapshot (indexed entries)
 SetStateMachine  ──snapshot()──► SetSnapshot (set members)
-RegStateMachine  ──snapshot()──► RegisterSnapshot (optional value)
+RegStateMachine  ──snapshot()──► CellSnapshot (optional value)
 OnceStateMachine ──snapshot()──► OnceSnapshot (optional value)
 DepqStateMachine ──snapshot()──► PriorityQueueSnapshot (by_key + by_priority)
 ```
 
 The dual-index structure of `PriorityQueue` is preserved across sync — both
 the `by_key` and `by_priority` indices are transmitted and reconstructed.
-`Register` and `Once` snapshots are trivial (at most one item), so sync
+`Cell` and `Once` snapshots are trivial (at most one item), so sync
 completes in a single batch.

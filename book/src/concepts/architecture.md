@@ -13,7 +13,7 @@ Network::builder(network_id)
     ├── Discovery          (gossip announcements, catalog sync)
     ├── Streams            (typed pub/sub channels)
     └── Groups             (Raft consensus groups)
-            └── Collections  (replicated Map, Vec, Set, Register, Once, PriorityQueue)
+            └── Collections  (replicated Map, Vec, Set, Cell, Once, PriorityQueue)
 ```
 
 Each subsystem is created during `Network::builder().build()` and installed as a protocol handler on the iroh `Router`. The subsystems are then accessible via accessor methods:
@@ -126,7 +126,7 @@ collection.when().reaches(version).await;
 
 ### Arc\<Inner\> Pattern
 
-All public handles (`Network`, `Discovery`, `Streams`, `Groups`, `Group`, `Producer`, `Consumer`, `Map`, `Vec`, `Register`, `Once`, etc.) are cheap to clone. They wrap an `Arc<Inner>` containing the actual state, making them safe to share across tasks.
+All public handles (`Network`, `Discovery`, `Streams`, `Groups`, `Group`, `Producer`, `Consumer`, `Map`, `Vec`, `Cell`, `Once`, etc.) are cheap to clone. They wrap an `Arc<Inner>` containing the actual state, making them safe to share across tasks.
 
 ### Task-Per-Connection
 

@@ -165,7 +165,7 @@ syntaxes work:
 
 `compare_exchange_value` atomically checks the value of an existing entry and
 only applies the mutation if it matches the `expected` parameter. Unlike
-`compare_exchange` on `Map` and `Register`, this method operates **only on the
+`compare_exchange` on `Map` and `Cell`, this method operates **only on the
 value** — the entry's priority is always preserved.
 
 - **`key`**: The key of the entry to operate on (must already exist).

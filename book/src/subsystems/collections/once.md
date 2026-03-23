@@ -1,16 +1,16 @@
 # Once
 
-`Once<T>` is a replicated write-once register. It holds at most one value —
+`Once<T>` is a replicated write-once cell. It holds at most one value —
 once a value has been set, all subsequent writes are silently ignored by the
 state machine. This is the distributed equivalent of a
 `tokio::sync::OnceCell`.
 
-Unlike [`Register<T>`](register.md), which allows overwriting the stored value,
+Unlike [`Cell<T>`](cell.md), which allows overwriting the stored value,
 `Once<T>` guarantees that the first accepted write is permanent. This makes it
 ideal for one-time initialization patterns where you need exactly one value to
 win across a distributed cluster.
 
-Internally the state is an `Option<T>`, identical to `Register`, but the
+Internally the state is an `Option<T>`, identical to `Cell`, but the
 `apply` logic rejects writes when the value is already `Some`.
 
 ## Construction
@@ -43,9 +43,9 @@ state and never touch the network.
 | ---------------------- | ---- | ------------------------------------------- |
 | `read() -> Option<T>`  | O(1) | Get the current value                       |
 | `get() -> Option<T>`   | O(1) | Alias for `read()`                          |
-| `is_empty() -> bool`   | O(1) | Whether the register has been set           |
+| `is_empty() -> bool`   | O(1) | Whether the cell has been set           |
 | `is_none() -> bool`    | O(1) | Alias for `is_empty()`                      |
-| `is_some() -> bool`    | O(1) | Whether the register holds a value          |
+| `is_some() -> bool`    | O(1) | Whether the cell holds a value          |
 | `version() -> Version` | O(1) | Current committed state version             |
 | `when() -> &When`      | O(1) | Access the state observer                   |
 
@@ -143,13 +143,13 @@ UniqueId::from("mosaik_collections_once")
     .derive(type_name::<T>())
 ```
 
-A `Once<T>` and a `Register<T>` with the same `StoreId` and type parameter
+A `Once<T>` and a `Cell<T>` with the same `StoreId` and type parameter
 will be in **separate** consensus groups because the prefix differs
 (`"mosaik_collections_once"` vs `"mosaik_collections_register"`).
 
-## Once vs Register
+## Once vs Cell
 
-| Behavior            | `Once<T>`                               | `Register<T>`                         |
+| Behavior            | `Once<T>`                               | `Cell<T>`                         |
 | ------------------- | --------------------------------------- | ------------------------------------- |
 | Write semantics     | First write wins; subsequent ignored    | Every write replaces the stored value |
 | `clear()`           | Not supported                           | Supported                             |
@@ -169,4 +169,4 @@ will be in **separate** consensus groups because the prefix differs
   deployment
 
 If you need to update the value after setting it, use
-[`Register`](register.md) instead.
+[`Cell`](cell.md) instead.

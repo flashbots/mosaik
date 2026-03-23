@@ -36,7 +36,7 @@ From these minimal inputs, mosaik handles peer discovery, typed pub/sub data str
 ├──────────┬──────────┬──────────┬────────────────┤
 │ Discovery│ Streams  │  Groups  │  Collections   │
 │  gossip, │  typed   │   Raft   │  Map/Vec/Set/  │
-│  catalog │ pub/sub  │ consensus│  Register/Once │
+│  catalog │ pub/sub  │ consensus│  Cell/Once │
 │          │          │  groups  │  PriorityQueue │
 └──────────┴──────────┴──────────┴────────────────┘
 ```
@@ -45,7 +45,7 @@ From these minimal inputs, mosaik handles peer discovery, typed pub/sub data str
 - **Discovery** uses gossip to maintain a catalog of all peers, their capabilities, and their available streams/groups.
 - **Streams** provides typed, async pub/sub channels. Any serializable Rust type can be streamed between nodes.
 - **Groups** implements Raft consensus for clusters of nodes that need shared state and leader election.
-- **Collections** builds on Groups to offer replicated data structures (`Map`, `Vec`, `Set`, `Register`, `Once`, `PriorityQueue`) that stay synchronized across nodes.
+- **Collections** builds on Groups to offer replicated data structures (`Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue`) that stay synchronized across nodes.
 
 ## Who Should Read This Book
 

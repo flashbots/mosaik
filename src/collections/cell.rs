@@ -37,30 +37,30 @@ use {
 	tokio::sync::watch,
 };
 
-/// Mutable access to a replicated register.
+/// Mutable access to a replicated cell.
 ///
 /// Has higher priority for assuming group leadership.
-pub type RegisterWriter<T> = Register<T, WRITER>;
+pub type CellWriter<T> = Cell<T, WRITER>;
 
-/// Read-only access to a register.
+/// Read-only access to a cell.
 ///
 /// Has lower priority for assuming group leadership.
-pub type RegisterReader<T> = Register<T, READER>;
+pub type CellReader<T> = Cell<T, READER>;
 
-/// Replicated single-value register.
+/// Replicated single-value cell.
 ///
-/// A register holds at most one value at a time. Writing a new value
+/// A cell holds at most one value at a time. Writing a new value
 /// replaces the previous one. This is the distributed equivalent of a
 /// `tokio::sync::watch` channel — all nodes observe the latest value.
-pub struct Register<T: Value, const IS_WRITER: bool = WRITER> {
+pub struct Cell<T: Value, const IS_WRITER: bool = WRITER> {
 	when: When,
-	group: Group<RegisterStateMachine<T>>,
+	group: Group<CellStateMachine<T>>,
 	data: watch::Receiver<Option<T>>,
 }
 
 // read-only access, available to both readers and writers
-impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
-	/// Read the current value of the register.
+impl<T: Value, const IS_WRITER: bool> Cell<T, IS_WRITER> {
+	/// Read the current value of the cell.
 	///
 	/// Returns `None` if no value has been written yet.
 	///
@@ -69,7 +69,7 @@ impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
 		self.data.borrow().clone()
 	}
 
-	/// Read the current value of the register.
+	/// Read the current value of the cell.
 	///
 	/// Returns `None` if no value has been written yet.
 	///
@@ -78,35 +78,35 @@ impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
 		self.read()
 	}
 
-	/// Test whether the register contains a value.
+	/// Test whether the cell contains a value.
 	///
 	/// Time: O(1)
 	pub fn is_empty(&self) -> bool {
 		self.data.borrow().is_none()
 	}
 
-	/// Test whether the register contains a value.
+	/// Test whether the cell contains a value.
 	///
 	/// Time: O(1)
 	pub fn is_none(&self) -> bool {
 		self.is_empty()
 	}
 
-	/// Test whether the register contains a value.
+	/// Test whether the cell contains a value.
 	///
 	/// Time: O(1)
 	pub fn is_some(&self) -> bool {
 		!self.is_empty()
 	}
 
-	/// Returns an observer of the register's state, which can be used to wait
-	/// for the register to reach a certain state version before performing an
+	/// Returns an observer of the cell's state, which can be used to wait
+	/// for the cell to reach a certain state version before performing an
 	/// action or knowing when it is online or offline.
 	pub const fn when(&self) -> &When {
 		&self.when
 	}
 
-	/// The current version of the register's state, which is the version of the
+	/// The current version of the cell's state, which is the version of the
 	/// latest committed state.
 	pub fn version(&self) -> Version {
 		Version(self.group.committed())
@@ -114,37 +114,37 @@ impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
 }
 
 // Mutable operations, only available to writers
-impl<T: Value> RegisterWriter<T> {
-	/// Create a new register in writer mode.
+impl<T: Value> CellWriter<T> {
+	/// Create a new cell in writer mode.
 	///
-	/// The returned writer can be used to modify the register, and it also
-	/// provides read access to the register's contents. Writers can be used by
+	/// The returned writer can be used to modify the cell, and it also
+	/// provides read access to the cell's contents. Writers can be used by
 	/// multiple nodes concurrently, and all changes made by any writer will be
 	/// replicated to all other writers and readers.
 	///
-	/// This creates a new register with default synchronization configuration.
+	/// This creates a new cell with default synchronization configuration.
 	/// If you want to customize the synchronization behavior, use
 	/// `writer_with_config` instead.
 	///
 	/// Note that different sync configurations will create different group ids
-	/// and the resulting registers will not be able to see each other.
+	/// and the resulting cells will not be able to see each other.
 	pub fn writer(network: &Network, store_id: impl Into<StoreId>) -> Self {
 		Self::writer_with_config(network, store_id, SyncConfig::default())
 	}
 
-	/// Create a new register in writer mode.
+	/// Create a new cell in writer mode.
 	///
-	/// The returned writer can be used to modify the register, and it also
-	/// provides read access to the register's contents. Writers can be used by
+	/// The returned writer can be used to modify the cell, and it also
+	/// provides read access to the cell's contents. Writers can be used by
 	/// multiple nodes concurrently, and all changes made by any writer will be
 	/// replicated to all other writers and readers.
 	///
-	/// This creates a new register with the specified sync configuration. If you
+	/// This creates a new cell with the specified sync configuration. If you
 	/// want to use the default sync configuration, use the `writer` method
 	/// instead.
 	///
 	/// Note that different sync configurations will create different group ids
-	/// and the resulting registers will not be able to see each other.
+	/// and the resulting cells will not be able to see each other.
 	pub fn writer_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
@@ -153,14 +153,14 @@ impl<T: Value> RegisterWriter<T> {
 		Self::create::<WRITER>(network, store_id, config)
 	}
 
-	/// Create a new register in writer mode.
+	/// Create a new cell in writer mode.
 	///
 	/// This is an alias for the `writer` method.
 	pub fn new(network: &Network, store_id: impl Into<StoreId>) -> Self {
 		Self::writer(network, store_id)
 	}
 
-	/// Create a new register in writer mode with the specified sync
+	/// Create a new cell in writer mode with the specified sync
 	/// configuration.
 	///
 	/// This is an alias for the `writer_with_config` method.
@@ -172,7 +172,7 @@ impl<T: Value> RegisterWriter<T> {
 		Self::writer_with_config(network, store_id, config)
 	}
 
-	/// Write a new value to the register, replacing the previous one.
+	/// Write a new value to the cell, replacing the previous one.
 	///
 	/// Time: O(1)
 	pub fn write(
@@ -182,19 +182,19 @@ impl<T: Value> RegisterWriter<T> {
 	{
 		let value = Encoded(value);
 		self.execute(
-			RegisterCommand::Write { value },
+			CellCommand::Write { value },
 			|cmd| match cmd {
-				RegisterCommand::Write { value } => Error::Offline(value.0),
+				CellCommand::Write { value } => Error::Offline(value.0),
 				_ => unreachable!(),
 			},
 			|cmd, e| match cmd {
-				RegisterCommand::Write { value } => Error::Encoding(value.0, e),
+				CellCommand::Write { value } => Error::Encoding(value.0, e),
 				_ => unreachable!(),
 			},
 		)
 	}
 
-	/// Write a new value to the register, replacing the previous one.
+	/// Write a new value to the cell, replacing the previous one.
 	///
 	/// Time: O(1)
 	pub fn set(
@@ -205,7 +205,7 @@ impl<T: Value> RegisterWriter<T> {
 		self.write(value)
 	}
 
-	/// Compare the current value of the register with an expected value, and if
+	/// Compare the current value of the cell with an expected value, and if
 	/// they match, replace it with a new value. If the current value does not
 	/// match the expected value, no write occurs.
 	///
@@ -223,15 +223,15 @@ impl<T: Value> RegisterWriter<T> {
 		let new = new.map(Encoded);
 
 		self.execute(
-			RegisterCommand::CompareExchange { current, new },
+			CellCommand::CompareExchange { current, new },
 			|cmd| match cmd {
-				RegisterCommand::CompareExchange { current, new } => {
+				CellCommand::CompareExchange { current, new } => {
 					Error::Offline((current.map(|v| v.0), new.map(|v| v.0)))
 				}
 				_ => unreachable!(),
 			},
 			|cmd, e| match cmd {
-				RegisterCommand::CompareExchange { current, new } => {
+				CellCommand::CompareExchange { current, new } => {
 					Error::Encoding((current.map(|v| v.0), new.map(|v| v.0)), e)
 				}
 				_ => unreachable!(),
@@ -239,7 +239,7 @@ impl<T: Value> RegisterWriter<T> {
 		)
 	}
 
-	/// Clear the register, removing the stored value.
+	/// Clear the cell, removing the stored value.
 	///
 	/// After this operation, `read()` will return `None`.
 	///
@@ -249,7 +249,7 @@ impl<T: Value> RegisterWriter<T> {
 	) -> impl Future<Output = Result<Version, Error<()>>> + Send + Sync + 'static
 	{
 		self.execute(
-			RegisterCommand::Clear,
+			CellCommand::Clear,
 			|_| Error::Offline(()),
 			|_, _| unreachable!(),
 		)
@@ -257,46 +257,46 @@ impl<T: Value> RegisterWriter<T> {
 }
 
 // construction
-impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
-	/// Create a new register in reader mode.
+impl<T: Value, const IS_WRITER: bool> Cell<T, IS_WRITER> {
+	/// Create a new cell in reader mode.
 	///
-	/// The returned reader provides read-only access to the register's contents.
+	/// The returned reader provides read-only access to the cell's contents.
 	/// Readers can be used by multiple nodes concurrently, and they will see all
-	/// changes made by any writer. However, readers cannot modify the register,
+	/// changes made by any writer. However, readers cannot modify the cell,
 	/// and they will not be able to make any changes themselves. Readers have
 	/// longer election timeouts to reduce the likelihood of them being elected
 	/// as group leaders, which reduces latency for read operations.
 	///
-	/// This creates a new register with the default sync configuration. If you
+	/// This creates a new cell with the default sync configuration. If you
 	/// want to specify a custom sync configuration, use the
 	/// `reader_with_config` method instead.
 	pub fn reader(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-	) -> RegisterReader<T> {
+	) -> CellReader<T> {
 		Self::reader_with_config(network, store_id, SyncConfig::default())
 	}
 
-	/// Create a new register in reader mode.
+	/// Create a new cell in reader mode.
 	///
-	/// The returned reader provides read-only access to the register's contents.
+	/// The returned reader provides read-only access to the cell's contents.
 	/// Readers can be used by multiple nodes concurrently, and they will see all
-	/// changes made by any writer. However, readers cannot modify the register,
+	/// changes made by any writer. However, readers cannot modify the cell,
 	/// and they will not be able to make any changes themselves. Readers have
 	/// longer election timeouts to reduce the likelihood of them being elected
 	/// as group leaders, which reduces latency for read operations.
 	///
-	/// This creates a new register with the specified sync configuration. If you
+	/// This creates a new cell with the specified sync configuration. If you
 	/// want to use the default sync configuration, use the `reader` method
 	/// instead.
 	///
 	/// Note that different sync configurations will create different group ids
-	/// and the resulting registers will not be able to see each other.
+	/// and the resulting cells will not be able to see each other.
 	pub fn reader_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
 		config: SyncConfig,
-	) -> RegisterReader<T> {
+	) -> CellReader<T> {
 		Self::create::<READER>(network, store_id, config)
 	}
 
@@ -304,9 +304,9 @@ impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
 		network: &Network,
 		store_id: impl Into<StoreId>,
 		config: SyncConfig,
-	) -> Register<T, W> {
+	) -> Cell<T, W> {
 		let store_id = store_id.into();
-		let machine = RegisterStateMachine::new(
+		let machine = CellStateMachine::new(
 			store_id, //
 			W,
 			config,
@@ -321,13 +321,13 @@ impl<T: Value, const IS_WRITER: bool> Register<T, IS_WRITER> {
 			.join();
 		let when = When::new(group.when().clone());
 
-		Register::<T, W> { when, group, data }
+		Cell::<T, W> { when, group, data }
 	}
 }
 
-impl<T: Value, const WRITER: bool> CollectionFromDef for Register<T, WRITER> {
-	type Reader = RegisterReader<T>;
-	type Writer = RegisterWriter<T>;
+impl<T: Value, const WRITER: bool> CollectionFromDef for Cell<T, WRITER> {
+	type Reader = CellReader<T>;
+	type Writer = CellWriter<T>;
 
 	fn reader(network: &Network, store_id: StoreId) -> Self::Reader {
 		Self::Reader::reader(network, store_id)
@@ -339,15 +339,12 @@ impl<T: Value, const WRITER: bool> CollectionFromDef for Register<T, WRITER> {
 }
 
 // internal
-impl<T: Value> RegisterWriter<T> {
+impl<T: Value> CellWriter<T> {
 	fn execute<TErr>(
 		&self,
-		command: RegisterCommand<T>,
-		offline_err: impl FnOnce(RegisterCommand<T>) -> Error<TErr>
-		+ Send
-		+ Sync
-		+ 'static,
-		encoding_err: impl FnOnce(RegisterCommand<T>, EncodeError) -> Error<TErr>
+		command: CellCommand<T>,
+		offline_err: impl FnOnce(CellCommand<T>) -> Error<TErr> + Send + Sync + 'static,
+		encoding_err: impl FnOnce(CellCommand<T>, EncodeError) -> Error<TErr>
 		+ Send
 		+ Sync
 		+ 'static,
@@ -368,7 +365,7 @@ impl<T: Value> RegisterWriter<T> {
 	}
 }
 
-struct RegisterStateMachine<T: Value> {
+struct CellStateMachine<T: Value> {
 	data: Option<T>,
 	latest: watch::Sender<Option<T>>,
 	store_id: StoreId,
@@ -377,7 +374,7 @@ struct RegisterStateMachine<T: Value> {
 	is_writer: bool,
 }
 
-impl<T: Value> RegisterStateMachine<T> {
+impl<T: Value> CellStateMachine<T> {
 	pub fn new(
 		store_id: StoreId,
 		is_writer: bool,
@@ -386,7 +383,7 @@ impl<T: Value> RegisterStateMachine<T> {
 	) -> Self {
 		let data = None;
 		let state_sync = SnapshotSync::new(sync_config, |request| {
-			RegisterCommand::TakeSnapshot(request)
+			CellCommand::TakeSnapshot(request)
 		});
 
 		let latest = watch::Sender::new(data.clone());
@@ -406,8 +403,8 @@ impl<T: Value> RegisterStateMachine<T> {
 	}
 }
 
-impl<T: Value> StateMachine for RegisterStateMachine<T> {
-	type Command = RegisterCommand<T>;
+impl<T: Value> StateMachine for CellStateMachine<T> {
+	type Command = CellCommand<T>;
 	type Query = ();
 	type QueryResult = ();
 	type StateSync = SnapshotSync<Self>;
@@ -426,20 +423,20 @@ impl<T: Value> StateMachine for RegisterStateMachine<T> {
 
 		for command in commands {
 			match command {
-				RegisterCommand::Write { value } => {
+				CellCommand::Write { value } => {
 					self.data = Some(value.0);
 				}
-				RegisterCommand::CompareExchange { current, new } => {
+				CellCommand::CompareExchange { current, new } => {
 					if self.data.as_ref().map(|v| v.encode().ok())
 						== current.map(|v| v.encode().ok())
 					{
 						self.data = new.map(|v| v.0);
 					}
 				}
-				RegisterCommand::Clear => {
+				CellCommand::Clear => {
 					self.data = None;
 				}
-				RegisterCommand::TakeSnapshot(request) => {
+				CellCommand::TakeSnapshot(request) => {
 					if request.requested_by != self.local_id
 						&& !self.state_sync.is_expired(&request)
 					{
@@ -470,11 +467,11 @@ impl<T: Value> StateMachine for RegisterStateMachine<T> {
 		}
 	}
 
-	/// The group-key for a register is derived from the store ID and the type
-	/// of the register's value. This ensures that different registers (with
+	/// The group-key for a cell is derived from the store ID and the type
+	/// of the cell's value. This ensures that different cells (with
 	/// different store IDs or value types) will be in different groups.
 	fn signature(&self) -> crate::UniqueId {
-		UniqueId::from("mosaik_collections_register")
+		UniqueId::from("mosaik_collections_cell")
 			.derive(self.store_id)
 			.derive(type_name::<T>())
 	}
@@ -499,11 +496,11 @@ impl<T: Value> StateMachine for RegisterStateMachine<T> {
 	}
 }
 
-impl<T: Value> SnapshotStateMachine for RegisterStateMachine<T> {
-	type Snapshot = RegisterSnapshot<T>;
+impl<T: Value> SnapshotStateMachine for CellStateMachine<T> {
+	type Snapshot = CellSnapshot<T>;
 
 	fn create_snapshot(&self) -> Self::Snapshot {
-		RegisterSnapshot {
+		CellSnapshot {
 			data: self.data.clone().map(Encoded),
 		}
 	}
@@ -516,7 +513,7 @@ impl<T: Value> SnapshotStateMachine for RegisterStateMachine<T> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound = "T: Value")]
-enum RegisterCommand<T> {
+enum CellCommand<T> {
 	Write {
 		value: Encoded<T>,
 	},
@@ -529,17 +526,17 @@ enum RegisterCommand<T> {
 }
 
 #[derive(Debug, Clone)]
-pub struct RegisterSnapshot<T: Value> {
+pub struct CellSnapshot<T: Value> {
 	data: Option<Encoded<T>>,
 }
 
-impl<T: Value> Default for RegisterSnapshot<T> {
+impl<T: Value> Default for CellSnapshot<T> {
 	fn default() -> Self {
 		Self { data: None }
 	}
 }
 
-impl<T: Value> Snapshot for RegisterSnapshot<T> {
+impl<T: Value> Snapshot for CellSnapshot<T> {
 	type Item = Encoded<T>;
 
 	fn len(&self) -> u64 {
@@ -558,7 +555,7 @@ impl<T: Value> Snapshot for RegisterSnapshot<T> {
 	}
 
 	fn append(&mut self, items: impl IntoIterator<Item = Self::Item>) {
-		// For a register, the last item wins
+		// For a cell, the last item wins
 		for item in items {
 			self.data = Some(item);
 		}

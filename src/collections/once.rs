@@ -37,23 +37,23 @@ use {
 	tokio::sync::watch,
 };
 
-/// Mutable access to a replicated write-once register.
+/// Mutable access to a replicated write-once cell.
 ///
 /// Has higher priority for assuming group leadership.
 pub type OnceWriter<T> = Once<T, WRITER>;
 
-/// Read-only access to a write-once register.
+/// Read-only access to a write-once cell.
 ///
 /// Has lower priority for assuming group leadership.
 pub type OnceReader<T> = Once<T, READER>;
 
-/// Replicated write-once register.
+/// Replicated write-once cell.
 ///
-/// A `Once` holds at most one value. Unlike [`Register`], the value can only
+/// A `Once` holds at most one value. Unlike [`Cell`], the value can only
 /// be set once — subsequent writes are silently ignored by the state machine.
 /// This is the distributed equivalent of a `tokio::sync::OnceCell`.
 ///
-/// [`Register`]: super::Register
+/// [`Cell`]: super::Cell
 pub struct Once<T: Value, const IS_WRITER: bool = WRITER> {
 	when: When,
 	group: Group<OnceStateMachine<T>>,
@@ -80,41 +80,41 @@ impl<T: Value, const IS_WRITER: bool> Once<T, IS_WRITER> {
 		self.read()
 	}
 
-	/// Test whether the register has been set.
+	/// Test whether the cell has been set.
 	///
 	/// Time: O(1)
 	pub fn is_empty(&self) -> bool {
 		self.data.borrow().is_none()
 	}
 
-	/// Test whether the register has been set.
+	/// Test whether the cell has been set.
 	///
 	/// Time: O(1)
 	pub fn is_none(&self) -> bool {
 		self.is_empty()
 	}
 
-	/// Test whether the register has been set.
+	/// Test whether the cell has been set.
 	///
 	/// Time: O(1)
 	pub fn is_some(&self) -> bool {
 		!self.is_empty()
 	}
 
-	/// Returns an observer of the register's state, which can be used to wait
+	/// Returns an observer of the cell's state, which can be used to wait
 	/// for it to reach a certain state version before performing an action or
 	/// knowing when it is online or offline.
 	pub const fn when(&self) -> &When {
 		&self.when
 	}
 
-	/// The current version of the register's state, which is the version of
+	/// The current version of the cell's state, which is the version of
 	/// the latest committed state.
 	pub fn version(&self) -> Version {
 		Version(self.group.committed())
 	}
 
-	/// Waits for the register to be set and returns its value.
+	/// Waits for the cell to be set and returns its value.
 	pub async fn await_value(&self) -> T {
 		self.when().online().await;
 
@@ -130,16 +130,16 @@ impl<T: Value, const IS_WRITER: bool> Once<T, IS_WRITER> {
 
 // Mutable operations, only available to writers
 impl<T: Value> OnceWriter<T> {
-	/// Create a new write-once register in writer mode.
+	/// Create a new write-once cell in writer mode.
 	///
-	/// This creates a new register with default synchronization configuration.
+	/// This creates a new cell with default synchronization configuration.
 	/// If you want to customize the synchronization behavior, use
 	/// `writer_with_config` instead.
 	pub fn writer(network: &Network, store_id: impl Into<StoreId>) -> Self {
 		Self::writer_with_config(network, store_id, SyncConfig::default())
 	}
 
-	/// Create a new write-once register in writer mode with the specified sync
+	/// Create a new write-once cell in writer mode with the specified sync
 	/// configuration.
 	pub fn writer_with_config(
 		network: &Network,
@@ -149,14 +149,14 @@ impl<T: Value> OnceWriter<T> {
 		Self::create::<WRITER>(network, store_id, config)
 	}
 
-	/// Create a new write-once register in writer mode.
+	/// Create a new write-once cell in writer mode.
 	///
 	/// This is an alias for the `writer` method.
 	pub fn new(network: &Network, store_id: impl Into<StoreId>) -> Self {
 		Self::writer(network, store_id)
 	}
 
-	/// Create a new write-once register in writer mode with the specified sync
+	/// Create a new write-once cell in writer mode with the specified sync
 	/// configuration.
 	///
 	/// This is an alias for the `writer_with_config` method.
@@ -168,9 +168,9 @@ impl<T: Value> OnceWriter<T> {
 		Self::writer_with_config(network, store_id, config)
 	}
 
-	/// Set the value of the register.
+	/// Set the value of the cell.
 	///
-	/// The value is only written if the register is currently empty. If a
+	/// The value is only written if the cell is currently empty. If a
 	/// value has already been set, this operation is silently ignored by the
 	/// state machine — the returned `Version` still advances, but the stored
 	/// value does not change.
@@ -195,7 +195,7 @@ impl<T: Value> OnceWriter<T> {
 		)
 	}
 
-	/// Set the value of the register.
+	/// Set the value of the cell.
 	///
 	/// This is an alias for the `write` method.
 	///
@@ -211,9 +211,9 @@ impl<T: Value> OnceWriter<T> {
 
 // construction
 impl<T: Value, const IS_WRITER: bool> Once<T, IS_WRITER> {
-	/// Create a new write-once register in reader mode.
+	/// Create a new write-once cell in reader mode.
 	///
-	/// The returned reader provides read-only access to the register's
+	/// The returned reader provides read-only access to the cell's
 	/// contents. Readers have longer election timeouts to reduce the
 	/// likelihood of them being elected as group leaders.
 	pub fn reader(
@@ -223,7 +223,7 @@ impl<T: Value, const IS_WRITER: bool> Once<T, IS_WRITER> {
 		Self::reader_with_config(network, store_id, SyncConfig::default())
 	}
 
-	/// Create a new write-once register in reader mode with the specified sync
+	/// Create a new write-once cell in reader mode with the specified sync
 	/// configuration.
 	pub fn reader_with_config(
 		network: &Network,
