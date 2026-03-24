@@ -83,6 +83,7 @@ impl syn::parse::Parse for CollectionInput {
 }
 
 impl CollectionInput {
+	#[allow(clippy::too_many_lines)]
 	pub fn expand(self) -> proc_macro2::TokenStream {
 		let Self {
 			krate,
@@ -131,7 +132,41 @@ impl CollectionInput {
 		};
 
 		let reader_impl = if matches!(mode, CollectionMode::WriterOnly) {
-			quote::quote! {}
+			// Writer-only mode: still generate reader access, but as
+			// inherent `pub(crate)` methods so they are only usable
+			// within the defining crate.
+			quote::quote! {
+				impl #impl_generics #name #ty_generics #where_clause {
+					/// Creates a reader for this collection.
+					///
+					/// This is only available within the crate that
+					/// defines this collection.
+					pub(crate) fn reader(
+						network: &#krate::Network,
+					) -> <#collection_type as #krate::collections::CollectionFromDef>::Reader {
+						<#collection_type as #krate::collections::CollectionFromDef>::reader(
+							network,
+							#store_id_expr,
+						)
+					}
+
+					/// Creates a reader and waits for it to come online.
+					///
+					/// This is only available within the crate that
+					/// defines this collection.
+					pub(crate) fn online_reader(
+						network: &#krate::Network,
+					) -> impl Future<
+						Output = <#collection_type as #krate::collections::CollectionFromDef>::Reader,
+					> + Send + Sync + 'static {
+						let reader = Self::reader(network);
+						async move {
+							reader.when().online().await;
+							reader
+						}
+					}
+				}
+			}
 		} else {
 			quote::quote! {
 				const _: () = {
@@ -160,7 +195,41 @@ impl CollectionInput {
 		};
 
 		let writer_impl = if matches!(mode, CollectionMode::ReaderOnly) {
-			quote::quote! {}
+			// Reader-only mode: still generate writer access, but as
+			// inherent `pub(crate)` methods so they are only usable
+			// within the defining crate.
+			quote::quote! {
+				impl #impl_generics #name #ty_generics #where_clause {
+					/// Creates a writer for this collection.
+					///
+					/// This is only available within the crate that
+					/// defines this collection.
+					pub(crate) fn writer(
+						network: &#krate::Network,
+					) -> <#collection_type as #krate::collections::CollectionFromDef>::Writer {
+						<#collection_type as #krate::collections::CollectionFromDef>::writer(
+							network,
+							#store_id_expr,
+						)
+					}
+
+					/// Creates a writer and waits for it to come online.
+					///
+					/// This is only available within the crate that
+					/// defines this collection.
+					pub(crate) fn online_writer(
+						network: &#krate::Network,
+					) -> impl Future<
+						Output = <#collection_type as #krate::collections::CollectionFromDef>::Writer,
+					> + Send + Sync + 'static {
+						let writer = Self::writer(network);
+						async move {
+							writer.when().online().await;
+							writer
+						}
+					}
+				}
+			}
 		} else {
 			quote::quote! {
 				const _: () = {

@@ -102,10 +102,10 @@ pub type WriterOf<C> = <C as CollectionWriter>::Writer;
 /// // Full (reader + writer):
 /// collection!(pub MyCollection = Vec<String>, "my.store.id");
 ///
-/// // Reader only:
+/// // Reader only (writer is pub(crate)):
 /// collection!(pub reader MyCollection = Vec<String>, "my.store.id");
 ///
-/// // Writer only:
+/// // Writer only (reader is pub(crate)):
 /// collection!(pub writer MyCollection = Vec<String>, "my.store.id");
 ///
 /// // With generics:
@@ -117,6 +117,16 @@ pub type WriterOf<C> = <C as CollectionWriter>::Writer;
 ///     pub MyCollection = Map<String, User>, "my.store.id"
 /// );
 /// ```
+///
+/// # Modes
+///
+/// In the default (full) mode, both `CollectionReader` and
+/// `CollectionWriter` traits are implemented publicly.
+///
+/// In `reader` or `writer` mode, only the named trait is implemented
+/// publicly. The other side is still generated as inherent methods
+/// with `pub(crate)` visibility, so the defining crate can still
+/// instantiate both sides internally.
 ///
 /// # Usage
 ///

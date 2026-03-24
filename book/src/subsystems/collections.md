@@ -143,13 +143,18 @@ declare::collection!(pub writer Prices = mosaik::collections::Map<String, f64>, 
 declare::collection!(pub Items<T> = mosaik::collections::Vec<T>, "app.items");
 ```
 
-The three modes control which traits are implemented on the generated struct:
+The three modes control the public API of the generated struct:
 
-| Mode        | Implements                                    |
-| ----------- | --------------------------------------------- |
-| *(default)* | `CollectionReader` **and** `CollectionWriter` |
-| `reader`    | `CollectionReader` only                       |
-| `writer`    | `CollectionWriter` only                       |
+| Mode        | Public                                        | `pub(crate)`                                    |
+| ----------- | --------------------------------------------- | ----------------------------------------------- |
+| *(default)* | `CollectionReader` **and** `CollectionWriter` | —                                               |
+| `reader`    | `CollectionReader`                            | inherent `writer()` / `online_writer()`         |
+| `writer`    | `CollectionWriter`                            | inherent `reader()` / `online_reader()`         |
+
+In `reader` or `writer` mode, the restricted side is still available as
+inherent methods with `pub(crate)` visibility. This means the crate that
+defines the collection can still instantiate both sides internally, while
+downstream consumers only see the publicly exported trait.
 
 ### Usage
 
