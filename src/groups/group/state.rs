@@ -7,13 +7,13 @@ use {
 		groups::{
 			Bonds,
 			CommandError,
-			CommittedQueryResult,
 			Config,
 			Group,
 			GroupId,
 			Groups,
 			IndexRange,
 			QueryError,
+			QueryResultAt,
 			StateMachine,
 			When,
 			bond::{BondEvent, HandshakeStart},
@@ -247,7 +247,7 @@ pub(in crate::groups) enum WorkerRaftCommand<M: StateMachine> {
 	Query(
 		M::Query,
 		Consistency,
-		oneshot::Sender<Result<CommittedQueryResult<M>, QueryError<M>>>,
+		oneshot::Sender<Result<QueryResultAt<M>, QueryError<M>>>,
 	),
 }
 

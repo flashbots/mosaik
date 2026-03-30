@@ -4,9 +4,9 @@ use {
 		PeerId,
 		groups::{
 			CommandError,
-			CommittedQueryResult,
 			IndexRange,
 			QueryError,
+			QueryResultAt,
 			StateMachine,
 			Storage,
 			SyncContext,
@@ -139,13 +139,13 @@ where
 		&mut self,
 		query: M::Query,
 		consistency: Consistency,
-	) -> BoxPinFut<Result<CommittedQueryResult<M>, QueryError<M>>> {
+	) -> BoxPinFut<Result<QueryResultAt<M>, QueryError<M>>> {
 		match &mut self.role {
 			Role::Leader(_) => {
 				// if the local node is the leader, it can process the query directly
 				// against the state machine, which is always up to date with the latest
 				// committed state of the group.
-				ready(Ok(CommittedQueryResult {
+				ready(Ok(QueryResultAt {
 					result: self.shared.state_machine().query(query),
 					at_position: self.shared.committed().index(),
 				}))
@@ -157,7 +157,7 @@ where
 					// with weak consistency, the follower can process the query against
 					// its local state machine up to the last locally known committed
 					// state.
-					ready(Ok(CommittedQueryResult {
+					ready(Ok(QueryResultAt {
 						result: self.shared.state_machine().query(query),
 						at_position: self.shared.committed().index(),
 					}))

@@ -27,6 +27,7 @@
 - [Discovery](./subsystems/discovery.md)
   - [DHT Bootstrap](./subsystems/discovery/dht-bootstrap.md)
   - [Catalog](./subsystems/discovery/catalog.md)
+  - [Auth Tickets](./subsystems/discovery/tickets.md)
   - [Events](./subsystems/discovery/events.md)
 - [Streams](./subsystems/streams.md)
   - [Producers](./subsystems/streams/producers.md)

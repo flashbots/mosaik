@@ -3,6 +3,7 @@ use {
 	crate::{
 		NetworkId,
 		StreamId,
+		Ticket,
 		groups::GroupId,
 		network::PeerId,
 		primitives::*,
@@ -13,7 +14,7 @@ use {
 	iroh::{EndpointAddr, SecretKey, Signature},
 	semver::Version,
 	serde::{Deserialize, Deserializer, Serialize, de},
-	std::collections::BTreeSet,
+	std::collections::{BTreeMap, BTreeSet},
 };
 
 /// Version information for a [`PeerEntry`].
@@ -110,6 +111,7 @@ pub struct PeerEntry {
 	tags: BTreeSet<Tag>,
 	streams: BTreeSet<StreamId>,
 	groups: BTreeSet<GroupId>,
+	tickets: BTreeMap<UniqueId, Ticket>,
 }
 
 /// Public query API for `PeerEntry`.
@@ -153,6 +155,41 @@ impl PeerEntry {
 	/// List of groups this peer is a member of.
 	pub const fn groups(&self) -> &BTreeSet<GroupId> {
 		&self.groups
+	}
+
+	/// List of tickets associated with the peer.
+	pub const fn tickets(&self) -> &BTreeMap<UniqueId, Ticket> {
+		&self.tickets
+	}
+
+	/// Returns an iterator over all tickets of a given class associated with the
+	/// peer.
+	pub fn tickets_of(&self, class: UniqueId) -> impl Iterator<Item = &Ticket> {
+		self
+			.tickets
+			.iter()
+			.filter_map(move |(_, v)| (v.class == class).then_some(v))
+	}
+
+	/// Returns an iterator over all valid tickets of a given class associated
+	/// with the peer, where validity is determined by the provided validator
+	/// function.
+	pub fn valid_tickets(
+		&self,
+		class: UniqueId,
+		validator: impl Fn(&[u8]) -> bool,
+	) -> impl Iterator<Item = &Ticket> {
+		self.tickets_of(class).filter(move |t| validator(&t.data))
+	}
+
+	/// Returns true if the peer has at least one valid ticket of the given class
+	/// that satisfies the provided validator function.
+	pub fn has_valid_ticket(
+		&self,
+		class: UniqueId,
+		validator: impl Fn(&[u8]) -> bool,
+	) -> bool {
+		self.tickets_of(class).any(move |t| validator(&t.data))
 	}
 
 	/// The update version of the peer entry.
@@ -201,6 +238,7 @@ impl PeerEntry {
 			tags: BTreeSet::new(),
 			streams: BTreeSet::new(),
 			groups: BTreeSet::new(),
+			tickets: BTreeMap::new(),
 			version: PeerEntryVersion::default(),
 			protocol: env!("CARGO_PKG_VERSION")
 				.parse()
@@ -318,6 +356,46 @@ impl PeerEntry {
 		self
 	}
 
+	/// Adds a ticket to the list of tickets associated with the peer.
+	#[must_use]
+	pub fn add_ticket(mut self, ticket: Ticket) -> Self {
+		let id = ticket.id();
+		if self.tickets.insert(id, ticket).is_none() {
+			self.version = self.version.increment();
+		}
+		self
+	}
+
+	/// Removes a ticket by its unique identifier from the list of tickets
+	/// associated with the peer.
+	#[must_use]
+	pub fn remove_ticket(mut self, ticket_id: UniqueId) -> Self {
+		if self.tickets.remove(&ticket_id).is_some() {
+			self.version = self.version.increment();
+		}
+		self
+	}
+
+	/// Removes all tickets of a given class from the list of tickets associated
+	/// with the peer.
+	#[must_use]
+	pub fn remove_tickets_of(mut self, class: UniqueId) -> Self {
+		let mut was_present = false;
+		self.tickets.retain(|_, v| {
+			if v.class == class {
+				was_present = true;
+				false
+			} else {
+				true
+			}
+		});
+
+		if was_present {
+			self.version = self.version.increment();
+		}
+		self
+	}
+
 	/// Increments the version of the peer entry without making any other changes.
 	#[must_use]
 	pub(crate) fn increment_version(mut self) -> Self {
@@ -355,11 +433,13 @@ impl fmt::Display for Short<&PeerEntry> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(
 			f,
-			"PeerEntry[#{}]({}, tags: {}, streams: {})",
+			"PeerEntry[#{}]({}, tags: {}, streams: {}, tickets: {}, groups: {})",
 			Short(self.0.update_version()),
 			Short(self.0.id()),
-			FmtIter::<Short<_>, _>::new(&self.0.tags),
-			FmtIter::<Short<_>, _>::new(&self.0.streams),
+			self.0.tags.len(),
+			self.0.streams.len(),
+			self.0.tickets.len(),
+			self.0.groups.len(),
 		)
 	}
 }
@@ -391,6 +471,11 @@ impl fmt::Debug for Pretty<'_, PeerEntry> {
 			f,
 			"  streams: {}",
 			FmtIter::<Short<_>, _>::new(&self.streams)
+		)?;
+		writeln!(
+			f,
+			"  tickets: {}",
+			FmtIter::<Short<_>, _>::new(self.tickets.values().map(|v| v.class))
 		)?;
 
 		writeln!(f, "  update: {}", self.update_version())?;

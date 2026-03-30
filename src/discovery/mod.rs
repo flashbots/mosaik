@@ -3,6 +3,8 @@
 use {
 	crate::{
 		Tag,
+		Ticket,
+		UniqueId,
 		discovery::{
 			announce::Announce,
 			catalog::UpsertResult,
@@ -171,6 +173,21 @@ impl Discovery {
 	pub fn remove_tags<V>(&self, tags: impl IntoIterOrSingle<Tag, V>) {
 		let tags: Vec<_> = tags.iterator().into_iter().collect();
 		self.update_local_entry(|entry| entry.remove_tags(tags));
+	}
+
+	/// Adds the given ticket to the local peer discovery entry.
+	pub fn add_ticket(&self, ticket: Ticket) {
+		self.update_local_entry(|entry| entry.add_ticket(ticket));
+	}
+
+	/// Removes the ticket with the given id from the local peer discovery entry.
+	pub fn remove_ticket(&self, id: UniqueId) {
+		self.update_local_entry(move |entry| entry.remove_ticket(id));
+	}
+
+	/// Removes all tickets of a given class from the local peer discovery entry.
+	pub fn remove_tickets_of(&self, class: UniqueId) {
+		self.update_local_entry(move |entry| entry.remove_tickets_of(class));
 	}
 }
 

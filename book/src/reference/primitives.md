@@ -72,6 +72,35 @@ const MY_ID: UniqueId = unique_id!("a1b2c3d4e5f6...");  // 64-char hex literal
 
 ---
 
+## `Ticket`
+
+An opaque, typed credential that peers attach to their discovery entry for
+authorization purposes.
+
+```rust,ignore
+use mosaik::{Ticket, UniqueId, unique_id, Bytes};
+
+const MY_AUTH: UniqueId = unique_id!("my-app.auth");
+
+let ticket = Ticket::new(MY_AUTH, Bytes::from("credential-data"));
+let id: UniqueId = ticket.id(); // deterministic, derived from class + data
+```
+
+| Field   | Type       | Description                                                |
+| ------- | ---------- | ---------------------------------------------------------- |
+| `class` | `UniqueId` | Identifies the authorization scheme                        |
+| `data`  | `Bytes`    | Opaque payload; format determined by the class             |
+
+Tickets are stored in a peer's `PeerEntry` and propagated via gossip and
+catalog sync. The discovery system never interprets ticket data --
+validation is done in application code (e.g. inside a producer's
+`accept_if` predicate).
+
+See [Discovery > Auth Tickets](../subsystems/discovery/tickets.md) for
+a full walkthrough.
+
+---
+
 ## `PeerId`
 
 ```rust,ignore

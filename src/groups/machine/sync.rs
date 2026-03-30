@@ -259,6 +259,7 @@ pub trait SyncProviderContext<S: StateSync>: SyncContext<S> {
 	fn leader(&self) -> Option<PeerId>;
 
 	/// Returns `true` if the local node is the current leader, `false` otherwise.
+	#[inline]
 	fn is_leader(&self) -> bool {
 		self.leader() == Some(self.local_id())
 	}

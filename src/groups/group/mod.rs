@@ -49,7 +49,7 @@ pub enum Consistency {
 /// along with the position of the state machine at which the query was
 /// executed.
 #[derive(Clone, Deref, Serialize, Deserialize)]
-pub struct CommittedQueryResult<M: StateMachine> {
+pub struct QueryResultAt<M: StateMachine> {
 	/// The result of executing the query against the state machine.
 	#[deref]
 	pub result: M::QueryResult,
@@ -60,9 +60,9 @@ pub struct CommittedQueryResult<M: StateMachine> {
 	pub at_position: Index,
 }
 
-impl<M: StateMachine> Debug for CommittedQueryResult<M> {
+impl<M: StateMachine> Debug for QueryResultAt<M> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		f.debug_struct("CommittedQueryResult")
+		f.debug_struct("QueryResultAt")
 			.field("result", &"<query result>")
 			.field("at_position", &self.at_position)
 			.finish()
@@ -281,7 +281,7 @@ impl<M: StateMachine> Group<M> {
 		&self,
 		query: M::Query,
 		consistency: Consistency,
-	) -> impl Future<Output = Result<CommittedQueryResult<M>, QueryError<M>>>
+	) -> impl Future<Output = Result<QueryResultAt<M>, QueryError<M>>>
 	+ Send
 	+ Sync
 	+ 'static {
@@ -324,7 +324,7 @@ impl<M: StateMachine> Drop for Group<M> {
 	}
 }
 
-impl<M: StateMachine> CommittedQueryResult<M> {
+impl<M: StateMachine> QueryResultAt<M> {
 	/// Consumes the `CommittedQueryResult` and returns the inner query result.
 	pub fn into(self) -> M::QueryResult {
 		self.result
@@ -342,7 +342,7 @@ impl<M: StateMachine> CommittedQueryResult<M> {
 	}
 }
 
-impl<M: StateMachine> PartialEq<M::QueryResult> for CommittedQueryResult<M>
+impl<M: StateMachine> PartialEq<M::QueryResult> for QueryResultAt<M>
 where
 	M::QueryResult: PartialEq,
 {
@@ -351,7 +351,7 @@ where
 	}
 }
 
-impl<M: StateMachine> core::fmt::Display for CommittedQueryResult<M>
+impl<M: StateMachine> core::fmt::Display for QueryResultAt<M>
 where
 	M::QueryResult: core::fmt::Display,
 {

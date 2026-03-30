@@ -2,6 +2,7 @@
 //!
 //! A Rust runtime for building self-organizing, leaderless distributed systems.
 
+pub mod bft;
 pub mod collections;
 pub mod discovery;
 pub mod groups;
@@ -31,7 +32,7 @@ pub use {
 	},
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},
-	primitives::{Datum, Digest, Tag, UniqueId},
+	primitives::{Datum, Digest, Tag, Ticket, UniqueId},
 	streams::{
 		ConsumerOf,
 		Criteria,
