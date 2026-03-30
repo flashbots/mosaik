@@ -63,3 +63,35 @@ cargo run -p orderbook
 ```
 
 The example spins up 5 in-process nodes (3 matchers + 2 traders), submits a handful of orders on the ETH/USDC pair, matches them through the replicated orderbook, and prints the resulting fills and top-of-book state.
+
+---
+
+## Group Chat
+
+**[`group-chat/`](group-chat/)** — a peer-to-peer group chat room using mosaik replicated collections.
+
+The simplest possible networked application: each running instance is one participant. Participants in the same room automatically discover each other — no server, no configuration.
+
+Features demonstrated:
+
+- **Collections** — `Map<String, UserInfo>` for the live participant registry; `Vec<Message>` for the append-only chat log
+- **Intent-addressed stores** — `unique_id!()` derives a stable `StoreId` from a string so every node converges on the same collection without prior coordination
+- **`when().online()`** — waits until the node has joined both collection groups and caught up with existing state before showing history or accepting input
+
+### Running
+
+Start two or more instances in separate terminals:
+
+```bash
+cargo run -p group-chat -- --nickname Alice
+cargo run -p group-chat -- --nickname Bob --color 33
+cargo run -p group-chat -- --nickname Charlie --color 34
+```
+
+Key options:
+
+| Flag               | Description                                                                  |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `--nickname`, `-n` | Your display name (default: `anon`)                                          |
+| `--color`, `-c`    | ANSI color code for your messages (31–36, default: `32` = green)             |
+| `--room`, `-r`     | Room name — anyone with the same name joins the same chat (default: `lobby`) |

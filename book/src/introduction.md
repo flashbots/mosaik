@@ -7,7 +7,7 @@
   <a href="https://github.com/flashbots/mosaik"><img alt="Status" src="https://img.shields.io/badge/status-experimental-orange.svg"></a>
 </p>
 
-**Mosaik** is a Rust runtime for building **self-organizing, leaderless distributed systems**. It is designed for trusted, permissioned networks — environments where all participating nodes are assumed honest, such as L2 blockchain infrastructure operated by a single organization.
+**[Mosaik](https://github.com/flashbots/mosaik)** is a Rust runtime for building **self-organizing, leaderless distributed systems**. It is designed for trusted, permissioned networks — environments where all participating nodes are assumed honest, such as L2 blockchain infrastructure operated by a single organization.
 
 ## What Mosaik Does
 

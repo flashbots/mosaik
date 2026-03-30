@@ -28,7 +28,15 @@ The core claim: when binaries are deployed on arbitrary machines, the network sh
 Mosaik initially targets trusted, permissioned networks such as L2 chains controlled by a single organization. All members are assumed honest; the system is not yet Byzantine fault tolerant.
 
 > [!TIP]
-> To see mosaik in action, browse the integration tests in the [`tests`](tests/) directory.
+> To see mosaik in action, browse the integration tests in the [`tests`](tests/) directory or run one of the [examples](examples/):
+>
+> ```bash
+> # p2p group chat — start several instances to chat
+> cargo run -p group-chat -- --nickname Alice
+>
+> # distributed order-matching engine
+> cargo run -p orderbook
+> ```
 
 # Core Primitives
 

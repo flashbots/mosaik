@@ -43,15 +43,17 @@ Mosaik is a Rust library (`src/lib.rs`) providing a runtime for self-organizing,
 - **`src/discovery/`** — Gossip-based peer discovery and catalog synchronization. Two protocols:
   - `announce.rs` — broadcasts presence/metadata via iroh-gossip with signed entries
   - `sync.rs` / `catalog.rs` — full bidirectional catalog exchange for catch-up
-  - `dht.rs` — automatic DHT bootstrap via pkarr
+  - `dht.rs` — automatic DHT bootstrap via pkarr; uses a chain of 16 deterministic slots (keyed by hashing the `NetworkId`) to reduce contention; switches between an aggressive poll interval (5s) when no peers are known and a relaxed interval (60s) once peers appear
   - `entry.rs` — catalog entry type (PeerId, tags, streams, groups advertised by a peer)
 
 - **`src/streams/`** — Typed async pub/sub channels (implements `futures::Sink` / `futures::Stream`). Key types:
   - `Producer<T>` — publishes data, manages subscriber connections, enforces predicates/limits
   - `Consumer<T>` — subscribes to a remote producer
   - `StreamId` is a `Digest` (blake3 hash), derived by default from the datum type
-  - `StreamDef` — declarative stream descriptor primitive
-  - `status/` — reactive conditions (`when().subscribed().minimum_of(2)`, etc.)
+  - `StreamDef<T>` — runtime stream descriptor (optional custom `StreamId`)
+  - `stream!` macro — compile-time stream declaration; generates a type that implements `StreamProducer` / `StreamConsumer` traits, with `online_when`, `accept_if`, `subscribe_if` baked in
+  - `ProducerOf<S>` / `ConsumerOf<S>` — type aliases for the producer/consumer of a `stream!`-declared type
+  - `status/` — reactive conditions (`when().subscribed().minimum_of(2)`, etc.); conditions are dynamically reevaluated as topology changes
 
 - **`src/groups/`** — Availability groups using a modified Raft consensus:
   - `bond/` — persistent bidirectional authenticated connections between all group member pairs
@@ -62,14 +64,17 @@ Mosaik is a Rust library (`src/lib.rs`) providing a runtime for self-organizing,
   - `storage.rs` — pluggable log storage (built-in: `InMemory`)
 
 - **`src/collections/`** — Replicated data structures layered on Groups:
-  - `Map<K,V>`, `Vec<T>`, `Set<T>`, `Cell<T>`, `PriorityQueue<P,K,V>`
+  - `Map<K,V>`, `Vec<T>`, `Set<T>`, `Cell<T>`, `Once<T>`, `PriorityQueue<P,K,V>` (also `BoundedPriorityQueue` / `UnboundedPriorityQueue` type aliases)
   - Each has a **writer** (mutates via Raft commands) and a **reader** (read-only replica)
   - Mutations return a `Version`; readers support `.when().reaches(ver)` for convergence checks
   - `StoreId` identifies a collection instance on the network
+  - `collection!` macro — compile-time collection declaration; generates a type implementing `CollectionReader` / `CollectionWriter` with a baked-in `StoreId`; supports `reader`/`writer`-only visibility modes
+  - `CollectionDef<C>`, `ReaderDef<C>`, `WriterDef<C>` — const-constructible handles for opening reader/writer instances
+  - `ReaderOf<C>` / `WriterOf<C>` — type aliases for the reader/writer of a `collection!`-declared type
 
 - **`src/primitives/`** — Shared types: `Datum` (any `Serialize + DeserializeOwned + Clone`), `Digest` (blake3 hash used as IDs), `Tag`, `UniqueId`, `AsyncWorkQueue`, serialization helpers (postcard encoding by default)
 
-- **`src/macros/`** — `mosaik-macros` proc-macro crate providing `UniqueId` compile-time derivation
+- **`src/macros/`** — `mosaik-macros` proc-macro crate providing compile-time derivation for `UniqueId`, `stream!`, and `collection!`
 
 ### Key Patterns
 
