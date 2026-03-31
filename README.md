@@ -451,7 +451,6 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 | `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue` |
 | `src/network/`     | Transport layer, connection management, typed links                              |
 | `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues                    |
-| `src/builtin/`     | Built-in implementations (`NoOp` state machine, `InMemory` storage)              |
 | `tests/`           | Integration tests organized by subsystem                                         |
 
 # Getting Started
