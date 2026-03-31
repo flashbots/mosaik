@@ -2,7 +2,6 @@
 //!
 //! A Rust runtime for building self-organizing, leaderless distributed systems.
 
-pub mod bft;
 pub mod collections;
 pub mod discovery;
 pub mod groups;
