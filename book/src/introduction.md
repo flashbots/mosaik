@@ -36,7 +36,7 @@ From these minimal inputs, mosaik handles peer discovery, typed pub/sub data str
 ├──────────┬──────────┬──────────┬────────────────┤
 │ Discovery│ Streams  │  Groups  │  Collections   │
 │  gossip, │  typed   │   Raft   │  Map/Vec/Set/  │
-│  catalog │ pub/sub  │ consensus│  Cell/Once │
+│  catalog │ pub/sub  │ consensus│  Cell/Once     │
 │          │          │  groups  │  PriorityQueue │
 └──────────┴──────────┴──────────┴────────────────┘
 ```

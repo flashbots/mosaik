@@ -3,7 +3,7 @@ use {
 		PeerId,
 		groups::{
 			CommandError,
-			CommittedQueryResult,
+			QueryResultAt,
 			Index,
 			IndexRange,
 			LeadershipPreference,
@@ -83,7 +83,7 @@ pub struct Follower<M: StateMachine> {
 	pending_commands: HashMap<u64, oneshot::Sender<IndexRange>>,
 
 	/// Tracks the pending forwarded queries from this follower to the leader.
-	pending_queries: HashMap<u64, oneshot::Sender<CommittedQueryResult<M>>>,
+	pending_queries: HashMap<u64, oneshot::Sender<QueryResultAt<M>>>,
 
 	/// Channel for tracking forwarded commands that have expired without
 	/// receiving a response from the leader within the forward timeout duration.
@@ -369,7 +369,7 @@ impl<M: StateMachine> Follower<M> {
 		&mut self,
 		query: M::Query,
 		shared: &Shared<S, M>,
-	) -> BoxPinFut<Result<CommittedQueryResult<M>, QueryError<M>>> {
+	) -> BoxPinFut<Result<QueryResultAt<M>, QueryError<M>>> {
 		let Some(leader) = self.leader() else {
 			// if the follower does not know who's the current leader, return an error
 			// with the query.
@@ -523,7 +523,7 @@ impl<M: StateMachine> Follower<M> {
 		at_position: Index,
 	) {
 		if let Some(response) = self.pending_queries.remove(&request_id) {
-			let _ = response.send(CommittedQueryResult {
+			let _ = response.send(QueryResultAt {
 				result,
 				at_position,
 			});

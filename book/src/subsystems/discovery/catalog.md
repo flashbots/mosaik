@@ -55,21 +55,23 @@ pub struct PeerEntry {
     pub tags: BTreeSet<Tag>,
     pub streams: BTreeSet<StreamId>,
     pub groups: BTreeSet<GroupId>,
+    pub tickets: BTreeMap<UniqueId, Ticket>,
     pub version: PeerEntryVersion,
 }
 ```
 
 ### Fields
 
-| Field        | Type                 | Description                                            |
-| ------------ | -------------------- | ------------------------------------------------------ |
-| `network_id` | `NetworkId`          | Which network this peer belongs to                     |
-| `peer_id`    | `PeerId`             | The peer's public key                                  |
-| `addr`       | `EndpointAddr`       | Connection address (public key + relay + direct addrs) |
-| `tags`       | `BTreeSet<Tag>`      | Capability labels (e.g., `"matcher"`, `"validator"`)   |
-| `streams`    | `BTreeSet<StreamId>` | Streams this peer produces                             |
-| `groups`     | `BTreeSet<GroupId>`  | Groups this peer belongs to                            |
-| `version`    | `PeerEntryVersion`   | Two-part version for staleness detection               |
+| Field        | Type                        | Description                                                        |
+| ------------ | --------------------------- | ------------------------------------------------------------------ |
+| `network_id` | `NetworkId`                 | Which network this peer belongs to                                 |
+| `peer_id`    | `PeerId`                    | The peer's public key                                              |
+| `addr`       | `EndpointAddr`              | Connection address (public key + relay + direct addrs)             |
+| `tags`       | `BTreeSet<Tag>`             | Capability labels (e.g., `"matcher"`, `"validator"`)               |
+| `streams`    | `BTreeSet<StreamId>`        | Streams this peer produces                                         |
+| `groups`     | `BTreeSet<GroupId>`         | Groups this peer belongs to                                        |
+| `tickets`    | `BTreeMap<UniqueId,Ticket>` | Auth tickets keyed by ticket id (see [Auth Tickets](./tickets.md)) |
+| `version`    | `PeerEntryVersion`          | Two-part version for staleness detection                           |
 
 ### Signed Entries
 

@@ -52,11 +52,17 @@ let zero = Digest::zero();
 
 ### Compile-time construction
 
-```rust,ignore
-use mosaik::unique_id;
+Two equivalent macros are available — `id!` is the short alias:
 
-const MY_ID: UniqueId = unique_id!("a1b2c3d4e5f6...");  // 64-char hex literal
+```rust,ignore
+use mosaik::{id, unique_id};
+
+const MY_ID: UniqueId = id!("a1b2c3d4e5f6...");         // 64-char hex literal
+const MY_ID: UniqueId = unique_id!("a1b2c3d4e5f6...");  // identical, longer name
 ```
+
+Both accept either a 64-character hex string (decoded directly) or any other
+string (hashed with blake3).
 
 ### Display
 
@@ -69,6 +75,35 @@ const MY_ID: UniqueId = unique_id!("a1b2c3d4e5f6...");  // 64-char hex literal
 
 - **Human-readable** formats (JSON, TOML): hex string
 - **Binary** formats (postcard): raw 32 bytes
+
+---
+
+## `Ticket`
+
+An opaque, typed credential that peers attach to their discovery entry for
+authorization purposes.
+
+```rust,ignore
+use mosaik::{Ticket, UniqueId, id, Bytes};
+
+const MY_AUTH: UniqueId = id!("my-app.auth");
+
+let ticket = Ticket::new(MY_AUTH, Bytes::from("credential-data"));
+let id: UniqueId = ticket.id(); // deterministic, derived from class + data
+```
+
+| Field   | Type       | Description                                                |
+| ------- | ---------- | ---------------------------------------------------------- |
+| `class` | `UniqueId` | Identifies the authorization scheme                        |
+| `data`  | `Bytes`    | Opaque payload; format determined by the class             |
+
+Tickets are stored in a peer's `PeerEntry` and propagated via gossip and
+catalog sync. The discovery system never interprets ticket data --
+validation is done in application code (e.g. inside a producer's
+`accept_if` predicate).
+
+See [Discovery > Auth Tickets](../subsystems/discovery/tickets.md) for
+a full walkthrough.
 
 ---
 

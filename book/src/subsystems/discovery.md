@@ -114,6 +114,28 @@ discovery.remove_tags("old-role");
 
 Changing tags triggers an immediate re-announcement to the network.
 
+### Managing Tickets
+
+Tickets are opaque, typed credentials attached to a peer's discovery entry. They are commonly used to authenticate consumers in stream subscriptions.
+
+```rust,ignore
+use mosaik::{Ticket, UniqueId, unique_id, Bytes};
+
+const MY_AUTH: UniqueId = unique_id!("my-app.auth");
+
+// Add a ticket
+let ticket = Ticket::new(MY_AUTH, Bytes::from("credential-data"));
+discovery.add_ticket(ticket.clone());
+
+// Remove a specific ticket
+discovery.remove_ticket(ticket.id());
+
+// Remove all tickets of a given class
+discovery.remove_tickets_of(MY_AUTH);
+```
+
+Tickets propagate through gossip and catalog sync like tags and streams. See the [Auth Tickets](./discovery/tickets.md) sub-chapter for a full walkthrough including JWT-based authentication.
+
 ### Local Entry
 
 ```rust,ignore
@@ -178,6 +200,7 @@ Every node periodically broadcasts its `SignedPeerEntry` via iroh-gossip. The an
 - Network ID
 - Tags
 - Available streams and groups
+- Auth tickets
 - Version (start + update timestamps)
 
 The jitter on the announce interval prevents all nodes from announcing simultaneously. When a node changes its metadata (adds a tag, creates a stream, joins a group), it re-announces immediately.

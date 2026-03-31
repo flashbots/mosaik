@@ -68,6 +68,32 @@ match producer.try_send(datum) {
 
 All error variants return the unsent datum so you can retry or inspect it.
 
+## Ticket-Based Authentication
+
+Instead of (or in addition to) filtering by tags, you can require
+consumers to carry a valid auth ticket. Tickets are opaque credentials
+that consumers attach to their discovery entry and producers validate
+inside `accept_if`:
+
+```rust,ignore
+use mosaik::{UniqueId, unique_id};
+
+const JWT_TICKET: UniqueId = unique_id!("my-app.jwt");
+
+let producer = network.streams()
+    .producer::<MyDatum>()
+    .accept_if(move |peer| {
+        peer.has_valid_ticket(JWT_TICKET, |jwt_bytes| {
+            // Validate the JWT signature, expiration, subject, etc.
+            validate_jwt(jwt_bytes, peer.id())
+        })
+    })
+    .build()?;
+```
+
+See [Discovery > Auth Tickets](../discovery/tickets.md) for the full
+pattern, including how consumers create and attach tickets.
+
 ## Online Conditions
 
 By default, a producer is online when it has at least one connected consumer. Customize this:

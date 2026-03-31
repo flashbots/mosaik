@@ -100,6 +100,7 @@ Producers and consumers can be further configured:
 ```rust
 let producer = network.streams()
   .producer::<Data1>()
+  .with_stream_id("custom.stream.id")
   .accept_if(|peer| peer.tags().contains("tag1"))
   .online_when(|c| c.minimum_of(2))
   .with_max_consumers(4)
@@ -107,9 +108,37 @@ let producer = network.streams()
 
 let consumer = network.streams()
   .consumer::<Data1>()
+  .with_stream_id("custom.stream.id")
   .subscribe_if(|peer| peer.tags().contains("tag2"))
   .build();
 ```
+
+Tickets let producers authenticate consumers (or vice versa) without out-of-band coordination. Each node attaches a signed credential to its discovery entry; the other side validates it in a predicate:
+
+```rust
+use mosaik::*;
+
+// Both sides agree on a ticket class identifier
+const JWT_TICKET: UniqueId = id!("my-app.jwt");
+
+// Consumer: attach a JWT to its discovery entry
+let jwt: String = sign_jwt_for(network.local().id());
+network.discovery().add_ticket(Ticket::new(JWT_TICKET, Bytes::from(jwt)));
+
+// Producer: validate the ticket before accepting a subscription
+let jwt_key = /* shared verification key */;
+let producer = network.streams()
+    .producer::<MyDatum>()
+    .accept_if(move |peer| {
+        peer.has_valid_ticket(JWT_TICKET, |jwt_bytes| {
+            let jwt_str = std::str::from_utf8(jwt_bytes).unwrap_or("");
+            validate_jwt(jwt_str, peer.id(), &jwt_key)
+        })
+    })
+    .build()?;
+```
+
+Tickets are propagated through gossip alongside the rest of the peer entry — no separate auth round-trip is needed.
 
 Key features:
 
