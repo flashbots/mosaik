@@ -177,7 +177,7 @@ impl<D: Datum> ConsumerWorker<D> {
 						stream_id = %Short(self.config.stream_id),
 						producer_id = %Short(producer),
 						network = %producer.network_id(),
-						"skipping producer that does not satisfy eligibility criteria"
+						"skipping ineligible producer"
 					);
 					continue;
 				}

@@ -4,64 +4,53 @@ Mosaik includes an automatic peer discovery mechanism based on the [Mainline DHT
 
 ## How It Works
 
-Each node derives a DHT key from its `NetworkId` and uses it to both **publish** its own address and **poll** for other nodes' addresses. The general flow is:
+Rather than storing all peers in a single shared record, Mosaik uses a **chain of 16 DHT slots**. Each slot holds the address of exactly one peer and is identified by a deterministic key derived from the `NetworkId`. Slot 0 is keyed directly from the network ID, and each subsequent slot is keyed by hashing the previous slot's key with blake3, forming a linked list any node can independently compute.
 
-1. **Publish** — The node resolves the current DHT record for the network key, appends its own address, and publishes the updated record back to the DHT.
-2. **Poll** — The node periodically reads the DHT record and dials any peers it finds.
+On each poll cycle, all 16 slots are resolved in parallel. For every slot:
 
-Because both publish and poll use the same deterministic key derived from the `NetworkId`, all nodes in the same network naturally converge on the same record.
+- If it contains a **healthy peer**, that peer's address is fed into the discovery system.
+- If it contains an **unhealthy peer** (ping timeout), the slot becomes a candidate for replacement.
+- If it is **empty**, it is also a candidate for claiming.
 
-### Record Structure
+If the local node is not already present in any slot, it picks a random candidate and publishes its own address there. Randomizing the slot selection spreads concurrent publishers across different DHT keys, reducing write contention when many nodes start simultaneously.
 
-Each DHT record is a [pkarr](https://pkarr.org) signed packet containing DNS resource records. Every peer in the record has:
+### Record Format
 
-- An **A record** with a unique subdomain to identify the peer
-- A **TXT record** with a `peers=N` field indicating how many peers that node currently knows about
+Each DHT slot is a [pkarr](https://pkarr.org) signed packet containing:
 
-### Capacity Management
+- A `_id` TXT record — the peer's ID, base58-encoded
+- One or more `_ip` TXT records — the peer's direct socket addresses (`IP:port`)
+- One or more `_r` TXT records — the peer's relay URLs
 
-Mainline DHT records are limited to 1000 bytes. To stay within this limit, a maximum of **12 peers** are stored per record. When the record is full and a new node needs to publish, the **least-connected peer** (the one with the lowest `peers=N` count) is evicted. Ties are broken randomly to avoid deterministic starvation.
+Records have a TTL of **10 minutes**. After publishing, the node will not attempt to republish until the TTL has elapsed, preventing it from claiming additional slots if its own entry isn't yet visible due to DHT propagation latency.
 
-Evicted peers are not forgotten — they are dialed directly so they can still join the network through normal gossip-based discovery.
+### Stale Address Refresh
+
+If the local node's own slot is found but contains outdated addresses (e.g., after a network change), the node targets that exact slot for an immediate republish rather than claiming a new one.
 
 ### Adaptive Polling
 
 Polling uses an adaptive interval:
 
 - **Aggressive polling (5 seconds)** — when the node has no known peers yet, it polls frequently to bootstrap quickly.
-- **Relaxed polling (configurable, default 60 seconds)** — once the node has discovered at least one peer, polling slows down to reduce DHT load.
+- **Relaxed polling (60 seconds)** — once the node has discovered at least one peer, polling slows down to reduce DHT load. Automatically switches back to aggressive if all peers disconnect.
 
-### Publish Cycle
+Both intervals include random jitter (up to 1/3 of the base duration) to desynchronize concurrent pollers.
 
-Publishing runs on a slower interval (default **5 minutes**) and uses **compare-and-swap (CAS)** to safely update the shared record without overwriting concurrent changes from other nodes. A random startup jitter prevents all nodes from publishing simultaneously.
+### Compare-and-Swap
+
+Publishes use **compare-and-swap (CAS)** to safely update a slot without overwriting a concurrent change. On a CAS conflict, the node retries immediately against the new state of the chain.
 
 ## Configuration
 
-DHT bootstrap is **enabled by default**. You can tune the intervals or disable it entirely:
-
-```rust,ignore
-use mosaik::{Network, discovery};
-use std::time::Duration;
-
-let network = Network::builder(network_id)
-    .with_discovery(
-        discovery::Config::builder()
-            // Customize DHT intervals
-            .with_dht_publish_interval(Some(Duration::from_secs(300)))
-            .with_dht_poll_interval(Some(Duration::from_secs(60)))
-    )
-    .build()
-    .await?;
-```
-
-To disable automatic bootstrap (e.g., when using only explicit bootstrap peers):
+DHT bootstrap is **enabled by default**. To disable it (e.g., when using only explicit bootstrap peers):
 
 ```rust,ignore
 let network = Network::builder(network_id)
     .with_discovery(
         discovery::Config::builder()
             .no_auto_bootstrap()
-            .with_bootstrap(bootstrap_addr)  // use explicit peers instead
+            .with_bootstrap(bootstrap_addr)
     )
     .build()
     .await?;
@@ -69,10 +58,12 @@ let network = Network::builder(network_id)
 
 ### Configuration Options
 
-| Field                  | Default | Description                                                                                                                 |
-| ---------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `dht_publish_interval` | 300s    | How often to publish this node's address to the DHT. `None` disables publishing.                                            |
-| `dht_poll_interval`    | 60s     | How often to poll the DHT for new peers. `None` disables polling. Actual interval is adaptive (5s when no peers are known). |
+| Option              | Default | Description                                                     |
+| ------------------- | ------- | --------------------------------------------------------------- |
+| `no_auto_bootstrap` | `false` | Disables the DHT bootstrap mechanism entirely.                  |
+| `bootstrap_peers`   | `[]`    | Explicit peers to connect to on startup (via `with_bootstrap`). |
+
+Poll and publish intervals are not currently configurable and use the hardcoded values above.
 
 ## When to Use
 
