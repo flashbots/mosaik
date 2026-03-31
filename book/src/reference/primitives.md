@@ -52,11 +52,17 @@ let zero = Digest::zero();
 
 ### Compile-time construction
 
-```rust,ignore
-use mosaik::unique_id;
+Two equivalent macros are available — `id!` is the short alias:
 
-const MY_ID: UniqueId = unique_id!("a1b2c3d4e5f6...");  // 64-char hex literal
+```rust,ignore
+use mosaik::{id, unique_id};
+
+const MY_ID: UniqueId = id!("a1b2c3d4e5f6...");         // 64-char hex literal
+const MY_ID: UniqueId = unique_id!("a1b2c3d4e5f6...");  // identical, longer name
 ```
+
+Both accept either a 64-character hex string (decoded directly) or any other
+string (hashed with blake3).
 
 ### Display
 
@@ -78,9 +84,9 @@ An opaque, typed credential that peers attach to their discovery entry for
 authorization purposes.
 
 ```rust,ignore
-use mosaik::{Ticket, UniqueId, unique_id, Bytes};
+use mosaik::{Ticket, UniqueId, id, Bytes};
 
-const MY_AUTH: UniqueId = unique_id!("my-app.auth");
+const MY_AUTH: UniqueId = id!("my-app.auth");
 
 let ticket = Ticket::new(MY_AUTH, Bytes::from("credential-data"));
 let id: UniqueId = ticket.id(); // deterministic, derived from class + data

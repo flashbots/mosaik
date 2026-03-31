@@ -30,9 +30,9 @@ adding the same ticket twice is idempotent.
 Construct a `Ticket` and add it through the `Discovery` handle:
 
 ```rust,ignore
-use mosaik::{Ticket, UniqueId, unique_id, Bytes};
+use mosaik::{Ticket, UniqueId, id, Bytes};
 
-const MY_TICKET_CLASS: UniqueId = unique_id!("my-app.auth");
+const MY_TICKET_CLASS: UniqueId = id!("my-app.auth");
 
 let ticket = Ticket::new(
     MY_TICKET_CLASS,
@@ -82,9 +82,9 @@ then validates those JWTs inside its `accept_if` predicate.
 Both producer and consumer agree on a `UniqueId` for the ticket class:
 
 ```rust,ignore
-use mosaik::{UniqueId, unique_id};
+use mosaik::{UniqueId, id};
 
-const JWT_TICKET: UniqueId = unique_id!("my-app.jwt");
+const JWT_TICKET: UniqueId = id!("my-app.jwt");
 ```
 
 ### 2. Consumer: attach a JWT ticket
@@ -150,6 +150,12 @@ add_ticket(jwt)  ──────────►  PeerEntry { tickets: [jwt] }
 Consumers that lack a valid ticket are never connected. Consumers whose
 tickets expire can be rejected on subsequent reconnection attempts (the
 predicate is re-evaluated each time).
+
+## `id!` vs `unique_id!`
+
+The `id!` macro is a short alias for `unique_id!` — both produce a compile-time
+`UniqueId` from a string literal. Use whichever reads more naturally; `id!` is
+preferred in the examples throughout this chapter.
 
 ## Design notes
 

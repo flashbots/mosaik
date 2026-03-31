@@ -324,3 +324,30 @@ macro_rules! unique_id {
 		$crate::primitives::UniqueId::from_bytes($crate::__unique_id_impl!($s))
 	};
 }
+
+/// Converts a string literal into a `UniqueId` at compile time.
+///
+/// This macro accepts either:
+/// - A 64-character hex string (representing 32 bytes), which is decoded
+///   directly.
+/// - Any other string, which is hashed using blake3 to produce the id (same
+///   behavior as `UniqueId::from`).
+///
+/// # Examples
+///
+/// ```
+/// use mosaik::id;
+///
+/// // From a hex string:
+/// const HEX_ID: mosaik::UniqueId =
+/// 	id!("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+///
+/// // From an arbitrary string (hashed with blake3):
+/// const NAMED_ID: mosaik::UniqueId = id!("my-stream-name");
+/// ```
+#[macro_export]
+macro_rules! id {
+	($s:expr) => {
+		$crate::primitives::UniqueId::from_bytes($crate::__unique_id_impl!($s))
+	};
+}

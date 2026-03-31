@@ -1,6 +1,9 @@
 use {
 	super::*,
-	crate::utils::{discover_all, timeout_s},
+	crate::utils::{discover_all, sleep_s, timeout_s},
+	futures::{SinkExt, StreamExt},
+	hmac::{Hmac, digest::KeyInit},
+	jwt::{RegisteredClaims, SignWithKey, VerifyWithKey},
 	mosaik::{primitives::Short, *},
 };
 
@@ -83,6 +86,102 @@ async fn by_tag() -> anyhow::Result<()> {
 			producer.stats()
 		);
 	}
+
+	Ok(())
+}
+
+/// This test verifies that consumers can authenticate producers based on
+/// tickets and refuse to subscribe to producers that do not present a valid
+/// ticket.
+#[tokio::test]
+async fn by_ticket() -> anyhow::Result<()> {
+	const TICKET_CLASS: UniqueId = id!("mosaik.test.jwt");
+	const JWT_SECRET: &[u8] = b"some-test-secret";
+	const JWT_ISSUER: &str = "mosaik.test.jwt.issuer";
+
+	let network_id = NetworkId::random();
+
+	let (n0, n1, n2, n3) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id)
+	)?;
+
+	let jwt_key: Hmac<sha2::Sha256> = Hmac::new_from_slice(JWT_SECRET).unwrap();
+
+	// unexpired ticket
+	let n1_ticket = Ticket::new(
+		TICKET_CLASS,
+		jwt::Claims::new(RegisteredClaims {
+			issuer: Some(JWT_ISSUER.into()),
+			subject: Some(n1.local().id().to_string()),
+			expiration: Some(
+				(chrono::Utc::now() + chrono::Duration::hours(1))
+					.timestamp()
+					.cast_unsigned(),
+			),
+			..Default::default()
+		})
+		.sign_with_key(&jwt_key)
+		.unwrap()
+		.into(),
+	);
+
+	// expired ticket
+	let n2_ticket = Ticket::new(
+		TICKET_CLASS,
+		jwt::Claims::new(RegisteredClaims {
+			issuer: Some(JWT_ISSUER.into()),
+			subject: Some(n2.local().id().to_string()),
+			expiration: Some(
+				(chrono::Utc::now() - chrono::Duration::hours(1))
+					.timestamp()
+					.cast_unsigned(),
+			),
+			..Default::default()
+		})
+		.sign_with_key(&jwt_key)
+		.unwrap()
+		.into(),
+	);
+
+	n1.discovery().add_ticket(n1_ticket);
+	n2.discovery().add_ticket(n2_ticket);
+
+	// p1 has a valid ticket, p2 has an expired ticket, p3 has no ticket
+	let mut p1 = n1.streams().produce::<Data1>();
+	let _p2 = n2.streams().produce::<Data1>();
+	let _p3 = n3.streams().produce::<Data1>();
+
+	// This consumer only subscribes to producers that present a valid ticket.
+	let mut c0 = n0
+		.streams()
+		.consumer::<Data1>()
+		.subscribe_if(move |peer| {
+			peer.has_valid_ticket(TICKET_CLASS, |jwt_bytes| {
+				let jwt_str = str::from_utf8(jwt_bytes).unwrap();
+				let claims: jwt::Claims = jwt_str.verify_with_key(&jwt_key).unwrap();
+				claims.registered.issuer.as_deref() == Some(JWT_ISSUER)
+					&& claims.registered.subject == Some(peer.id().to_string())
+					&& claims.registered.expiration
+						> Some(chrono::Utc::now().timestamp().cast_unsigned())
+			})
+		})
+		.build();
+
+	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
+
+	// c0 should only subscribe to p1 because it's the only producer with a
+	// valid ticket. p2's ticket is expired and p3 has no ticket.
+	sleep_s(5).await; // wait for subscriptions to propagate
+
+	let producers = c0.producers().map(|p| *p.peer().id()).collect::<Vec<_>>();
+	assert_eq!(producers.len(), 1);
+	assert!(producers.contains(&n1.local().id()));
+
+	p1.send(Data1("hello".into())).await?;
+	assert_eq!(timeout_s(2, c0.next()).await?, Some(Data1("hello".into())));
 
 	Ok(())
 }
