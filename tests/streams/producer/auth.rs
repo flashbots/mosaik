@@ -7,6 +7,65 @@ use {
 	mosaik::*,
 };
 
+/// Verifies that calling `require` multiple times composes predicates with
+/// AND semantics — a consumer must satisfy all predicates to be accepted.
+#[tokio::test]
+async fn require_chaining() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	// Producer node
+	let n0 = Network::new(network_id).await?;
+
+	// Consumer with both required tags
+	let n_both = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder().with_tags(["tag1", "tag2"]),
+		)
+		.build()
+		.await?;
+
+	// Consumer with only the first required tag
+	let n_one = Network::builder(network_id)
+		.with_discovery(discovery::Config::builder().with_tags(["tag1"]))
+		.build()
+		.await?;
+
+	// Consumer with neither tag
+	let n_none = Network::builder(network_id)
+		.with_discovery(discovery::Config::builder().with_tags(["tag3"]))
+		.build()
+		.await?;
+
+	// Two chained require calls — consumer must have BOTH tag1 AND tag2.
+	let p0 = n0
+		.streams()
+		.producer::<Data1>()
+		.require(|peer| peer.tags().contains(&"tag1".into()))
+		.require(|peer| peer.tags().contains(&"tag2".into()))
+		.build()?;
+
+	let c_both = n_both.streams().consume::<Data1>();
+	let c_one = n_one.streams().consume::<Data1>();
+	let c_none = n_none.streams().consume::<Data1>();
+
+	discover_all([&n0, &n_both, &n_one, &n_none]).await?;
+
+	// Only c_both should be subscribed to p0; the others fail at least one predicate.
+	timeout_s(2, c_both.when().subscribed()).await?;
+	timeout_s(2, p0.when().subscribed().minimum_of(1)).await?;
+
+	// Allow a moment for c_one and c_none to attempt (and fail) subscription.
+	sleep_s(2).await;
+
+	let subscribers = p0.consumers().map(|s| *s.peer().id()).collect::<Vec<_>>();
+	assert_eq!(subscribers.len(), 1);
+	assert!(subscribers.contains(&n_both.local().id()));
+	assert_eq!(c_one.producers().count(), 0);
+	assert_eq!(c_none.producers().count(), 0);
+
+	Ok(())
+}
+
 /// This test verifies that producers can authenticate consumers based on tags
 /// and refuse subscriptions from consumers that do not meet the criteria.
 #[tokio::test]
@@ -21,7 +80,7 @@ async fn by_tag() -> anyhow::Result<()> {
 	let p0 = n0
 		.streams()
 		.producer::<Data1>()
-		.accept_if(|peer| peer.tags().contains(&"tag2".into()))
+		.require(|peer| peer.tags().contains(&"tag2".into()))
 		.build()?;
 
 	// unrestricted producer, accepts all consumers
@@ -88,7 +147,7 @@ async fn by_ticket() -> anyhow::Result<()> {
 		Network::new(network_id)
 	)?;
 
-	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
+	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
 
 	let jwt_key: Hmac<sha2::Sha256> = Hmac::new_from_slice(JWT_SECRET).unwrap();
 
@@ -134,7 +193,7 @@ async fn by_ticket() -> anyhow::Result<()> {
 	let mut p0 = n0
 		.streams()
 		.producer::<Data1>()
-		.accept_if(move |peer| {
+		.require(move |peer| {
 			peer.has_valid_ticket(TICKET_CLASS, |jwt_bytes| {
 				let jwt_str = str::from_utf8(jwt_bytes).unwrap();
 				let claims: jwt::Claims = jwt_str.verify_with_key(&jwt_key).unwrap();

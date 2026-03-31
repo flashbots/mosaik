@@ -46,7 +46,7 @@ pub struct ProducerConfig {
 
 	/// Sets a predicate function that is used to determine whether to
 	/// accept or reject incoming consumer connections.
-	pub accept_if: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
+	pub require: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
 
 	/// A function that specifies conditions under which a channel is
 	/// considered online and can publish data to consumers. Here you can
@@ -88,14 +88,21 @@ pub struct Builder<'s, D: Datum> {
 
 /// Public API
 impl<D: Datum> Builder<'_, D> {
-	/// Sets a predicate function that is used to determine whether to
-	/// accept or reject incoming consumer connections.
+	/// Adds a peer eligibility requirement for incoming consumer connections.
+	///
+	/// The predicate receives the [`PeerEntry`] of each consumer attempting to
+	/// subscribe and must return `true` for the connection to be accepted. When
+	/// called multiple times, all predicates must pass — AND composition — so a
+	/// consumer is accepted only if every requirement is satisfied.
+	///
+	/// The default requirement accepts all consumers.
 	#[must_use]
-	pub fn accept_if<F>(mut self, pred: F) -> Self
+	pub fn require<F>(mut self, pred: F) -> Self
 	where
 		F: Fn(&PeerEntry) -> bool + Send + Sync + 'static,
 	{
-		self.config.accept_if = Box::new(pred);
+		let prev = self.config.require;
+		self.config.require = Box::new(move |peer| prev(peer) && pred(peer));
 		self
 	}
 
@@ -195,7 +202,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 				buffer_size: 1024,
 				disconnect_lagging: true,
 				stream_id: D::derived_stream_id(),
-				accept_if: Box::new(|_| true),
+				require: Box::new(|_| true),
 				online_when: Box::new(|c| c.minimum_of(1)),
 				max_consumers: usize::MAX,
 				network_id: *streams.local.network_id(),

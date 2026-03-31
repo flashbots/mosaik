@@ -368,7 +368,7 @@ impl<D: Datum> Receiver<D> {
 			(_, Some(reason)) if reason == NotAllowed => {
 				// The producer has refused the subscription request due to
 				// not meeting its subscription criteria.
-				unrecoverable!("authentication failed", reason);
+				unrecoverable!("not allowed", reason);
 			}
 
 			// the connection was closed gracefully by the producer because it is

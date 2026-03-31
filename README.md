@@ -101,7 +101,7 @@ Producers and consumers can be further configured:
 let producer = network.streams()
   .producer::<Data1>()
   .with_stream_id("custom.stream.id")
-  .accept_if(|peer| peer.tags().contains("tag1"))
+  .require(|peer| peer.tags().contains("tag1"))
   .online_when(|c| c.minimum_of(2))
   .with_max_consumers(4)
   .build()
@@ -109,7 +109,7 @@ let producer = network.streams()
 let consumer = network.streams()
   .consumer::<Data1>()
   .with_stream_id("custom.stream.id")
-  .subscribe_if(|peer| peer.tags().contains("tag2"))
+  .require(|peer| peer.tags().contains("tag2"))
   .build();
 ```
 
@@ -129,7 +129,7 @@ network.discovery().add_ticket(Ticket::new(JWT_TICKET, Bytes::from(jwt)));
 let jwt_key = /* shared verification key */;
 let producer = network.streams()
     .producer::<MyDatum>()
-    .accept_if(move |peer| {
+    .require(move |peer| {
         peer.has_valid_ticket(JWT_TICKET, |jwt_bytes| {
             let jwt_str = std::str::from_utf8(jwt_bytes).unwrap_or("");
             validate_jwt(jwt_str, peer.id(), &jwt_key)
@@ -450,7 +450,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 | `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines            |
 | `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue` |
 | `src/network/`     | Transport layer, connection management, typed links                              |
-| `src/primitives/`  | Identifiers (`Digest`), formatting helpers, async work queues                    |
+| `src/primitives/`  | Identifiers, formatting helpers, async work queues, etc.                         |
 | `tests/`           | Integration tests organized by subsystem                                         |
 
 # Getting Started

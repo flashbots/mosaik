@@ -13,14 +13,14 @@ async fn multiple_producers_one_stream() -> anyhow::Result<()> {
 	let p0 = n0
 		.streams()
 		.producer::<Data1>()
-		.accept_if(|peer| peer.tags().contains(&"tag1".into()))
+		.require(|peer| peer.tags().contains(&"tag1".into()))
 		.build()
 		.unwrap();
 
 	let p0_dup = n0
 		.streams()
 		.producer::<Data1>()
-		.accept_if(|_| false)
+		.require(|_| false)
 		.build();
 
 	// should error because a producer for Data1 already exists

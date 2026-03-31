@@ -103,7 +103,7 @@ Tags are advertised through the discovery system and can be used to filter which
 ```rust,ignore
 // Only accept consumers that have the "authorized" tag
 let producer = network.streams().producer::<Order>()
-    .accept_if(|peer| peer.tags.contains(&"authorized".into()))
+    .require(|peer| peer.tags.contains(&"authorized".into()))
     .build()?;
 ```
 

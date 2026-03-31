@@ -213,7 +213,7 @@ async fn online_when_catalog_removal() -> anyhow::Result<()> {
 	let c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.subscribe_if(|peer| peer.tags().contains(&"trusted".into()))
+		.require(|peer| peer.tags().contains(&"trusted".into()))
 		.online_when(|c| c.minimum_of(2))
 		.build();
 

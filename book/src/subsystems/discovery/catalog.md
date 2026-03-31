@@ -106,12 +106,12 @@ The catalog is commonly used to filter peers in Streams:
 ```rust,ignore
 // Producer: only accept consumers with specific tags
 let producer = network.streams().producer::<Order>()
-    .accept_if(|peer| peer.tags.contains(&"authorized".into()))
+    .require(|peer| peer.tags.contains(&"authorized".into()))
     .build()?;
 
 // Consumer: only subscribe to specific producers
 let consumer = network.streams().consumer::<Order>()
-    .subscribe_if(|peer| peer.tags.contains(&"primary".into()))
+    .require(|peer| peer.tags.contains(&"primary".into()))
     .build();
 ```
 

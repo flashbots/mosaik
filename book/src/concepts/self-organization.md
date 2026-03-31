@@ -106,12 +106,12 @@ Filtering can restrict which connections form:
 ```rust,ignore
 // Producer only accepts nodes tagged "authorized"
 let producer = network.streams().producer::<Order>()
-    .accept_if(|peer| peer.tags.contains(&"authorized".into()))
+    .require(|peer| peer.tags.contains(&"authorized".into()))
     .build()?;
 
 // Consumer only subscribes to nodes tagged "primary"
 let consumer = network.streams().consumer::<Order>()
-    .subscribe_if(|peer| peer.tags.contains(&"primary".into()))
+    .require(|peer| peer.tags.contains(&"primary".into()))
     .build();
 ```
 

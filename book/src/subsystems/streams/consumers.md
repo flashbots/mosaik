@@ -15,7 +15,7 @@ let mut consumer = network.streams().consume::<MyDatum>();
 ```rust,ignore
 let mut consumer = network.streams()
     .consumer::<MyDatum>()
-    .subscribe_if(|peer| peer.tags().contains(&"primary".into()))
+    .require(|peer| peer.tags().contains(&"primary".into()))
     .with_criteria(Criteria::default())
     .with_stream_id("custom-id")
     .with_backoff(ExponentialBackoffBuilder::default()
@@ -28,7 +28,7 @@ let mut consumer = network.streams()
 
 | Method                    | Default                  | Description                               |
 | ------------------------- | ------------------------ | ----------------------------------------- |
-| `subscribe_if(predicate)` | Accept all               | Filter which producers to subscribe to    |
+| `require(predicate)`      | Accept all               | Peer eligibility predicate (AND-composed) |
 | `with_criteria(criteria)` | `Criteria::default()`    | Data selection criteria sent to producers |
 | `with_stream_id(id)`      | `D::derived_stream_id()` | Custom stream identity                    |
 | `with_backoff(policy)`    | From `Streams` config    | Backoff policy for reconnection retries   |
@@ -79,13 +79,13 @@ let filtered = consumer
 
 ## Producer Selection
 
-By default, a consumer subscribes to **every** discovered producer of the same stream ID. Use `subscribe_if` to be selective:
+By default, a consumer subscribes to **every** discovered producer of the same stream ID. Use `require` to be selective:
 
 ```rust,ignore
 // Only subscribe to producers tagged as "primary"
 let consumer = network.streams()
     .consumer::<PriceUpdate>()
-    .subscribe_if(|peer| peer.tags().contains(&"primary".into()))
+    .require(|peer| peer.tags().contains(&"primary".into()))
     .build();
 ```
 

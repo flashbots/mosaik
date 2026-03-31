@@ -9,15 +9,15 @@ carry a valid JWT.
 
 A `Ticket` has two fields:
 
-| Field   | Type       | Description                                                        |
-| ------- | ---------- | ------------------------------------------------------------------ |
-| `class` | `UniqueId` | Identifies the authorization scheme (e.g. `"my-app.jwt"`)         |
-| `data`  | `Bytes`    | Opaque payload whose format is determined by the `class`           |
+| Field   | Type       | Description                                               |
+| ------- | ---------- | --------------------------------------------------------- |
+| `class` | `UniqueId` | Identifies the authorization scheme (e.g. `"my-app.jwt"`) |
+| `data`  | `Bytes`    | Opaque payload whose format is determined by the `class`  |
 
 The discovery system does **not** interpret ticket data. It simply
 stores, signs, and propagates tickets alongside the rest of the peer
 entry. Validation logic lives entirely in application code -- typically
-inside a producer's `accept_if` predicate.
+inside a producer's `require` predicate.
 
 ### Ticket identity
 
@@ -59,15 +59,15 @@ network.discovery().remove_tickets_of(MY_TICKET_CLASS);
 
 ## Querying tickets on a peer entry
 
-When you receive a `PeerEntry` (for example, inside an `accept_if`
-closure), three methods are available:
+When you receive a `PeerEntry` (for example, inside an `require`
+closure), four methods are available:
 
-| Method                                    | Returns                                          |
-| ----------------------------------------- | ------------------------------------------------ |
-| `tickets()`                               | `&BTreeMap<UniqueId, Ticket>` -- all tickets     |
-| `tickets_of(class)`                       | Iterator over tickets matching the class          |
-| `valid_tickets(class, validator)`          | Iterator filtered by a `Fn(&[u8]) -> bool`       |
-| `has_valid_ticket(class, validator)`       | `true` if at least one ticket passes the check   |
+| Method                               | Returns                                        |
+| ------------------------------------ | ---------------------------------------------- |
+| `tickets()`                          | `&BTreeMap<UniqueId, Ticket>` -- all tickets   |
+| `tickets_of(class)`                  | Iterator over tickets matching the class       |
+| `valid_tickets(class, validator)`    | Iterator filtered by a `Fn(&[u8]) -> bool`     |
+| `has_valid_ticket(class, validator)` | `true` if at least one ticket passes the check |
 
 The `validator` closure receives the raw `data` bytes of each ticket and
 returns `true` if the ticket is considered valid.
@@ -75,7 +75,7 @@ returns `true` if the ticket is considered valid.
 ## Example: JWT-authenticated streams
 
 A common pattern is to issue JWTs to authorized consumers. The producer
-then validates those JWTs inside its `accept_if` predicate.
+then validates those JWTs inside its `require` predicate.
 
 ### 1. Define a ticket class
 
@@ -105,7 +105,7 @@ network.discovery().add_ticket(ticket);
 Because tickets propagate through gossip, the producer will see them
 when the consumer's updated `PeerEntry` arrives.
 
-### 3. Producer: validate tickets in `accept_if`
+### 3. Producer: validate tickets in `require`
 
 The producer uses `has_valid_ticket` to check incoming consumers:
 
@@ -114,7 +114,7 @@ use mosaik::streams;
 
 let producer = network.streams()
     .producer::<MyDatum>()
-    .accept_if(move |peer| {
+    .require(move |peer| {
         peer.has_valid_ticket(JWT_TICKET, |jwt_bytes| {
             let jwt_str = std::str::from_utf8(jwt_bytes).unwrap_or("");
             // Verify signature, expiration, issuer, subject...
@@ -140,7 +140,7 @@ add_ticket(jwt)  ──────────►  PeerEntry { tickets: [jwt] }
                                gossip / catalog sync
                                         │
                                         ▼
-                                                              accept_if(peer)
+                                                              require(peer)
                                                               └─ has_valid_ticket(...)
                                                                  └─ validate jwt_bytes
                                                                     ├─ valid → accept
@@ -168,11 +168,11 @@ preferred in the examples throughout this chapter.
   matters, encrypt the payload before wrapping it in a `Ticket` and
   decrypt inside the validator.
 
-- **Ticket validation is synchronous.** The `accept_if` closure and
+- **Ticket validation is synchronous.** The `require` closure and
   the `validator` function passed to `has_valid_ticket` are plain
   `Fn` -- they cannot perform async I/O. Keep validation fast and
   self-contained (e.g. signature checks, expiration comparisons).
 
 - **Multiple ticket classes.** A single peer can carry tickets of
   different classes simultaneously. Producers can check for any
-  combination of classes in their `accept_if` predicate.
+  combination of classes in their `require` predicate.

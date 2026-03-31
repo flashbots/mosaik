@@ -27,7 +27,7 @@ pub struct ConsumerConfig {
 
 	/// Holds the predicate that decides if a producer is eligible and should be
 	/// contacted for establishing a subscription.
-	pub subscribe_if: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
+	pub require: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
 
 	/// The backoff policy for retrying stream subscription connections on
 	/// recoverable failures.
@@ -60,15 +60,25 @@ impl<D: Datum> Builder<'_, D> {
 		self
 	}
 
-	/// Sets the predicate that adds additional user-defined eligibility criteria
-	/// for producers that are going to be contacted for establishing
-	/// subscriptions.
+	/// Adds a peer eligibility requirement for producers this consumer will
+	/// subscribe to.
+	///
+	/// The predicate receives the [`PeerEntry`] of each discovered producer and
+	/// must return `true` for a subscription to be attempted. When called
+	/// multiple times, all predicates must pass — AND composition — so a
+	/// producer is eligible only if every requirement is satisfied. Predicates
+	/// are also re-evaluated dynamically when a peer's catalog entry changes
+	/// (e.g. tags are added or removed), causing the consumer to connect or
+	/// disconnect accordingly.
+	///
+	/// The default requirement considers all producers eligible.
 	#[must_use]
-	pub fn subscribe_if<F>(mut self, pred: F) -> Self
+	pub fn require<F>(mut self, pred: F) -> Self
 	where
 		F: Fn(&PeerEntry) -> bool + Send + Sync + 'static,
 	{
-		self.config.subscribe_if = Box::new(pred);
+		let prev = self.config.require;
+		self.config.require = Box::new(move |peer| prev(peer) && pred(peer));
 		self
 	}
 
@@ -123,7 +133,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 			config: ConsumerConfig {
 				stream_id: D::derived_stream_id(),
 				criteria: Criteria::default(),
-				subscribe_if: Box::new(|_| true),
+				require: Box::new(|_| true),
 				backoff: streams.config.backoff.clone(),
 				online_when: Box::new(|c| c.minimum_of(0)),
 			},

@@ -172,7 +172,7 @@ impl<D: Datum> ConsumerWorker<D> {
 					"discovered new stream producer"
 				);
 
-				if !(self.config.subscribe_if)(producer) {
+				if !(self.config.require)(producer) {
 					tracing::debug!(
 						stream_id = %Short(self.config.stream_id),
 						producer_id = %Short(producer),
@@ -214,7 +214,7 @@ impl<D: Datum> ConsumerWorker<D> {
 			}
 		}
 
-		// Re-evaluate the subscribe_if predicate for active connections.
+		// Re-evaluate the require predicate for active connections.
 		// Disconnect receivers whose producers no longer satisfy the predicate
 		// (e.g. a tag was removed) or are no longer in the catalog.
 		let to_disconnect: Vec<(Digest, PeerId)> = self
@@ -225,7 +225,7 @@ impl<D: Datum> ConsumerWorker<D> {
 				let peer_id = *info.producer_id();
 				let dominated = latest.get(&peer_id).is_none_or(|entry| {
 					!entry.streams().contains(&self.config.stream_id)
-						|| !(self.config.subscribe_if)(entry)
+						|| !(self.config.require)(entry)
 				});
 				dominated.then_some((*sub_id, peer_id))
 			})

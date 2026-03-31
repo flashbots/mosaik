@@ -51,7 +51,7 @@ Mosaik is a Rust library (`src/lib.rs`) providing a runtime for self-organizing,
   - `Consumer<T>` — subscribes to a remote producer
   - `StreamId` is a `Digest` (blake3 hash), derived by default from the datum type
   - `StreamDef<T>` — runtime stream descriptor (optional custom `StreamId`)
-  - `stream!` macro — compile-time stream declaration; generates a type that implements `StreamProducer` / `StreamConsumer` traits, with `online_when`, `accept_if`, `subscribe_if` baked in
+  - `stream!` macro — compile-time stream declaration; generates a type that implements `StreamProducer` / `StreamConsumer` traits, with `online_when`, `require` baked in
   - `ProducerOf<S>` / `ConsumerOf<S>` — type aliases for the producer/consumer of a `stream!`-declared type
   - `status/` — reactive conditions (`when().subscribed().minimum_of(2)`, etc.); conditions are dynamically reevaluated as topology changes
 

@@ -218,12 +218,9 @@ impl StreamInput {
 			let key_str = key.to_string();
 
 			let call = match key_str.as_str() {
-				"accept_if" => quote::quote! { .accept_if(#value) },
+				"require" => quote::quote! { .require(#value) },
 				"online_when" => {
 					quote::quote! { .online_when(#value) }
-				}
-				"subscribe_if" => {
-					quote::quote! { .subscribe_if(#value) }
 				}
 				"max_consumers" => {
 					quote::quote! { .with_max_consumers(#value) }
@@ -260,19 +257,19 @@ impl StreamInput {
 				ConfigSide::Inferred => {
 					match key_str.as_str() {
 						// Producer-only keys.
-						"accept_if" | "max_consumers" | "buffer_size"
-						| "disconnect_lagging" => {
+						"max_consumers" | "buffer_size" | "disconnect_lagging" => {
 							producer_calls.push(call);
 						}
 						// Consumer-only keys.
-						"subscribe_if" | "criteria" | "backoff" => {
+						"criteria" | "backoff" => {
 							consumer_calls.push(call);
 						}
-						// Ambiguous keys apply to both.
-						"online_when" => {
+						// Ambiguous key applied to both sides.
+						"require" | "online_when" => {
 							producer_calls.push(call.clone());
 							consumer_calls.push(call);
 						}
+						// Unreachable: all valid keys are handled above.
 						_ => unreachable!(),
 					}
 				}

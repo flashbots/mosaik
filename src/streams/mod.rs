@@ -46,7 +46,7 @@ pub use {
 /// Trait for stream definitions that provide a producer constructor.
 ///
 /// Implemented automatically by the [`stream!`] macro. The generated
-/// implementation bakes in any `accept_if`, `online_when`, or other
+/// implementation bakes in any `require`, `online_when`, or other
 /// producer configuration specified in the macro invocation.
 pub trait StreamProducer {
 	type Producer;
@@ -62,7 +62,7 @@ pub trait StreamProducer {
 /// Trait for stream definitions that provide a consumer constructor.
 ///
 /// Implemented automatically by the [`stream!`] macro. The generated
-/// implementation bakes in any `subscribe_if` or other consumer
+/// implementation bakes in any `require` or other consumer
 /// configuration specified in the macro invocation.
 pub trait StreamConsumer {
 	type Consumer;
@@ -155,9 +155,8 @@ impl<T: Datum> ConsumerDef<T> {
 ///
 /// // With configuration:
 /// stream!(pub MyStream = PriceUpdate, "oracle.price",
-///     accept_if: |peer| peer.tags().contains(&tag!("trusted")),
+///     require: |peer| peer.tags().contains(&tag!("trusted")),
 ///     online_when: |c| c.minimum_of(2),
-///     subscribe_if: |peer| true,
 /// );
 ///
 /// // Side-prefixed config (producer/consumer specific):
@@ -168,25 +167,25 @@ impl<T: Datum> ConsumerDef<T> {
 ///
 /// // Producer only:
 /// stream!(pub producer MyStream = String, "my.stream.id",
-///     accept_if: |peer| true,
+///     require: |peer| true,
 /// );
 ///
 /// // Consumer only:
 /// stream!(pub consumer MyStream = String,
-///     subscribe_if: |peer| true,
+///     require: |peer| true,
 /// );
 /// ```
 ///
 /// # Configuration keys
 ///
 /// Producer-side (inferred):
-/// - `accept_if` — predicate for accepting consumer connections
+/// - `require` — predicate for accepting consumer connections (AND-composed when repeated)
 /// - `max_consumers` — maximum number of consumers
 /// - `buffer_size` — internal channel buffer size
 /// - `disconnect_lagging` — disconnect slow consumers
 ///
 /// Consumer-side (inferred):
-/// - `subscribe_if` — predicate for selecting eligible producers
+/// - `require` — predicate for selecting eligible producers (AND-composed when repeated)
 /// - `criteria` — data range criteria
 /// - `backoff` — retry backoff policy
 ///
@@ -199,7 +198,7 @@ impl<T: Datum> ConsumerDef<T> {
 /// use mosaik::streams::{StreamProducer, StreamConsumer};
 ///
 /// stream!(pub PriceFeed = PriceUpdate, "oracle.price",
-///     accept_if: |peer| true,
+///     require: |peer| true,
 ///     producer online_when: |c| c.minimum_of(2),
 /// );
 ///

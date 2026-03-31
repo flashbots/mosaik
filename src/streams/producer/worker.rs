@@ -319,12 +319,12 @@ impl<D: Datum> WorkerLoop<D> {
 			return;
 		}
 
-		// Check if we should accept this consumer based on the auth predicate
-		if !(self.config.accept_if)(&peer) {
+		// Check if we should accept this consumer based on the require predicate
+		if !(self.config.require)(&peer) {
 			tracing::warn!(
 				stream_id = %Short(self.config.stream_id),
 				consumer_id = %Short(&peer),
-				"rejected unauthorized consumer",
+				"rejected consumer connection: unauthorized",
 			);
 
 			// Close the link with `NotAllowed` reason, this peer is not

@@ -105,12 +105,12 @@ Streams are built on top of the Discovery and Network subsystems:
 
 When a stream subscription fails, the producer sends structured close reasons:
 
-| Code     | Name             | Meaning                                                          |
-| -------- | ---------------- | ---------------------------------------------------------------- |
-| `10_404` | `StreamNotFound` | The requested stream does not exist on the producer              |
-| `10_403` | `NotAllowed`     | The consumer is rejected by the producer's `accept_if` predicate |
-| `10_509` | `NoCapacity`     | The producer has reached `max_consumers`                         |
-| `10_413` | `TooSlow`        | The consumer was disconnected for lagging behind                 |
+| Code     | Name             | Meaning                                                        |
+| -------- | ---------------- | -------------------------------------------------------------- |
+| `10_404` | `StreamNotFound` | The requested stream does not exist on the producer            |
+| `10_403` | `NotAllowed`     | The consumer is rejected by the producer's `require` predicate |
+| `10_509` | `NoCapacity`     | The producer has reached `max_consumers`                       |
+| `10_413` | `TooSlow`        | The consumer was disconnected for lagging behind               |
 
 ## Subsystem Configuration
 
@@ -171,34 +171,34 @@ each key to the correct builder (producer or consumer) automatically:
 
 ```rust,ignore
 declare::stream!(pub PriceFeed = PriceUpdate, "oracle.price",
-    accept_if: |peer| peer.tags().contains(&tag!("trusted")),
+    producer require: |peer| peer.tags().contains(&tag!("trusted")),
     producer online_when: |c| c.minimum_of(2),
-    subscribe_if: |peer| true,
+    consumer require: |peer| true,
 );
 ```
 
 #### Producer-side keys (inferred automatically)
 
-| Key                  | Description                                  |
-| -------------------- | -------------------------------------------- |
-| `accept_if`          | Predicate for accepting consumer connections |
-| `max_consumers`      | Maximum number of concurrent consumers       |
-| `buffer_size`        | Internal channel buffer size                 |
-| `disconnect_lagging` | Disconnect slow consumers after duration     |
+| Key                  | Description                              |
+| -------------------- | ---------------------------------------- |
+|                      |                                          |
+| `max_consumers`      | Maximum number of concurrent consumers   |
+| `buffer_size`        | Internal channel buffer size             |
+| `disconnect_lagging` | Disconnect slow consumers after duration |
 
 #### Consumer-side keys (inferred automatically)
 
-| Key            | Description                                |
-| -------------- | ------------------------------------------ |
-| `subscribe_if` | Predicate for selecting eligible producers |
-| `criteria`     | Data range criteria                        |
-| `backoff`      | Retry backoff policy                       |
+| Key        | Description          |
+| ---------- | -------------------- |
+| `criteria` | Data range criteria  |
+| `backoff`  | Retry backoff policy |
 
 #### Ambiguous keys (prefix with `producer` or `consumer`)
 
-| Key           | Description                                       |
-| ------------- | ------------------------------------------------- |
-| `online_when` | Conditions for the stream to be considered online |
+| Key           | Description                                                |
+| ------------- | ---------------------------------------------------------- |
+| `require`     | Conditions for accepting a consumer or producer connection |
+| `online_when` | Conditions for the stream to be considered online          |
 
 Without a prefix, `online_when` applies to **both** sides. Use
 `producer online_when` or `consumer online_when` to target one:

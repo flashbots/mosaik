@@ -17,7 +17,7 @@ If a producer for this datum type already exists, the existing one is returned.
 ```rust,ignore
 let producer = network.streams()
     .producer::<MyDatum>()
-    .accept_if(|peer| peer.tags().contains(&"trusted".into()))
+    .require(|peer| peer.tags().contains(&"trusted".into()))
     .online_when(|c| c.minimum_of(2).with_tags("validator"))
     .disconnect_lagging(true)
     .with_buffer_size(2048)
@@ -30,7 +30,7 @@ let producer = network.streams()
 
 | Method                          | Default                  | Description                                              |
 | ------------------------------- | ------------------------ | -------------------------------------------------------- |
-| `accept_if(predicate)`          | Accept all               | Predicate to accept/reject incoming consumer connections |
+| `require(predicate)`            | Accept all               | Adds a consumer eligibility requirement (AND-composed)   |
 | `online_when(conditions)`       | `minimum_of(1)`          | Conditions under which the producer is online            |
 | `disconnect_lagging(bool)`      | `true`                   | Disconnect consumers that fall behind `buffer_size`      |
 | `with_buffer_size(n)`           | `1024`                   | Internal channel buffer size                             |
@@ -73,7 +73,7 @@ All error variants return the unsent datum so you can retry or inspect it.
 Instead of (or in addition to) filtering by tags, you can require
 consumers to carry a valid auth ticket. Tickets are opaque credentials
 that consumers attach to their discovery entry and producers validate
-inside `accept_if`:
+inside `require`:
 
 ```rust,ignore
 use mosaik::{UniqueId, unique_id};
@@ -82,7 +82,7 @@ const JWT_TICKET: UniqueId = unique_id!("my-app.jwt");
 
 let producer = network.streams()
     .producer::<MyDatum>()
-    .accept_if(move |peer| {
+    .require(move |peer| {
         peer.has_valid_ticket(JWT_TICKET, |jwt_bytes| {
             // Validate the JWT signature, expiration, subject, etc.
             validate_jwt(jwt_bytes, peer.id())

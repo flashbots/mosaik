@@ -6,7 +6,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.93"
-version = "0.3.1"
+version = "0.3.2"
 license = "MIT"
 homepage = "https://github.com/flashbots/mosaik"
 repository = "https://github.com/flashbots/mosaik"
@@ -79,7 +79,7 @@ anyhow.workspace = true
 rand.workspace = true
 blake3.workspace = true
 
-mosaik-macros = { version = "0.3.1", path = "src/macros" }
+mosaik-macros = { version = "0.3.2", path = "src/macros" }
 
 thiserror = "2.0"
 postcard = "1.1.3"

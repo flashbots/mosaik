@@ -7,6 +7,65 @@ use {
 	mosaik::{primitives::Short, *},
 };
 
+/// Verifies that calling `require` multiple times composes predicates with
+/// AND semantics — a producer must satisfy all predicates to be subscribed to.
+#[tokio::test]
+async fn require_chaining() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	// Consumer node
+	let n0 = Network::new(network_id).await?;
+
+	// Producer with both required tags
+	let n_both = Network::builder(network_id)
+		.with_discovery(
+			discovery::Config::builder().with_tags(["tag1", "tag2"]),
+		)
+		.build()
+		.await?;
+
+	// Producer with only the first required tag
+	let n_one = Network::builder(network_id)
+		.with_discovery(discovery::Config::builder().with_tags(["tag1"]))
+		.build()
+		.await?;
+
+	// Producer with neither tag
+	let n_none = Network::builder(network_id)
+		.with_discovery(discovery::Config::builder().with_tags(["tag3"]))
+		.build()
+		.await?;
+
+	let _p_both = n_both.streams().produce::<Data1>();
+	let _p_one = n_one.streams().produce::<Data1>();
+	let _p_none = n_none.streams().produce::<Data1>();
+
+	// Two chained require calls — producer must have BOTH tag1 AND tag2.
+	let consumer = n0
+		.streams()
+		.consumer::<Data1>()
+		.require(|peer| peer.tags().contains(&"tag1".into()))
+		.require(|peer| peer.tags().contains(&"tag2".into()))
+		.build();
+
+	discover_all([&n0, &n_both, &n_one, &n_none]).await?;
+
+	// Only n_both satisfies both predicates.
+	timeout_s(2, consumer.when().subscribed()).await?;
+
+	// Allow a moment for n_one and n_none to attempt (and fail) subscription.
+	sleep_s(2).await;
+
+	let producers = consumer
+		.producers()
+		.map(|p| *p.peer().id())
+		.collect::<Vec<_>>();
+	assert_eq!(producers.len(), 1);
+	assert!(producers.contains(&n_both.local().id()));
+
+	Ok(())
+}
+
 /// This test verifies that consumers can authenticate producers based on tags
 /// and refuse subscriptions to producers that do not meet the criteria.
 #[tokio::test]
@@ -37,7 +96,7 @@ async fn by_tag() -> anyhow::Result<()> {
 	let c0_1 = n0
 		.streams()
 		.consumer::<Data1>()
-		.subscribe_if(|peer| peer.tags().contains(&"tag2".into()))
+		.require(|peer| peer.tags().contains(&"tag2".into()))
 		.build();
 
 	// This consumer will attempt to subscribe to
@@ -158,7 +217,7 @@ async fn by_ticket() -> anyhow::Result<()> {
 	let mut c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.subscribe_if(move |peer| {
+		.require(move |peer| {
 			peer.has_valid_ticket(TICKET_CLASS, |jwt_bytes| {
 				let jwt_str = str::from_utf8(jwt_bytes).unwrap();
 				let claims: jwt::Claims = jwt_str.verify_with_key(&jwt_key).unwrap();
@@ -187,7 +246,7 @@ async fn by_ticket() -> anyhow::Result<()> {
 }
 
 /// Verifies that consumers disconnect from producers whose tags change such
-/// that the `subscribe_if` predicate no longer matches, and reconnect to
+/// that the `require` predicate no longer matches, and reconnect to
 /// producers that gain matching tags.
 #[tokio::test]
 async fn dynamic_tag_reevaluation() -> anyhow::Result<()> {
@@ -214,7 +273,7 @@ async fn dynamic_tag_reevaluation() -> anyhow::Result<()> {
 	let consumer = n0
 		.streams()
 		.consumer::<Data1>()
-		.subscribe_if(|peer| peer.tags().contains(&"leader".into()))
+		.require(|peer| peer.tags().contains(&"leader".into()))
 		.build();
 
 	let _p1 = n1.streams().produce::<Data1>();
