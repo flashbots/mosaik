@@ -3,7 +3,7 @@ use {
 		Criteria,
 		StreamId,
 		discovery::PeerEntry,
-		primitives::BackoffFactory,
+		primitives::{BackoffFactory, TicketValidator},
 		streams::{
 			Consumer,
 			Datum,
@@ -42,6 +42,14 @@ pub struct ConsumerConfig {
 	/// online as soon as it starts (minimum of 0 producers).
 	pub online_when:
 		Box<dyn Fn(ChannelConditions) -> ChannelConditions + Send + Sync>,
+
+	/// Optional ticket validator for authenticating producer peers.
+	///
+	/// When set, producers must present a valid ticket that passes validation
+	/// before the consumer will subscribe to them. Tickets that carry an
+	/// expiration are tracked and the consumer automatically disconnects
+	/// from producers when their ticket expires.
+	pub ticket_validator: Option<Arc<dyn TicketValidator>>,
 }
 
 /// Configurable builder for assembling a new consumer instance for a specific
@@ -57,6 +65,21 @@ impl<D: Datum> Builder<'_, D> {
 	#[must_use]
 	pub const fn with_criteria(mut self, criteria: Criteria) -> Self {
 		self.config.criteria = criteria;
+		self
+	}
+
+	/// Sets a ticket validator for authenticating producer peers.
+	///
+	/// When set, each discovered producer must present a valid ticket that
+	/// passes the validator before the consumer will subscribe. If the
+	/// ticket carries an expiration, the consumer will automatically
+	/// disconnect from the producer when the ticket expires.
+	#[must_use]
+	pub fn with_ticket_validator(
+		mut self,
+		validator: impl TicketValidator,
+	) -> Self {
+		self.config.ticket_validator = Some(Arc::new(validator));
 		self
 	}
 
@@ -136,6 +159,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 				require: Box::new(|_| true),
 				backoff: streams.config.backoff.clone(),
 				online_when: Box::new(|c| c.minimum_of(0)),
+				ticket_validator: None,
 			},
 			streams,
 			_marker: PhantomData,

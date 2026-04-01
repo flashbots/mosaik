@@ -26,9 +26,9 @@ Initiator                              Acceptor
     │             ⊕ group_key)             │
     │   · known bonds list                 │
     │                                      │
-    │                    verify proof       │
+    │                       verify proof   │
     │                                      │
-    │◄─── HandshakeEnd ───────────────────┤
+    │◄─── HandshakeEnd ────────────────────┤
     │     · proof (acceptor's)             │
     │     · known bonds list               │
     │                                      │
@@ -55,6 +55,23 @@ Once established, a bond is managed by a `BondWorker` that:
 - Propagates **peer entry updates** when discovery information changes.
 - Announces **new bonds** (`BondFormed`) so peers learn about topology changes.
 - Handles **graceful departure** when a peer is shutting down.
+- Monitors **ticket expiration** when the group uses `.require_ticket()`.
+
+#### Ticket expiration timer
+
+When a group requires ticket-based authentication, the bond worker tracks the
+`Expiration` returned by `TicketValidator::validate`. If the ticket has a
+finite expiration (`Expiration::At(time)`), the worker schedules a timer.
+When the timer fires:
+
+1. The peer's current tickets are re-validated.
+2. If a new valid ticket is found (e.g. the peer refreshed their JWT),
+   the timer is reset to the new expiration.
+3. If no valid ticket remains, the bond is terminated with `NotAllowed`.
+
+Peer entry updates (received via `PeerEntryUpdate` messages or discovery
+gossip) also trigger re-validation and reset the timer, so peers can
+seamlessly rotate credentials before they expire.
 
 ### 3. Failure and reconnection
 

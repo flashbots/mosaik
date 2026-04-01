@@ -7,9 +7,11 @@ use {
 		NetworkId,
 		StreamId,
 		discovery::PeerEntry,
+		primitives::TicketValidator,
 		streams::status::ChannelConditions,
 	},
 	core::{any::Any, marker::PhantomData},
+	std::sync::Arc,
 	tokio::sync::mpsc::UnboundedSender,
 };
 
@@ -68,6 +70,13 @@ pub struct ProducerConfig {
 	/// Defaults to unlimited if not set.
 	pub max_consumers: usize,
 
+	/// Optional ticket validator for authenticating consumer connections.
+	///
+	/// When set, consumers must present a valid ticket that passes validation
+	/// before being accepted. Tickets that carry an expiration are tracked
+	/// and consumers are automatically disconnected when their ticket expires.
+	pub ticket_validator: Option<Arc<dyn TicketValidator>>,
+
 	/// Optional sink for unsent datum that were not delivered to any consumers
 	/// because the datum did not meet any subscription criteria of any active
 	/// consumers.
@@ -88,6 +97,21 @@ pub struct Builder<'s, D: Datum> {
 
 /// Public API
 impl<D: Datum> Builder<'_, D> {
+	/// Sets a ticket validator for authenticating consumer connections.
+	///
+	/// When set, each consumer attempting to subscribe must present a valid
+	/// ticket that passes the validator. If the ticket carries an expiration,
+	/// the producer will automatically disconnect the consumer when the
+	/// ticket expires.
+	#[must_use]
+	pub fn with_ticket_validator(
+		mut self,
+		validator: impl TicketValidator,
+	) -> Self {
+		self.config.ticket_validator = Some(Arc::new(validator));
+		self
+	}
+
 	/// Adds a peer eligibility requirement for incoming consumer connections.
 	///
 	/// The predicate receives the [`PeerEntry`] of each consumer attempting to
@@ -206,6 +230,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 				online_when: Box::new(|c| c.minimum_of(1)),
 				max_consumers: usize::MAX,
 				network_id: *streams.local.network_id(),
+				ticket_validator: None,
 				undelivered: None,
 			},
 			_marker: PhantomData,

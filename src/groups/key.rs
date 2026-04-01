@@ -4,6 +4,7 @@ use {
 		PeerId,
 		groups::{GroupId, Groups},
 		network::link::Link,
+		primitives::TicketValidator,
 	},
 	core::fmt,
 	serde::{Deserialize, Serialize},
@@ -51,6 +52,14 @@ impl From<Secret> for GroupKey {
 impl From<&Secret> for GroupKey {
 	fn from(secret: &Secret) -> Self {
 		Self { secret: *secret }
+	}
+}
+
+impl<T: TicketValidator + ?Sized> From<&T> for GroupKey {
+	fn from(validator: &T) -> Self {
+		Self {
+			secret: validator.signature(),
+		}
 	}
 }
 

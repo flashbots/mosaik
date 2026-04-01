@@ -15,7 +15,10 @@ use {
 	core::pin::Pin,
 	futures::{Stream, StreamExt, stream::SelectAll},
 	std::{collections::HashMap, sync::Arc},
-	tokio::sync::{mpsc, watch},
+	tokio::{
+		sync::{mpsc, watch},
+		task::JoinSet,
+	},
 	tokio_stream::wrappers::WatchStream,
 	tokio_util::sync::CancellationToken,
 };
@@ -65,6 +68,9 @@ pub(super) struct ConsumerWorker<D: Datum> {
 	/// A future that resolves when the consumer meets the configured online
 	/// conditions.
 	online_when: ChannelConditions,
+
+	/// Futures that resolve when a producer's ticket expires.
+	ticket_expiries: JoinSet<Digest>,
 }
 
 impl<D: Datum> ConsumerWorker<D> {
@@ -96,6 +102,7 @@ impl<D: Datum> ConsumerWorker<D> {
 			receiver_cancels: HashMap::new(),
 			online: online.clone(),
 			online_when,
+			ticket_expiries: JoinSet::new(),
 		};
 
 		tokio::spawn(worker.run());
@@ -143,6 +150,11 @@ impl<D: Datum> ConsumerWorker<D> {
 				Some((state, peer_id)) = self.status_rx.next() => {
 					self.on_receiver_state_update(peer_id, state);
 				}
+
+				// Triggered when a producer's ticket expires.
+				Some(Ok(sub_id)) = self.ticket_expiries.join_next() => {
+					self.on_ticket_expired(sub_id);
+				}
 			}
 		}
 	}
@@ -152,6 +164,11 @@ impl<D: Datum> ConsumerWorker<D> {
 		clippy::needless_pass_by_value,
 		reason = "Catalog is cheaply cloneable and we don't want to hold a lock \
 		          on the watcher while processing"
+	)]
+	#[expect(
+		clippy::too_many_lines,
+		reason = "Complex control flow for producer discovery, ticket validation, \
+		          and eligibility re-evaluation"
 	)]
 	fn on_catalog_update(&mut self, latest: Catalog) {
 		// identify all producers that are producing the desired stream id
@@ -182,6 +199,25 @@ impl<D: Datum> ConsumerWorker<D> {
 					continue;
 				}
 
+				// Validate the producer's ticket if a validator is configured
+				let ticket_expiration =
+					if let Some(ref validator) = self.config.ticket_validator {
+						match producer.validate_ticket(validator.as_ref()) {
+							Err(_) => {
+								tracing::debug!(
+									stream_id = %Short(self.config.stream_id),
+									producer_id = %Short(producer),
+									network = %producer.network_id(),
+									"skipping producer with invalid ticket"
+								);
+								continue;
+							}
+							Ok(expiration) => Some(expiration),
+						}
+					} else {
+						None
+					};
+
 				// create a per-receiver cancellation token so the consumer worker
 				// can terminate this specific receiver independently
 				let receiver_cancel = self.cancel.child_token();
@@ -211,6 +247,14 @@ impl<D: Datum> ConsumerWorker<D> {
 					active.insert(sub_id, channel_info);
 				});
 				self.receiver_cancels.insert(sub_id, receiver_cancel);
+
+				// Schedule ticket expiry timer if the ticket has an expiration
+				if let Some(duration) = ticket_expiration.and_then(|e| e.remaining()) {
+					self.ticket_expiries.spawn(async move {
+						tokio::time::sleep(duration).await;
+						sub_id
+					});
+				}
 			}
 		}
 
@@ -226,6 +270,11 @@ impl<D: Datum> ConsumerWorker<D> {
 				let dominated = latest.get(&peer_id).is_none_or(|entry| {
 					!entry.streams().contains(&self.config.stream_id)
 						|| !(self.config.require)(entry)
+						|| self
+							.config
+							.ticket_validator
+							.as_ref()
+							.is_some_and(|v| entry.validate_ticket(v.as_ref()).is_err())
 				});
 				dominated.then_some((*sub_id, peer_id))
 			})
@@ -252,6 +301,30 @@ impl<D: Datum> ConsumerWorker<D> {
 				producers = %self.active.borrow().len(),
 				"consumer is offline",
 			);
+			self.online.send_replace(false);
+		}
+	}
+
+	/// Triggered when a producer's ticket expires. Disconnects the receiver
+	/// so that a fresh ticket is validated on the next catalog update.
+	fn on_ticket_expired(&mut self, sub_id: Digest) {
+		if !self.active.borrow().contains_key(&sub_id) {
+			return;
+		}
+
+		tracing::debug!(
+			stream_id = %Short(self.config.stream_id),
+			"producer ticket expired; disconnecting",
+		);
+
+		if let Some(cancel) = self.receiver_cancels.remove(&sub_id) {
+			cancel.cancel();
+		}
+		self
+			.active
+			.send_if_modified(|active| active.remove(&sub_id).is_some());
+
+		if !self.online_when.is_condition_met() {
 			self.online.send_replace(false);
 		}
 	}

@@ -98,7 +98,6 @@ impl GroupHandle {
 }
 
 /// Manages an instance of a joined group worker loop.
-#[derive(Debug)]
 pub(in crate::groups) struct WorkerState<M: StateMachine> {
 	/// Configuration settings for this group, such as the group key and the
 	/// consensus configuration. Those values must be identical across all

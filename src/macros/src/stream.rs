@@ -219,6 +219,9 @@ impl StreamInput {
 
 			let call = match key_str.as_str() {
 				"require" => quote::quote! { .require(#value) },
+				"require_ticket" => {
+					quote::quote! { .with_ticket_validator(#value) }
+				}
 				"online_when" => {
 					quote::quote! { .online_when(#value) }
 				}
@@ -265,7 +268,7 @@ impl StreamInput {
 							consumer_calls.push(call);
 						}
 						// Ambiguous key applied to both sides.
-						"require" | "online_when" => {
+						"require" | "require_ticket" | "online_when" => {
 							producer_calls.push(call.clone());
 							consumer_calls.push(call);
 						}

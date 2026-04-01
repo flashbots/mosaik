@@ -28,15 +28,16 @@ let producer = network.streams()
 
 ## Builder Options
 
-| Method                          | Default                  | Description                                              |
-| ------------------------------- | ------------------------ | -------------------------------------------------------- |
-| `require(predicate)`            | Accept all               | Adds a consumer eligibility requirement (AND-composed)   |
-| `online_when(conditions)`       | `minimum_of(1)`          | Conditions under which the producer is online            |
-| `disconnect_lagging(bool)`      | `true`                   | Disconnect consumers that fall behind `buffer_size`      |
-| `with_buffer_size(n)`           | `1024`                   | Internal channel buffer size                             |
-| `with_max_consumers(n)`         | `usize::MAX`             | Maximum allowed simultaneous consumers                   |
-| `with_stream_id(id)`            | `D::derived_stream_id()` | Custom stream identity                                   |
-| `with_undelivered_sink(sender)` | None                     | Capture datum that no consumer matched                   |
+| Method                              | Default                  | Description                                              |
+| ----------------------------------- | ------------------------ | -------------------------------------------------------- |
+| `require(predicate)`                | Accept all               | Adds a consumer eligibility requirement (AND-composed)   |
+| `with_ticket_validator(validator)`  | None                     | Expiration-aware ticket validation (see below)           |
+| `online_when(conditions)`           | `minimum_of(1)`          | Conditions under which the producer is online            |
+| `disconnect_lagging(bool)`          | `true`                   | Disconnect consumers that fall behind `buffer_size`      |
+| `with_buffer_size(n)`               | `1024`                   | Internal channel buffer size                             |
+| `with_max_consumers(n)`             | `usize::MAX`             | Maximum allowed simultaneous consumers                   |
+| `with_stream_id(id)`                | `D::derived_stream_id()` | Custom stream identity                                   |
+| `with_undelivered_sink(sender)`     | None                     | Capture datum that no consumer matched                   |
 
 ## Sending Data
 
@@ -70,10 +71,51 @@ All error variants return the unsent datum so you can retry or inspect it.
 
 ## Ticket-Based Authentication
 
-Instead of (or in addition to) filtering by tags, you can require
-consumers to carry a valid auth ticket. Tickets are opaque credentials
-that consumers attach to their discovery entry and producers validate
-inside `require`:
+### Using `with_ticket_validator` (recommended)
+
+The `with_ticket_validator` method accepts a `TicketValidator`
+implementation that validates consumer tickets and returns their
+expiration. When a ticket expires, the producer **proactively
+disconnects** the consumer — no reconnection attempt is needed:
+
+```rust,ignore
+use mosaik::primitives::{TicketValidator, Expiration, InvalidTicket};
+
+let producer = network.streams()
+    .producer::<MyDatum>()
+    .with_ticket_validator(MyJwtValidator::new())
+    .build()?;
+```
+
+The `TicketValidator` trait:
+
+```rust,ignore
+pub trait TicketValidator: Send + Sync + 'static {
+    fn class(&self) -> UniqueId;
+    fn signature(&self) -> UniqueId;
+    fn validate(
+        &self,
+        ticket: &[u8],
+        peer: &PeerEntry,
+    ) -> Result<Expiration, InvalidTicket>;
+}
+```
+
+- `class()` — the `UniqueId` of the ticket class to look for.
+- `signature()` — a deterministic ID used in group identity derivation
+  (derive from the class and any configuration such as the issuer).
+- `validate()` — checks the ticket bytes and peer entry, returning
+  `Expiration::At(time)` for time-limited credentials or
+  `Expiration::Never` for permanent ones.
+
+This is the same trait used by [Groups](../groups.md) for bond
+authentication.
+
+### Using `require` with closures
+
+For simpler cases, you can validate tickets inside a `require`
+predicate using the `has_valid_ticket` helper. This approach does
+**not** track expiration — it only validates at connection time:
 
 ```rust,ignore
 use mosaik::{UniqueId, unique_id};
@@ -84,7 +126,6 @@ let producer = network.streams()
     .producer::<MyDatum>()
     .require(move |peer| {
         peer.has_valid_ticket(JWT_TICKET, |jwt_bytes| {
-            // Validate the JWT signature, expiration, subject, etc.
             validate_jwt(jwt_bytes, peer.id())
         })
     })

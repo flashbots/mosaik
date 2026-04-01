@@ -28,7 +28,7 @@ pub(crate) use {
 };
 pub use {
 	datum::{Datum, Encoded},
-	ticket::Ticket,
+	ticket::{Expiration, InvalidTicket, Ticket, TicketValidator},
 };
 
 /// Used internally as a sentinel type for generic parameters.

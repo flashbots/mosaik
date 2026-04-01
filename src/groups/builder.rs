@@ -12,6 +12,7 @@ use {
 			config::GroupConfig,
 			worker::Worker,
 		},
+		primitives::TicketValidator,
 	},
 	core::time::Duration,
 	dashmap::Entry,
@@ -51,6 +52,12 @@ pub struct GroupBuilder<'g, S = (), M = ()> {
 	/// This value is used when deriving the group id. All members of the group
 	/// must be running the same state machine implementation.
 	pub(super) state_machine: M,
+
+	/// Optional ticket validator for authenticating peers that attempt to join
+	/// the group. If set, this will be used to validate the tickets presented by
+	/// peers during the bonding process, and only peers with valid tickets will
+	/// be allowed to join the group and form a bond connection.
+	pub(super) auth: Option<Box<dyn TicketValidator>>,
 }
 
 /// Setters that are available when neither the state machine nor the storage
@@ -64,6 +71,7 @@ impl<'g> GroupBuilder<'g, (), ()> {
 			consensus: None,
 			storage: (),
 			state_machine: (),
+			auth: None,
 		}
 	}
 
@@ -84,6 +92,7 @@ impl<'g> GroupBuilder<'g, (), ()> {
 			consensus: None,
 			storage: InMemoryLogStore::<SM::Command>::default(),
 			state_machine,
+			auth: None,
 		}
 	}
 
@@ -119,6 +128,7 @@ where
 			consensus: self.consensus,
 			state_machine: self.state_machine,
 			storage,
+			auth: self.auth,
 		}
 	}
 }
@@ -144,6 +154,22 @@ where
 		self.consensus = Some(consensus);
 		self
 	}
+
+	/// Configures an optional ticket validator for authenticating peers that
+	/// attempt to join the group. If set, this will be used to validate the
+	/// tickets presented by peers during the bonding process, and only peers
+	/// with valid tickets will be allowed to join the group and form a bond
+	/// connection.
+	///
+	/// This does affect the generated group id, all members of the group must
+	/// have the same ticket validator configuration, otherwise they will derive
+	/// different group ids and will not be able to form a bond connection with
+	/// each other.
+	#[must_use]
+	pub fn require_ticket(mut self, auth: impl TicketValidator) -> Self {
+		self.auth = Some(Box::new(auth));
+		self
+	}
 }
 
 impl<S, M> GroupBuilder<'_, S, M>
@@ -160,6 +186,7 @@ where
 			self.key, //
 			self.consensus.unwrap_or_default(),
 			&self.state_machine,
+			self.auth,
 		);
 
 		let group_id = *config.group_id();

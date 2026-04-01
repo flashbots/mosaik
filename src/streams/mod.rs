@@ -179,13 +179,15 @@ impl<T: Datum> ConsumerDef<T> {
 /// # Configuration keys
 ///
 /// Producer-side (inferred):
-/// - `require` — predicate for accepting consumer connections (AND-composed when repeated)
+/// - `require` — predicate for accepting consumer connections (AND-composed
+///   when repeated)
 /// - `max_consumers` — maximum number of consumers
 /// - `buffer_size` — internal channel buffer size
 /// - `disconnect_lagging` — disconnect slow consumers
 ///
 /// Consumer-side (inferred):
-/// - `require` — predicate for selecting eligible producers (AND-composed when repeated)
+/// - `require` — predicate for selecting eligible producers (AND-composed when
+///   repeated)
 /// - `criteria` — data range criteria
 /// - `backoff` — retry backoff policy
 ///

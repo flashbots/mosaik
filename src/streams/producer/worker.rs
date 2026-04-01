@@ -126,6 +126,9 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// whatever reason.
 	dropped: JoinSet<SubscriptionId>,
 
+	/// Futures that resolve when a consumer's ticket expires.
+	ticket_expiries: JoinSet<SubscriptionId>,
+
 	/// Sets the online status of the producer when the worker loop is ready and
 	/// publishing conditions are met.
 	online: watch::Sender<bool>,
@@ -161,6 +164,7 @@ impl<D: Datum> WorkerLoop<D> {
 			active_info,
 			online_when,
 			dropped: JoinSet::new(),
+			ticket_expiries: JoinSet::new(),
 		};
 
 		tokio::spawn(worker.run());
@@ -214,6 +218,11 @@ impl<D: Datum> WorkerLoop<D> {
 				// is dropped for any reason.
 				Some(Ok(sub_id)) = self.dropped.join_next() => {
 					self.on_connection_dropped(sub_id);
+				}
+
+				// Triggered when a consumer's ticket expires.
+				Some(Ok(sub_id)) = self.ticket_expiries.join_next() => {
+					self.on_ticket_expired(sub_id);
 				}
 			}
 		}
@@ -333,6 +342,26 @@ impl<D: Datum> WorkerLoop<D> {
 			return;
 		}
 
+		// Validate the consumer's ticket if a ticket validator is configured
+		let ticket_expiration =
+			if let Some(ref validator) = self.config.ticket_validator {
+				match peer.validate_ticket(validator.as_ref()) {
+					Err(_) => {
+						tracing::warn!(
+							stream_id = %Short(self.config.stream_id),
+							consumer_id = %Short(&peer),
+							"rejected consumer connection: invalid ticket",
+						);
+
+						let _ = link.close(NotAllowed).await;
+						return;
+					}
+					Ok(expiration) => Some(expiration),
+				}
+			} else {
+				None
+			};
+
 		// create and spawn a new sender task for this consumer
 		let (sub, info) = Sender::spawn(
 			link,
@@ -349,6 +378,14 @@ impl<D: Datum> WorkerLoop<D> {
 		// Monitor the disconnection of this consumer
 		let drop_fut = info.disconnected();
 		self.dropped.spawn(drop_fut.map(move |()| sub_id));
+
+		// Schedule ticket expiry timer if the ticket has an expiration
+		if let Some(duration) = ticket_expiration.and_then(|e| e.remaining()) {
+			self.ticket_expiries.spawn(async move {
+				tokio::time::sleep(duration).await;
+				sub_id
+			});
+		}
 
 		// Update the active subscriptions info map and notify observers
 		self.active_info.send_modify(|active| {
@@ -377,6 +414,20 @@ impl<D: Datum> WorkerLoop<D> {
 			});
 
 			let _ = subscription.drop_requested.set(GracefulShutdown.into());
+		}
+	}
+
+	/// Triggered when a consumer's ticket expires. Disconnects the consumer
+	/// so it must re-authenticate on reconnection.
+	fn on_ticket_expired(&self, sub_id: SubscriptionId) {
+		if let Some(subscription) = self.active.get(sub_id) {
+			tracing::debug!(
+				stream_id = %Short(self.config.stream_id),
+				consumer_id = %Short(&subscription.peer.id()),
+				"consumer ticket expired; disconnecting",
+			);
+
+			let _ = subscription.drop_requested.set(NotAllowed.into());
 		}
 	}
 

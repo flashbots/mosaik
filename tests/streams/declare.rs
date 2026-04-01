@@ -1,6 +1,6 @@
 use {
 	super::*,
-	crate::utils::{discover_all, sleep_s, timeout_s},
+	crate::utils::{JwtValidator, discover_all, sleep_s, timeout_s},
 	futures::{SinkExt, StreamExt},
 	mosaik::{declare, *},
 	serde::{Deserialize, Serialize},
@@ -17,32 +17,38 @@ declare::stream!(NamedStream = Data1, "named.stream");
 
 // Producer only with require config.
 declare::stream!(
-	pub(crate) producer ProducerOnlyStream = Data1, "producer.only",
+	pub(crate) producer ProducerOnlyStream = Data1,
+		"producer.only",
 		require: |_peer| true,
 );
 
 // Consumer only with require config.
 declare::stream!(
-	pub(crate) consumer ConsumerOnlyStream = Data1, "consumer.only",
+	pub(crate) consumer ConsumerOnlyStream = Data1,
+		"consumer.only",
 		require: |_peer| true,
 );
 
 // Full with side-prefixed online_when.
 declare::stream!(
-	pub(crate) ConfiguredStream = Data1, "configured.stream",
+	pub(crate) ConfiguredStream = Data1,
+		"configured.stream",
 		require: |_peer| true,
 		producer online_when: |c| c.minimum_of(1),
 );
 
 // Producer-only stream that requires consumers to carry the "trusted" tag.
 declare::stream!(
-	pub producer TaggedProducerStream = Data2, "tagged.producer.stream",
+	pub producer TaggedProducerStream = Data2,
+		"tagged.producer.stream",
 		require: |peer| peer.tags().contains(&"trusted".into()),
 );
 
-// Consumer-only stream that only subscribes to producers with the "trusted" tag.
+// Consumer-only stream that only subscribes to producers with the "trusted"
+// tag.
 declare::stream!(
-	pub consumer TaggedConsumerStream = Data2, "tagged.consumer.stream",
+	pub consumer TaggedConsumerStream = Data2,
+		"tagged.consumer.stream",
 		require: |peer| peer.tags().contains(&"trusted".into()),
 );
 
@@ -60,6 +66,27 @@ declare::stream!(
 	pub(crate) ConstIdConfiguredStream = Data1, CONST_STREAM_ID,
 		require: |_peer| true,
 		producer online_when: |c| c.minimum_of(1),
+);
+
+// Both sides use the same ticket validator.
+declare::stream!(
+	pub(crate) TicketAuthStream = Data1,
+		"ticket.auth.stream",
+		require_ticket: JwtValidator::default(),
+);
+
+// Producer-only with ticket validator.
+declare::stream!(
+	pub(crate) producer ProducerTicketStream = Data1,
+		"producer.ticket.stream",
+		require_ticket: JwtValidator::default(),
+);
+
+// Consumer-only with ticket validator.
+declare::stream!(
+	pub(crate) consumer ConsumerTicketStream = Data1,
+		"consumer.ticket.stream",
+		require_ticket: JwtValidator::default(),
 );
 
 #[tokio::test]
@@ -151,7 +178,8 @@ async fn stream_macro_producer_only() -> anyhow::Result<()> {
 }
 
 /// Verifies that a producer-only `stream!` declaration with a `require`
-/// predicate rejects consumers that do not satisfy it and accepts those that do.
+/// predicate rejects consumers that do not satisfy it and accepts those that
+/// do.
 #[tokio::test]
 async fn stream_macro_producer_require() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
@@ -246,7 +274,11 @@ async fn stream_macro_consumer_require() -> anyhow::Result<()> {
 	sleep_s(2).await;
 
 	let producers = c0.producers().map(|p| *p.peer().id()).collect::<Vec<_>>();
-	assert_eq!(producers.len(), 1, "should be subscribed to exactly 1 producer");
+	assert_eq!(
+		producers.len(),
+		1,
+		"should be subscribed to exactly 1 producer"
+	);
 	assert!(
 		producers.contains(&n1.local().id()),
 		"should be subscribed to the trusted producer only"
@@ -254,9 +286,7 @@ async fn stream_macro_consumer_require() -> anyhow::Result<()> {
 
 	// Verify data flows from the one accepted producer.
 	timeout_s(3, p1.send(Data2("hello from trusted producer".into()))).await??;
-	let msg = timeout_s(3, c0.next())
-		.await?
-		.expect("expected message");
+	let msg = timeout_s(3, c0.next()).await?.expect("expected message");
 	assert_eq!(msg, Data2("hello from trusted producer".into()));
 
 	Ok(())
@@ -281,6 +311,153 @@ async fn stream_macro_const_id() -> anyhow::Result<()> {
 
 	let msg = timeout_s(3, c1.next()).await?.expect("expected message");
 	assert_eq!(msg, Data1("hello const id".into()));
+
+	Ok(())
+}
+
+/// Verifies that a `stream!` declaration with `require_ticket` gates both
+/// producer and consumer sides: only peers with valid tickets are connected.
+#[tokio::test]
+async fn stream_macro_require_ticket() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	let (n0, n1, n2, n3) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+	)?;
+
+	let jwt_validator = JwtValidator::default();
+
+	// n0 and n1 get valid tickets; n2 gets an expired one; n3 gets none.
+	n0.discovery()
+		.add_ticket(jwt_validator.make_valid_ticket(&n0.local().id()));
+	n1.discovery()
+		.add_ticket(jwt_validator.make_valid_ticket(&n1.local().id()));
+	n2.discovery()
+		.add_ticket(jwt_validator.make_expired_ticket(&n2.local().id()));
+
+	let mut p0 = TicketAuthStream::producer(&n0);
+	let mut c1 = TicketAuthStream::consumer(&n1);
+	let c2 = TicketAuthStream::consumer(&n2);
+	let c3 = TicketAuthStream::consumer(&n3);
+
+	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
+
+	// c1 should connect (valid ticket on both sides).
+	timeout_s(3, c1.when().subscribed()).await?;
+
+	// c2 and c3 should not connect.
+	sleep_s(3).await;
+	assert!(
+		!c2.when().subscribed().is_condition_met(),
+		"expired-ticket consumer should not be subscribed"
+	);
+	assert!(
+		!c3.when().subscribed().is_condition_met(),
+		"no-ticket consumer should not be subscribed"
+	);
+
+	// Data flows between n0 and n1.
+	p0.send(Data1("ticket-gated".into())).await?;
+	let msg = timeout_s(3, c1.next()).await?.expect("expected message");
+	assert_eq!(msg, Data1("ticket-gated".into()));
+
+	Ok(())
+}
+
+/// Verifies that a producer-only `stream!` with `require_ticket` rejects
+/// consumers without valid tickets.
+#[tokio::test]
+async fn stream_macro_producer_require_ticket() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	let (n0, n1, n2) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+	)?;
+
+	let jwt_validator = JwtValidator::default();
+
+	n1.discovery()
+		.add_ticket(jwt_validator.make_valid_ticket(&n1.local().id()));
+
+	let mut p0 = ProducerTicketStream::producer(&n0);
+
+	let mut c1 = n1
+		.streams()
+		.consumer::<Data1>()
+		.with_stream_id("producer.ticket.stream")
+		.build();
+
+	let c2 = n2
+		.streams()
+		.consumer::<Data1>()
+		.with_stream_id("producer.ticket.stream")
+		.build();
+
+	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
+
+	timeout_s(3, c1.when().subscribed()).await?;
+
+	sleep_s(2).await;
+	assert!(
+		!c2.when().subscribed().is_condition_met(),
+		"no-ticket consumer should not be subscribed"
+	);
+
+	p0.send(Data1("producer ticket".into())).await?;
+	let msg = timeout_s(3, c1.next()).await?.expect("expected message");
+	assert_eq!(msg, Data1("producer ticket".into()));
+
+	Ok(())
+}
+
+/// Verifies that a consumer-only `stream!` with `require_ticket` only
+/// subscribes to producers with valid tickets.
+#[tokio::test]
+async fn stream_macro_consumer_require_ticket() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	let (n0, n1, n2) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+	)?;
+
+	let jwt_validator = JwtValidator::default();
+
+	n1.discovery()
+		.add_ticket(jwt_validator.make_valid_ticket(&n1.local().id()));
+
+	let mut c0 = ConsumerTicketStream::consumer(&n0);
+
+	let mut p1 = n1
+		.streams()
+		.producer::<Data1>()
+		.with_stream_id("consumer.ticket.stream")
+		.build()?;
+
+	let _p2 = n2
+		.streams()
+		.producer::<Data1>()
+		.with_stream_id("consumer.ticket.stream")
+		.build()?;
+
+	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
+
+	timeout_s(3, c0.when().subscribed()).await?;
+
+	sleep_s(2).await;
+	let producers = c0.producers().map(|p| *p.peer().id()).collect::<Vec<_>>();
+	assert_eq!(producers.len(), 1, "should subscribe to 1 producer only");
+	assert!(producers.contains(&n1.local().id()));
+
+	p1.send(Data1("consumer ticket".into())).await?;
+	let msg = timeout_s(3, c0.next()).await?.expect("expected message");
+	assert_eq!(msg, Data1("consumer ticket".into()));
 
 	Ok(())
 }

@@ -116,3 +116,6 @@ $RECYCLE.BIN/
 
 # Local dev tools and files
 .local
+
+# GitHub Agents
+.github/agents

@@ -7,21 +7,27 @@ use {
 			Groups,
 			StateMachine,
 			bond::{BondEvent, BondEvents, BondId, heartbeat::Heartbeat},
-			error::Timeout,
+			error::{NotAllowed, Timeout},
 			raft,
 			state::WorkerState,
 		},
 		network::{link::*, *},
-		primitives::{Short, UnboundedChannel},
+		primitives::{Expiration, Short, UnboundedChannel},
 	},
 	bytes::Bytes,
-	core::pin::pin,
+	core::{
+		pin::{Pin, pin},
+		time::Duration,
+	},
 	iroh::endpoint::{ApplicationClose, ConnectionError},
 	itertools::Either,
 	std::sync::Arc,
-	tokio::sync::{
-		mpsc::{UnboundedSender, unbounded_channel},
-		watch,
+	tokio::{
+		sync::{
+			mpsc::{UnboundedSender, unbounded_channel},
+			watch,
+		},
+		time::Sleep,
 	},
 	tokio_util::sync::CancellationToken,
 };
@@ -99,6 +105,11 @@ pub struct BondWorker<M: StateMachine> {
 	/// This is the application-level reason that will be sent to the remote peer
 	/// when closing the link over the wire.
 	close_reason: ApplicationClose,
+
+	/// Timer that fires when the remote peer's ticket is expected to expire.
+	/// When it fires, the peer's ticket is re-validated and the bond is
+	/// terminated if the ticket has expired.
+	ticket_expiry: Pin<Box<Sleep>>,
 }
 
 impl<M: StateMachine> BondWorker<M> {
@@ -108,6 +119,13 @@ impl<M: StateMachine> BondWorker<M> {
 		link: Link<Groups>,
 	) -> (Bond<M>, BondEvents<M>) {
 		let mut link = link;
+		let ticket_expiry = Self::sleep_until_expiry(
+			group
+				.config
+				.auth()
+				.and_then(|auth| peer.validate_ticket(auth).ok()),
+		);
+
 		let (peer, peer_rx) = watch::channel(peer);
 		let cancel = group.cancel.child_token();
 		let heartbeat = Heartbeat::new(group.config.consensus());
@@ -131,6 +149,7 @@ impl<M: StateMachine> BondWorker<M> {
 			terminated_tx,
 			pending_sends: UnboundedChannel::default(),
 			close_reason: Cancelled.into(),
+			ticket_expiry,
 		};
 
 		tokio::spawn(bond.run());
@@ -190,6 +209,11 @@ impl<M: StateMachine> BondWorker<M> {
 				() = &mut heartbeat_fail, if !self.cancel.is_cancelled() => {
 					self.on_heartbeat_failed();
 					self.close_reason = Timeout.into();
+				}
+
+				// Ticket expiry timer
+				() = &mut self.ticket_expiry, if !self.cancel.is_cancelled() => {
+					self.on_ticket_expired();
 				}
 			}
 		}
@@ -321,7 +345,27 @@ impl<M: StateMachine> BondWorker<M> {
 	}
 
 	/// Received an update about a change to a group member's peer entry.
-	fn on_peer_entry_update(&self, entry: SignedPeerEntry) {
+	fn on_peer_entry_update(&mut self, entry: SignedPeerEntry) {
+		if let Some(auth) = self.group.config.auth() {
+			match entry.validate_ticket(auth) {
+				Err(_) => {
+					tracing::debug!(
+						peer_id = %Short(entry.id()),
+						network = %self.group.network_id(),
+						group = %Short(self.group.group_id()),
+						"peer no longer authorized",
+					);
+
+					self.close_reason = NotAllowed.into();
+					self.cancel.cancel();
+					return;
+				}
+				Ok(expiration) => {
+					self.ticket_expiry = Self::sleep_until_expiry(Some(expiration));
+				}
+			}
+		}
+
 		if self.group.discovery.feed(entry.clone()) {
 			self.peer.send_modify(|existing| *existing = entry);
 		}
@@ -376,6 +420,43 @@ impl<M: StateMachine> BondWorker<M> {
 	}
 }
 
+/// Ticket expiry handling.
+impl<M: StateMachine> BondWorker<M> {
+	/// Called when the ticket expiry timer fires. Re-validates the peer's
+	/// ticket and terminates the bond if the ticket has expired.
+	fn on_ticket_expired(&mut self) {
+		let Some(auth) = self.group.config.auth() else {
+			return;
+		};
+
+		let entry = self.peer.borrow().clone();
+		match entry.validate_ticket(auth) {
+			Err(_) => {
+				tracing::debug!(
+					peer = %Short(self.link.remote_id()),
+					network = %self.group.network_id(),
+					group = %Short(self.group.group_id()),
+					"ticket expired",
+				);
+
+				self.close_reason = NotAllowed.into();
+				self.cancel.cancel();
+			}
+			Ok(expiration) => {
+				self.ticket_expiry = Self::sleep_until_expiry(Some(expiration));
+			}
+		}
+	}
+
+	/// Creates a sleep future that resolves at the ticket's expiration time.
+	/// If the expiration is `Never` or `None`, the future effectively never
+	/// resolves.
+	fn sleep_until_expiry(expiration: Option<Expiration>) -> Pin<Box<Sleep>> {
+		let duration = expiration.and_then(|e| e.remaining()).unwrap_or(FAR_FUTURE);
+		Box::pin(tokio::time::sleep(duration))
+	}
+}
+
 // commands
 impl<M: StateMachine> BondWorker<M> {
 	fn enqueue_message(&self, message: BondMessage<M>) {
@@ -387,3 +468,5 @@ type SendResult = Result<usize, SendError>;
 type RecvResult<M> = Result<BondMessage<M>, RecvError>;
 
 const BOND_ID_LABEL: &str = "group_bond_id";
+
+const FAR_FUTURE: Duration = Duration::from_secs(365 * 24 * 60 * 60); // 1 year

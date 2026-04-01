@@ -2,13 +2,15 @@ use {
 	core::num::NonZero,
 	futures::{StreamExt, stream::FuturesUnordered},
 	mosaik::{
+		Network,
 		PeerId,
-		groups::{ApplyContext, LogReplaySync, StateMachine},
-		primitives::UniqueId,
+		groups::{ApplyContext, Group, LogReplaySync, StateMachine},
+		primitives::{Short, UniqueId},
 	},
 	serde::{Deserialize, Serialize},
 };
 
+mod auth;
 mod bonds;
 mod builder;
 mod catchup;
@@ -78,6 +80,41 @@ enum CounterCommand {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CounterValueQuery;
+
+pub async fn ensure_bonds_formed<M: StateMachine>(
+	group: &Group<M>,
+	local: &Network,
+	peers: &[&Network],
+	name: &str,
+) {
+	loop {
+		let bonds = group.bonds();
+
+		if bonds.is_empty() {
+			group.bonds().changed().await;
+		}
+
+		tracing::info!(
+			"{name} bonds changed (local = {})",
+			Short(local.local().id())
+		);
+
+		for bond in group.bonds().iter() {
+			tracing::info!("- {name} bonded with: {}", Short(bond.peer().id()));
+		}
+		if peers.iter().all(|p| {
+			group
+				.bonds()
+				.iter()
+				.any(|b| *b.peer().id() == p.local().id())
+		}) {
+			tracing::info!("{name} group fully formed");
+			break;
+		}
+
+		group.bonds().changed().await;
+	}
+}
 
 /// Resolves when all groups have converged on the same leader and returns the
 /// ID of the leader.

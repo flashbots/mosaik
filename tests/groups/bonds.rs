@@ -1,11 +1,8 @@
 use {
+	super::*,
 	crate::utils::{discover_all, timeout_s},
 	futures::future::join_all,
-	mosaik::{
-		groups::{Group, StateMachine},
-		primitives::Short,
-		*,
-	},
+	mosaik::*,
 };
 
 #[tokio::test]
@@ -62,39 +59,4 @@ async fn members_can_see_each_other() -> anyhow::Result<()> {
 	.expect("not all groups formed successfully");
 
 	Ok(())
-}
-
-async fn ensure_bonds_formed<M: StateMachine>(
-	group: &Group<M>,
-	local: &Network,
-	peers: &[&Network],
-	name: &str,
-) {
-	loop {
-		let bonds = group.bonds();
-
-		if bonds.is_empty() {
-			group.bonds().changed().await;
-		}
-
-		tracing::info!(
-			"{name} bonds changed (local = {})",
-			Short(local.local().id())
-		);
-
-		for bond in group.bonds().iter() {
-			tracing::info!("- {name} bonded with: {}", Short(bond.peer().id()));
-		}
-		if peers.iter().all(|p| {
-			group
-				.bonds()
-				.iter()
-				.any(|b| *b.peer().id() == p.local().id())
-		}) {
-			tracing::info!("{name} group fully formed");
-			break;
-		}
-
-		group.bonds().changed().await;
-	}
 }

@@ -46,11 +46,12 @@ if group.is_leader() {
 
 ## Group Identity
 
-A `GroupId` is derived from three components:
+A `GroupId` is derived from up to four components:
 
 1. **Group key** — the shared secret (`GroupKey`)
 2. **Consensus configuration** — election timeouts, heartbeat intervals, etc.
 3. **State machine signature** — the state machine's `signature()` + state sync `signature()`
+4. **Ticket validator signature** (optional) — the `TicketValidator`'s `signature()`, if `.require_ticket()` is configured
 
 Any divergence in these values across nodes produces a different `GroupId`, preventing misconfigured nodes from bonding.
 
@@ -60,20 +61,25 @@ let id = key.secret().hashed()
     .derive(consensus.digest())
     .derive(state_machine.signature())
     .derive(state_machine.state_sync().signature());
+// If require_ticket() is set:
+//   id = id.derive(validator.signature());
 ```
 
 ## Key Types
 
-| Type              | Description                                                      |
-| ----------------- | ---------------------------------------------------------------- |
-| `Groups`          | Public API gateway — one per `Network`                           |
-| `GroupBuilder`    | Typestate builder for configuring and joining a group            |
-| `Group<M>`        | Handle for interacting with a joined group                       |
-| `GroupKey`        | Shared secret for admission control                              |
-| `GroupId`         | Unique identifier (`Digest`) derived from key + config + machine |
-| `Bond` / `Bonds`  | Persistent connections between group members                     |
-| `When`            | Reactive status API for group state changes                      |
-| `ConsensusConfig` | Raft timing parameters                                           |
+| Type                | Description                                                      |
+| ------------------- | ---------------------------------------------------------------- |
+| `Groups`            | Public API gateway — one per `Network`                           |
+| `GroupBuilder`      | Typestate builder for configuring and joining a group            |
+| `Group<M>`          | Handle for interacting with a joined group                       |
+| `GroupKey`          | Shared secret for admission control                              |
+| `GroupId`           | Unique identifier (`Digest`) derived from key + config + machine |
+| `Bond` / `Bonds`    | Persistent connections between group members                     |
+| `When`              | Reactive status API for group state changes                      |
+| `TicketValidator`   | Trait for ticket-based peer authentication during bonding        |
+| `Expiration`        | Validation result: `Never` or `At(DateTime<Utc>)`                |
+| `InvalidTicket`     | Error returned when ticket validation fails                      |
+| `ConsensusConfig`   | Raft timing parameters                                           |
 
 ## ALPN Protocol
 

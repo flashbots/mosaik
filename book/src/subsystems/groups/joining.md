@@ -7,8 +7,10 @@ The `GroupBuilder` uses a **typestate pattern** to ensure groups are configured 
 ```
 groups.with_key(key)
   ├── .join()                          // NoOp machine, InMemoryLogStore
+  ├── .require_ticket(validator)       // ticket-based peer auth (any stage)
   └── .with_state_machine(machine)
         ├── .join()                    // InMemoryLogStore (default)
+        ├── .require_ticket(validator)
         ├── .with_consensus_config(c)
         │     └── .join()
         └── .with_log_storage(store)
@@ -116,6 +118,77 @@ let config = ConsensusConfig::default().deprioritize_leadership_by(5);
 ```
 
 This multiplies both `election_timeout` and `bootstrap_delay`, reducing the chance of becoming leader.
+
+## Ticket-Based Peer Authentication
+
+By default, any peer that knows the `GroupKey` can join a group. To add an
+extra layer of verification, call `.require_ticket()` with a
+`TicketValidator` implementation. During bonding, each peer's discovery
+tickets are checked against the validator -- only peers carrying a valid
+ticket of the expected class are allowed to form bonds.
+
+```rust,ignore
+use mosaik::primitives::TicketValidator;
+use mosaik::discovery::PeerEntry;
+use mosaik::{UniqueId, id, Expiration, InvalidTicket};
+
+struct MyAuth;
+
+impl TicketValidator for MyAuth {
+    fn class(&self) -> UniqueId {
+        id!("my-app.group-auth")
+    }
+
+    fn signature(&self) -> UniqueId {
+        // Must be identical across all group members.
+        // Include any configuration that affects validation.
+        id!("my-app.group-auth.v1")
+    }
+
+    fn validate(
+        &self,
+        ticket: &[u8],
+        peer: &PeerEntry,
+    ) -> Result<Expiration, InvalidTicket> {
+        if ticket.is_empty() {
+            return Err(InvalidTicket);
+        }
+        // Application-specific validation logic.
+        // Return Expiration::Never for non-expiring tickets,
+        // or Expiration::At(datetime) for time-limited ones.
+        Ok(Expiration::Never)
+    }
+}
+
+let group = network.groups()
+    .with_key(key)
+    .with_state_machine(MyStateMachine::new())
+    .require_ticket(MyAuth)
+    .join();
+```
+
+### Key points
+
+- **Affects `GroupId` derivation.** The validator's `signature()` is mixed
+  into the group ID. All members must use the same validator configuration,
+  or they will derive different group IDs and never bond.
+- **Peers must attach tickets via discovery.** Each peer calls
+  `network.discovery().add_ticket(ticket)` with a `Ticket` whose `class`
+  matches the validator's `class()`. See
+  [Auth Tickets](../discovery/tickets.md) for details.
+- **Revocation is automatic.** If a bonded peer removes its ticket (or the
+  ticket expires and fails re-validation), the bond is terminated.
+- **Expiration-aware bonds.** When `validate` returns
+  `Ok(Expiration::At(time))`, the bond worker schedules a timer. When the
+  ticket expires, the peer's ticket is re-validated automatically. If
+  re-validation fails, the bond is terminated with `NotAllowed`. Peers can
+  refresh their ticket by publishing a new one via discovery — the bond
+  worker picks up the updated expiration on the next peer entry update.
+- **`GroupKey` can be derived from the validator.** Instead of manually
+  generating a key, you can use `GroupKey::from(&validator)` to derive a
+  deterministic key from the validator's `signature()`.
+- **Accepts `Box<dyn TicketValidator>` and `Arc<dyn TicketValidator>`** in
+  addition to concrete types.
 
 ## Idempotent Joins
 

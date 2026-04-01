@@ -195,13 +195,14 @@ declare::stream!(pub PriceFeed = PriceUpdate, "oracle.price",
 
 #### Ambiguous keys (prefix with `producer` or `consumer`)
 
-| Key           | Description                                                |
-| ------------- | ---------------------------------------------------------- |
-| `require`     | Conditions for accepting a consumer or producer connection |
-| `online_when` | Conditions for the stream to be considered online          |
+| Key              | Description                                                |
+| ---------------- | ---------------------------------------------------------- |
+| `require`        | Conditions for accepting a consumer or producer connection |
+| `require_ticket` | Expiration-aware ticket validator (see below)              |
+| `online_when`    | Conditions for the stream to be considered online          |
 
-Without a prefix, `online_when` applies to **both** sides. Use
-`producer online_when` or `consumer online_when` to target one:
+Without a prefix, ambiguous keys apply to **both** sides. Use
+`producer` or `consumer` prefixes to target one:
 
 ```rust,ignore
 stream!(pub PriceFeed = PriceUpdate,
@@ -209,6 +210,24 @@ stream!(pub PriceFeed = PriceUpdate,
     consumer online_when: |c| c.minimum_of(1),
 );
 ```
+
+#### Ticket validator
+
+The `require_ticket` key accepts an expression that implements
+`TicketValidator`. It maps to `.with_ticket_validator(expr)` on the
+underlying builder. When the ticket expires, the connection is
+automatically terminated:
+
+```rust,ignore
+use mosaik::*;
+
+declare::stream!(pub AuthFeed = PriceUpdate, "auth.feed",
+    require_ticket: MyJwtValidator::new(),
+);
+```
+
+See [Discovery > Auth Tickets](../discovery/tickets.md) for the
+`TicketValidator` trait and JWT examples.
 
 ### Usage
 

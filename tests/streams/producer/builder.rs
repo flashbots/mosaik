@@ -17,11 +17,7 @@ async fn multiple_producers_one_stream() -> anyhow::Result<()> {
 		.build()
 		.unwrap();
 
-	let p0_dup = n0
-		.streams()
-		.producer::<Data1>()
-		.require(|_| false)
-		.build();
+	let p0_dup = n0.streams().producer::<Data1>().require(|_| false).build();
 
 	// should error because a producer for Data1 already exists
 	// and we are using the builder API to create a new one with custom

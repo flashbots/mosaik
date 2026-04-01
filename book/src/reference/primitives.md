@@ -64,6 +64,11 @@ const MY_ID: UniqueId = unique_id!("a1b2c3d4e5f6...");  // identical, longer nam
 Both accept either a 64-character hex string (decoded directly) or any other
 string (hashed with blake3).
 
+#### `id!` vs `unique_id!`
+
+The `id!` macro is a short alias for `unique_id!` — both produce a compile-time
+`UniqueId` from a string literal. Use whichever reads more naturally.
+
 ### Display
 
 - `Display` — short hex (first 5 bytes): `a1b2c3d4e5`

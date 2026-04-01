@@ -2,6 +2,7 @@ use {
 	crate::{
 		GroupKey,
 		groups::{ConsensusConfig, GroupId, StateMachine, StateSync},
+		primitives::TicketValidator,
 	},
 	core::time::Duration,
 	derive_builder::Builder,
@@ -30,11 +31,11 @@ impl Config {
 /// This set of values is used to derive the group id and must be identical
 /// across all members of the group, to ensure that they all run the same
 /// consensus parameters.
-#[derive(Debug, Clone)]
 pub struct GroupConfig {
 	id: GroupId,
 	key: GroupKey,
 	consensus: ConsensusConfig,
+	auth: Option<Box<dyn TicketValidator>>,
 }
 
 impl GroupConfig {
@@ -42,15 +43,25 @@ impl GroupConfig {
 		key: GroupKey,
 		consensus: ConsensusConfig,
 		state_machine: &impl StateMachine,
+		auth: Option<Box<dyn TicketValidator>>,
 	) -> Self {
-		let id = key
+		let mut id = key
 			.secret()
 			.hashed()
 			.derive(consensus.digest())
 			.derive(state_machine.signature())
 			.derive(state_machine.state_sync().signature());
 
-		Self { id, key, consensus }
+		if let Some(ref auth) = auth {
+			id = id.derive(auth.signature());
+		}
+
+		Self {
+			id,
+			key,
+			consensus,
+			auth,
+		}
 	}
 
 	pub const fn group_id(&self) -> &GroupId {
@@ -63,5 +74,9 @@ impl GroupConfig {
 
 	pub const fn consensus(&self) -> &ConsensusConfig {
 		&self.consensus
+	}
+
+	pub fn auth(&self) -> Option<&dyn TicketValidator> {
+		self.auth.as_ref().map(|auth| auth.as_ref())
 	}
 }

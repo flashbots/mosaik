@@ -192,6 +192,20 @@ impl PeerEntry {
 		self.tickets_of(class).any(move |t| validator(&t.data))
 	}
 
+	/// Validates the peer's tickets of the given class using the provided
+	/// ticket validator, returning the expiration of the longest valid ticket if
+	/// any.
+	pub fn validate_ticket(
+		&self,
+		validator: &dyn TicketValidator,
+	) -> Result<Expiration, InvalidTicket> {
+		self
+			.tickets_of(validator.class())
+			.filter_map(|t| validator.validate(&t.data, self).ok())
+			.max()
+			.ok_or(InvalidTicket)
+	}
+
 	/// The update version of the peer entry.
 	///
 	/// This is incremented each time the peer entry is updated.

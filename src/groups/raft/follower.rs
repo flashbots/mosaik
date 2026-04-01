@@ -3,11 +3,11 @@ use {
 		PeerId,
 		groups::{
 			CommandError,
-			QueryResultAt,
 			Index,
 			IndexRange,
 			LeadershipPreference,
 			QueryError,
+			QueryResultAt,
 			StateMachine,
 			StateSync,
 			StateSyncSession,

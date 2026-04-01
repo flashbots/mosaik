@@ -221,9 +221,14 @@ where
 	fn on_catalog_update(&mut self, snapshot: Catalog) {
 		// Find new peers that have joined the group but are not yet tracked
 		// by this worker loop.
-		let new_peers_in_group = snapshot
-			.signed_peers()
-			.filter(|peer| peer.groups().contains(self.state.group_id()));
+		let new_peers_in_group = snapshot.signed_peers().filter(|peer| {
+			peer.groups().contains(self.state.group_id())
+				&& self
+					.state
+					.config
+					.auth()
+					.is_none_or(|auth| peer.validate_ticket(auth).is_ok())
+		});
 
 		for peer in new_peers_in_group {
 			self.create_bond(peer.clone());

@@ -31,7 +31,16 @@ pub use {
 	},
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},
-	primitives::{Datum, Digest, Tag, Ticket, UniqueId},
+	primitives::{
+		Datum,
+		Digest,
+		Expiration,
+		InvalidTicket,
+		Tag,
+		Ticket,
+		TicketValidator,
+		UniqueId,
+	},
 	streams::{
 		ConsumerOf,
 		Criteria,

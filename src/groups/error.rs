@@ -19,6 +19,9 @@ pub enum Error {
 	#[error("Invalid group secret key proof provided")]
 	InvalidGroupKeyProof,
 
+	#[error("Authentication failed")]
+	AuthFailed,
+
 	#[error("Link error: {0}")]
 	Link(#[from] LinkError),
 
@@ -120,6 +123,11 @@ impl<M: StateMachine> Debug for QueryError<M> {
 network::make_close_reason!(
 	/// An error occurred during the handshake receive or decode process.
 	pub struct InvalidHandshake, 30_400);
+
+network::make_close_reason!(
+	/// The peer is not allowed to join the group because it does not
+	/// have a valid authentication ticket.
+	pub struct NotAllowed, 30_403);
 
 network::make_close_reason!(
 	/// The group id specified in the handshake is not known to the accepting node.

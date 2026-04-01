@@ -55,7 +55,7 @@ use {
 			Groups,
 			StateMachine,
 			bond::worker::WorkerCommand,
-			error::InvalidProof,
+			error::{InvalidProof, NotAllowed},
 			raft,
 			state::WorkerState,
 		},
@@ -219,6 +219,19 @@ impl<M: StateMachine> Bond<M> {
 		group: Arc<WorkerState<M>>,
 		peer: SignedPeerEntry,
 	) -> Result<(Self, BondEvents<M>), Error> {
+		if let Some(auth) = group.config.auth()
+			&& peer.validate_ticket(auth).is_err()
+		{
+			tracing::debug!(
+				network = %group.network_id(),
+				peer = %Short(peer.id()),
+				group = %Short(group.group_id()),
+				"bonding failed: no valid auth ticket",
+			);
+
+			return Err(Error::AuthFailed);
+		}
+
 		// attempt to establish a new wire link to the remote peer
 		let mut link = group
 			.local
@@ -278,20 +291,18 @@ impl<M: StateMachine> Bond<M> {
 					// retry creating the bond after syncing the catalog
 					return Box::pin(Self::create(group, peer)).await;
 				}
-				// The remote peer rejected our authentication proof.
-				// This is an unrecoverable error in the current set of authorization
-				// schemes and most likely indicates an incompatible version of the peer
-				// or a malicious actor.
-				Some(reason) if reason == InvalidProof => {
+				// The remote peer rejected our authentication proof or missing tickets.
+				// This is an unrecoverable error.
+				Some(reason) if reason == InvalidProof || reason == NotAllowed => {
 					tracing::warn!(
 						network = %group.network_id(),
 						peer = %Short(peer.id()),
 						group = %Short(group.group_id()),
-						"remote peer rejected bond handshake due to invalid proof",
+						"remote peer rejected: authentication failed",
 					);
 
 					link
-						.close(InvalidProof)
+						.close(reason.clone())
 						.await
 						.map_err(|e| Error::Link(e.into()))?;
 
@@ -347,6 +358,24 @@ impl<M: StateMachine> Bond<M> {
 		handshake: HandshakeStart,
 	) -> Result<(Self, BondEvents<M>), Error> {
 		let mut link = link;
+
+		if let Some(auth) = group.config.auth()
+			&& peer.validate_ticket(auth).is_err()
+		{
+			tracing::debug!(
+				network = %group.network_id(),
+				peer = %Short(peer.id()),
+				group = %Short(group.group_id()),
+				"rejecting bond: no valid auth ticket",
+			);
+
+			link
+				.close(NotAllowed)
+				.await
+				.map_err(|e| Error::Link(e.into()))?;
+
+			return Err(Error::AuthFailed);
+		}
 
 		// verify the remote peer's proof of knowledge of the group secret
 		if !group.validate_key_proof(&link, handshake.proof) {
