@@ -101,7 +101,7 @@ async fn bond_terminated_on_ticket_revocation() -> anyhow::Result<()> {
 	let key = GroupKey::from_secret("auth-revocation-test-secret");
 
 	let (n0, n1) =
-		tokio::try_join!(Network::new(network_id), Network::new(network_id),)?;
+		tokio::try_join!(Network::new(network_id), Network::new(network_id))?;
 
 	let jwt_validator = Arc::new(JwtValidator::default());
 
@@ -221,7 +221,7 @@ async fn mismatched_auth_config_prevents_bonding() -> anyhow::Result<()> {
 	let key = GroupKey::from_secret("auth-mismatch-test-secret");
 
 	let (n0, n1) =
-		tokio::try_join!(Network::new(network_id), Network::new(network_id),)?;
+		tokio::try_join!(Network::new(network_id), Network::new(network_id))?;
 
 	timeout_s(T, discover_all([&n0, &n1])).await??;
 

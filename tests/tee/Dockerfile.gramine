@@ -1,0 +1,51 @@
+# ─── Stage 1: cross-compile group-chat for x86_64 ────────────────────────────
+#
+# The builder runs natively on the host platform (ARM64 on Apple Silicon).
+# gcc-x86-64-linux-gnu is a true cross-compiler — no QEMU involved.
+# This avoids the QEMU/rustc SIGSEGV that occurs when emulating linux/amd64
+# on Apple Silicon.
+FROM rust:slim AS builder
+
+RUN rustup target add x86_64-unknown-linux-gnu \
+ && apt-get update -qq \
+ && apt-get install -y --no-install-recommends \
+      gcc-x86-64-linux-gnu \
+      libc6-dev-amd64-cross \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-linux-gnu-gcc \
+    CC_x86_64_unknown_linux_gnu=x86_64-linux-gnu-gcc
+
+WORKDIR /build
+COPY . .
+
+RUN cargo build --release \
+      --target x86_64-unknown-linux-gnu \
+      -p group-chat
+
+# ─── Stage 2: Gramine simulation (TEE emulation, no SGX hardware needed) ─────
+#
+# linux/amd64 is required: Gramine's LibOS targets x86_64 Linux.
+# On Apple Silicon, Docker uses Rosetta only for this lightweight stage
+# (manifest compilation is fast Python/Jinja2, not rustc).
+#
+# gramine-direct = simulation mode. Replace with gramine-sgx on real hardware
+# after signing the manifest with a production key.
+FROM --platform=linux/amd64 gramineproject/gramine:1.8-jammy
+
+COPY --from=builder \
+  /build/target/x86_64-unknown-linux-gnu/release/group-chat \
+  /app/group-chat
+
+COPY tests/tee/group-chat.manifest.template /app/group-chat.manifest.template
+
+WORKDIR /app
+
+# Compile the manifest (simulation mode — no signing key required).
+RUN gramine-manifest \
+      -Darch_libdir=/lib/x86_64-linux-gnu \
+      group-chat.manifest.template \
+      group-chat.manifest
+
+ENTRYPOINT ["gramine-direct", "/app/group-chat"]
+CMD ["--nickname", "node", "--room", "tee-test"]
