@@ -1,0 +1,48 @@
+# TEE-attested stream scenario for tee-streams.
+#
+# Three nodes (Alice, Bob, Charlie) each run the tee-streams binary inside
+# Gramine simulation mode (gramine-direct).  In simulation the MRENCLAVE is
+# all-zeros, so all nodes report the same measurement and mutually authenticate.
+# On real SGX hardware (gramine-sgx + signed manifest) they would use genuine
+# measurements.
+#
+# Usage:
+#   # Build and start all three nodes (detached):
+#   docker compose -f tests/tee/docker-compose-streams.yml up --build -d
+#
+#   # Follow logs from all nodes:
+#   docker compose -f tests/tee/docker-compose-streams.yml logs -f
+#
+#   # Tear down:
+#   docker compose -f tests/tee/docker-compose-streams.yml down
+
+name: mosaik-tee-streams
+
+x-tee-node: &tee-node
+  build:
+    context: ../..
+    dockerfile: tests/tee/Dockerfile.tee-streams
+  restart: unless-stopped
+
+services:
+  alice:
+    <<: *tee-node
+    container_name: tee-streams-alice
+    command: ["--nickname", "Alice", "--room", "tee-streams-lobby"]
+
+  bob:
+    <<: *tee-node
+    container_name: tee-streams-bob
+    command: ["--nickname", "Bob", "--room", "tee-streams-lobby"]
+    # Give Alice a moment to start and advertise itself via DHT before Bob joins.
+    depends_on:
+      alice:
+        condition: service_started
+
+  charlie:
+    <<: *tee-node
+    container_name: tee-streams-charlie
+    command: ["--nickname", "Charlie", "--room", "tee-streams-lobby"]
+    depends_on:
+      bob:
+        condition: service_started

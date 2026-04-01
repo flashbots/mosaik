@@ -9,6 +9,9 @@ pub mod network;
 pub mod primitives;
 pub mod streams;
 
+#[cfg(feature = "sgx")]
+pub mod tee;
+
 #[doc(hidden)]
 pub use mosaik_macros::{__collection_impl, __stream_impl, __unique_id_impl};
 pub use {

@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "src/macros", "examples/orderbook", "examples/group-chat"]
+members = [".", "src/macros", "examples/orderbook", "examples/group-chat", "examples/tee-streams"]
 default-members = [".", "src/macros"]
 resolver = "2"
 
@@ -68,6 +68,7 @@ workspace = true
 [features]
 default = ["cli"]
 cli = ["clap", "colored"]
+sgx = ["sgx-isa"]
 
 [dependencies]
 tokio.workspace = true
@@ -109,6 +110,9 @@ pkarr = "5.0"
 b58 = "0.1"
 arrayvec = "0.7"
 serde_bytes = "0.11"
+
+# SGX-specific dependencies
+sgx-isa = { version = "0.4", optional = true }
 
 # CLI-specific dependencies
 colored = { version = "3.1", optional = true }

@@ -1,0 +1,50 @@
+# Gramine manifest for tee-streams (dynamically linked, x86_64-unknown-linux-gnu).
+#
+# Works for both simulation (gramine-direct) and real SGX (gramine-sgx).
+# For real SGX: set sgx.debug = false, sign with gramine-sgx-sign, and
+# change the Dockerfile ENTRYPOINT to gramine-sgx.
+#
+# The tee-streams binary reads its own MRENCLAVE via /dev/attestation/report,
+# which Gramine exposes when running under gramine-direct (returning
+# zeroed measurements) or gramine-sgx (returning the genuine measurement).
+
+loader.entrypoint = "file:{{ gramine.libos }}"
+libos.entrypoint  = "/app/tee-streams"
+loader.log_level  = "error"
+
+loader.env.LD_LIBRARY_PATH = "/lib:{{ arch_libdir }}"
+loader.env.HOME            = "/tmp"
+loader.env.RUST_LOG        = { passthrough = true }
+loader.env.RUST_BACKTRACE  = { passthrough = true }
+
+fs.mounts = [
+  # glibc and dynamic linker (ld-linux, libc, libpthread, …)
+  { path = "/lib",              uri = "file:{{ gramine.runtimedir() }}" },
+  { path = "{{ arch_libdir }}", uri = "file:{{ arch_libdir }}"          },
+  # Application binary
+  { path = "/app",              uri = "file:/app"                       },
+  # Scratch space for tokio temp files and iroh local state
+  { path = "/tmp",              type = "tmpfs"                          },
+  # CA certificates for TLS connections to iroh relay servers
+  { path = "/etc/ssl/certs",    uri = "file:/etc/ssl/certs"             },
+]
+
+# Tokio's async runtime uses eventfd for cross-thread waking.
+sys.insecure__allow_eventfd = true
+
+sys.stack.size = "8M"
+
+# ─── SGX-specific settings (ignored by gramine-direct) ───────────────────────
+
+# Keep debug = true during development; set false for production.
+sgx.debug        = true
+sgx.enclave_size = "512M"
+sgx.max_threads  = 64
+
+sgx.trusted_files = [
+  "file:{{ gramine.libos }}",
+  "file:{{ gramine.runtimedir() }}/",
+  "file:{{ arch_libdir }}/",
+  "file:/app/tee-streams",
+  "file:/etc/ssl/certs/",
+]
