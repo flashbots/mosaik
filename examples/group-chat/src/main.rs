@@ -11,10 +11,18 @@
 
 use {
 	clap::Parser,
-	mosaik::{Network, NetworkId, StoreId, collections, unique_id},
+	mosaik::{
+		Network,
+		NetworkId,
+		PeerId,
+		StoreId,
+		collections,
+		discovery,
+		unique_id,
+	},
 	serde::{Deserialize, Serialize},
-	std::{io::BufRead, time::Duration},
-	tokio::sync::mpsc,
+	std::{collections::HashMap, io::BufRead, time::Duration},
+	tokio::{sync::mpsc, time::timeout},
 };
 
 /// Shared store IDs — all participants must use these exact IDs to join the
@@ -53,6 +61,10 @@ struct Args {
 	/// Room name — everyone with the same room name joins the same chat.
 	#[arg(short, long, default_value = "lobby")]
 	room: String,
+
+	/// Optional peer IDs to connect to directly
+	#[arg(short, long)]
+	peer: Vec<PeerId>,
 }
 
 #[tokio::main]
@@ -61,12 +73,16 @@ async fn main() -> anyhow::Result<()> {
 
 	// Each room is its own mosaik network, derived from the hardcoded network id
 	// salt and the room name.
-	let network = Network::new(NETWORK_SALT.derive(args.room.as_str())).await?;
+	let network = Network::builder(NETWORK_SALT.derive(args.room.as_str()))
+		.with_discovery(discovery::Config::builder().with_bootstrap(args.peer))
+		.build()
+		.await?;
 
 	println!(
 		"Joining room '{}' as \x1b[{}m{}\x1b[0m ...",
 		args.room, args.color, args.nickname
 	);
+	println!("local peer id: {}", network.local().id());
 
 	// Two replicated collections shared across all participants.
 	//   users    — Map<node-id, UserInfo>   who is in the room
@@ -88,8 +104,9 @@ async fn main() -> anyhow::Result<()> {
 		.ok();
 
 	// Print current participants and any existing message history.
-	println!("--- {} participant(s) ---", users.len());
-	for (_, u) in users.iter() {
+	let initial_users: HashMap<String, UserInfo> = users.iter().collect();
+	println!("--- {} participant(s) ---", initial_users.len());
+	for u in initial_users.values() {
 		println!("  \x1b[{}m{}\x1b[0m", u.color, u.nickname);
 	}
 	let history: Vec<_> = messages.iter().collect();
@@ -113,11 +130,16 @@ async fn main() -> anyhow::Result<()> {
 	});
 
 	let mut displayed = history.len();
+	let mut known_users = initial_users;
+	let my_id = network.local().id().to_string();
 
 	loop {
-		// Wait for a typed message or a short timeout to refresh the display.
+		// Wait for a typed message, Ctrl-C, or a short timeout.
 		tokio::select! {
 			Some(text) = rx.recv() => {
+				// Erase the echoed input line so only the propagated message
+				// is displayed (move up one line, clear it, return to col 0).
+				print!("\x1b[1A\x1b[2K\r");
 				let m = Message {
 					from: args.nickname.clone(),
 					color: args.color,
@@ -125,7 +147,40 @@ async fn main() -> anyhow::Result<()> {
 				};
 				messages.push_back(m).await.ok();
 			}
+			_ = tokio::signal::ctrl_c() => {
+				timeout(Duration::from_secs(5), users.remove(&my_id)).await.ok();
+				return Ok(());
+			}
 			() = tokio::time::sleep(Duration::from_millis(100)) => {}
+		}
+
+		// Diff the user map to detect joins and leaves (skip our own id
+		// to avoid spurious self-notifications during Raft reconciliation).
+		let current_users: HashMap<String, UserInfo> = users.iter().collect();
+		for (id, info) in &current_users {
+			if id != &my_id && !known_users.contains_key(id) {
+				println!("* \x1b[{}m{}\x1b[0m joined", info.color, info.nickname);
+			}
+		}
+		for (id, info) in &known_users {
+			if id != &my_id && !current_users.contains_key(id) {
+				println!("* \x1b[{}m{}\x1b[0m left", info.color, info.nickname);
+			}
+		}
+		known_users = current_users;
+
+		// Re-register ourselves if our entry was lost (e.g. when two nodes
+		// start simultaneously, each forms its own single-node Raft group and
+		// the loser's log — including its own insert — is discarded during
+		// reconciliation).
+		if !known_users.contains_key(&my_id) {
+			users
+				.insert(my_id.clone(), UserInfo {
+					nickname: args.nickname.clone(),
+					color: args.color,
+				})
+				.await
+				.ok();
 		}
 
 		// Print any messages that have arrived (from us or others) since last tick.
