@@ -1,14 +1,18 @@
 use {
 	super::*,
-	crate::utils::{JwtValidator, discover_all, sleep_s, timeout_s},
-	mosaik::{GroupKey, Network, NetworkId, tickets::TicketValidator},
-	std::sync::Arc,
+	crate::utils::{JwtIssuer, discover_all, sleep_s, timeout_s},
+	mosaik::{
+		GroupKey,
+		Network,
+		NetworkId,
+		tickets::{TicketValidator, jwt::JwtTicketValidator},
+	},
 };
 
 /// Verifies that peers with valid JWT tickets can bond within an auth-gated
 /// group, while peers without tickets or with expired tickets are excluded.
 #[tokio::test]
-async fn authorized_peers_can_bond() -> anyhow::Result<()> {
+async fn jwt_authorized_peers_can_bond() -> anyhow::Result<()> {
 	const T: u64 = 8;
 
 	let network_id = NetworkId::random();
@@ -22,11 +26,13 @@ async fn authorized_peers_can_bond() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let jwt_validator = Arc::new(JwtValidator::default());
+	let jwt_issuer = JwtIssuer::default();
+	let jwt_validator = JwtTicketValidator::with_key(jwt_issuer.key())
+		.allow_issuer(jwt_issuer.issuer());
 
-	let n0_ticket = jwt_validator.make_valid_ticket(&n0.local().id());
-	let n1_ticket = jwt_validator.make_valid_ticket(&n1.local().id());
-	let n2_ticket = jwt_validator.make_expired_ticket(&n2.local().id());
+	let n0_ticket = jwt_issuer.make_valid_ticket(&n0.local().id());
+	let n1_ticket = jwt_issuer.make_valid_ticket(&n1.local().id());
+	let n2_ticket = jwt_issuer.make_expired_ticket(&n2.local().id());
 
 	n0.discovery().add_ticket(n0_ticket);
 	n1.discovery().add_ticket(n1_ticket);
@@ -94,7 +100,7 @@ async fn authorized_peers_can_bond() -> anyhow::Result<()> {
 /// revoked (i.e. removed from its discovery entry), as detected via the
 /// `PeerEntryUpdate` message path in the bond worker.
 #[tokio::test]
-async fn bond_terminated_on_ticket_revocation() -> anyhow::Result<()> {
+async fn bond_terminated_on_jwt_ticket_revocation() -> anyhow::Result<()> {
 	const T: u64 = 8;
 
 	let network_id = NetworkId::random();
@@ -103,10 +109,12 @@ async fn bond_terminated_on_ticket_revocation() -> anyhow::Result<()> {
 	let (n0, n1) =
 		tokio::try_join!(Network::new(network_id), Network::new(network_id))?;
 
-	let jwt_validator = Arc::new(JwtValidator::default());
+	let jwt_issuer = JwtIssuer::default();
+	let jwt_validator = JwtTicketValidator::with_key(jwt_issuer.key())
+		.allow_issuer(jwt_issuer.issuer());
 
-	let n0_ticket = jwt_validator.make_valid_ticket(&n0.local().id());
-	let n1_ticket = jwt_validator.make_valid_ticket(&n1.local().id());
+	let n0_ticket = jwt_issuer.make_valid_ticket(&n0.local().id());
+	let n1_ticket = jwt_issuer.make_valid_ticket(&n1.local().id());
 
 	n0.discovery().add_ticket(n0_ticket);
 	n1.discovery().add_ticket(n1_ticket);
@@ -160,16 +168,18 @@ async fn bond_terminated_on_ticket_revocation() -> anyhow::Result<()> {
 /// the validator's signature, and that two nodes using the same validator
 /// configuration can form a bond without a manually provided secret.
 #[tokio::test]
-async fn group_key_derived_from_validator() -> anyhow::Result<()> {
+async fn group_key_derived_from_jwt_validator() -> anyhow::Result<()> {
 	const T: u64 = 8;
 
 	let network_id = NetworkId::random();
-	let auth = Arc::new(JwtValidator::default());
+	let issuer = JwtIssuer::default();
+	let jwt_validator =
+		JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	// Both nodes derive their GroupKey from the same validator — no manual
 	// secret involved. The derived key must be identical on both sides.
-	let key = GroupKey::from(&auth);
-	let key2 = GroupKey::from(&auth);
+	let key = GroupKey::from(&jwt_validator);
+	let key2 = GroupKey::from(&jwt_validator);
 	assert_eq!(
 		key, key2,
 		"same validator config must produce identical key"
@@ -178,8 +188,8 @@ async fn group_key_derived_from_validator() -> anyhow::Result<()> {
 	let (n0, n1) =
 		tokio::try_join!(Network::new(network_id), Network::new(network_id))?;
 
-	let n0_ticket = auth.make_valid_ticket(&n0.local().id());
-	let n1_ticket = auth.make_valid_ticket(&n1.local().id());
+	let n0_ticket = issuer.make_valid_ticket(&n0.local().id());
+	let n1_ticket = issuer.make_valid_ticket(&n1.local().id());
 	n0.discovery().add_ticket(n0_ticket);
 	n1.discovery().add_ticket(n1_ticket);
 
@@ -189,14 +199,14 @@ async fn group_key_derived_from_validator() -> anyhow::Result<()> {
 		.groups()
 		.with_key(key)
 		.with_state_machine(Counter::default())
-		.require_ticket(auth.clone())
+		.require_ticket(jwt_validator.clone())
 		.join();
 
 	let g1 = n1
 		.groups()
 		.with_key(key)
 		.with_state_machine(Counter::default())
-		.require_ticket(auth.clone())
+		.require_ticket(jwt_validator.clone())
 		.join();
 
 	assert_eq!(
@@ -214,7 +224,7 @@ async fn group_key_derived_from_validator() -> anyhow::Result<()> {
 /// Verifies that nodes with different auth configurations (different validator
 /// signatures) derive different group IDs and never attempt to bond.
 #[tokio::test]
-async fn mismatched_auth_config_prevents_bonding() -> anyhow::Result<()> {
+async fn mismatched_jwt_auth_config_prevents_bonding() -> anyhow::Result<()> {
 	const T: u64 = 5;
 
 	let network_id = NetworkId::random();
@@ -225,7 +235,9 @@ async fn mismatched_auth_config_prevents_bonding() -> anyhow::Result<()> {
 
 	timeout_s(T, discover_all([&n0, &n1])).await??;
 
-	let jwt_validator = JwtValidator::default();
+	let issuer = JwtIssuer::default();
+	let jwt_validator =
+		JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	// n0 uses the JWT auth validator
 	let g0 = n0

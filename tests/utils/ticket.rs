@@ -8,24 +8,24 @@ use {
 		UniqueId,
 		discovery::PeerEntry,
 		id,
-		tickets::{Expiration, InvalidTicket, TicketValidator},
+		tickets::{self, Expiration, InvalidTicket, TicketValidator},
 	},
 };
 
 /// A JWT-based [`TicketValidator`] for producer-side stream authentication.
-pub struct JwtValidator {
+pub struct JwtIssuer {
 	key: Hmac<sha2::Sha256>,
 	issuer: &'static str,
 	secret: &'static str,
 }
 
-impl Default for JwtValidator {
+impl Default for JwtIssuer {
 	fn default() -> Self {
 		Self::new("mosaik.test.jwt.issuer", "mosaik.test.jwt.secret")
 	}
 }
 
-impl JwtValidator {
+impl JwtIssuer {
 	pub fn new(issuer: &'static str, secret: &'static str) -> Self {
 		Self {
 			key: Hmac::new_from_slice(secret.as_bytes()).unwrap(),
@@ -34,16 +34,28 @@ impl JwtValidator {
 		}
 	}
 
+	pub const fn secret(&self) -> &[u8] {
+		self.secret.as_bytes()
+	}
+
+	pub const fn issuer(&self) -> &str {
+		self.issuer
+	}
+
+	pub fn key(&self) -> Hmac<sha2::Sha256> {
+		self.key.clone()
+	}
+
 	pub fn make_ticket(
 		&self,
 		peer_id: &PeerId,
 		expiration: Expiration,
 	) -> Ticket {
 		Ticket::new(
-			self.class(),
+			tickets::jwt::JwtTicketValidator::CLASS,
 			jwt::Claims::new(RegisteredClaims {
 				issuer: Some(self.issuer.to_string()),
-				subject: Some(peer_id.to_string()),
+				subject: Some(peer_id.to_string().to_lowercase()),
 				expiration: match expiration {
 					Expiration::Never => None,
 					Expiration::At(ts) => Some(ts.timestamp().cast_unsigned()),
@@ -74,39 +86,5 @@ impl JwtValidator {
 	pub fn make_valid_ticket(&self, peer_id: &PeerId) -> Ticket {
 		let expiration_time = chrono::Utc::now() + chrono::Duration::hours(1);
 		self.make_ticket(peer_id, Expiration::At(expiration_time))
-	}
-}
-
-impl TicketValidator for JwtValidator {
-	fn class(&self) -> UniqueId {
-		id!("mosaik.test.jwt_ticket_validator")
-	}
-
-	fn signature(&self) -> UniqueId {
-		self.class().derive(self.issuer).derive(self.secret)
-	}
-
-	fn validate(
-		&self,
-		ticket: &[u8],
-		peer: &PeerEntry,
-	) -> Result<Expiration, InvalidTicket> {
-		let jwt_str = core::str::from_utf8(ticket).map_err(|_| InvalidTicket)?;
-		let claims: jwt::Claims = jwt_str
-			.verify_with_key(&self.key)
-			.map_err(|_| InvalidTicket)?;
-		let now = chrono::Utc::now().timestamp().cast_unsigned();
-		let exp = claims.registered.expiration;
-		if claims.registered.issuer.as_deref() != Some(self.issuer)
-			|| claims.registered.subject != Some(peer.id().to_string())
-			|| exp <= Some(now)
-		{
-			return Err(InvalidTicket);
-		}
-		Ok(
-			exp
-				.and_then(|ts| chrono::DateTime::from_timestamp(ts.cast_signed(), 0))
-				.map_or(Expiration::Never, Expiration::At),
-		)
 	}
 }

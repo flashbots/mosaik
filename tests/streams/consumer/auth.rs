@@ -1,11 +1,11 @@
 use {
 	super::*,
-	crate::utils::{JwtValidator, discover_all, sleep_s, timeout_s},
+	crate::utils::{JwtIssuer, discover_all, sleep_s, timeout_s},
 	core::time::Duration,
 	futures::{SinkExt, StreamExt},
 	hmac::{Hmac, digest::KeyInit},
 	jwt::{RegisteredClaims, SignWithKey, VerifyWithKey},
-	mosaik::{primitives::Short, *},
+	mosaik::{primitives::Short, tickets::jwt::JwtTicketValidator, *},
 };
 
 /// Verifies that calling `require` multiple times composes predicates with
@@ -152,7 +152,7 @@ async fn by_tag() -> anyhow::Result<()> {
 /// tickets and refuse to subscribe to producers that do not present a valid
 /// ticket.
 #[tokio::test]
-async fn by_ticket() -> anyhow::Result<()> {
+async fn by_jwt_ticket() -> anyhow::Result<()> {
 	const TICKET_CLASS: UniqueId = id!("mosaik.test.jwt");
 	const JWT_SECRET: &[u8] = b"some-test-secret";
 	const JWT_ISSUER: &str = "mosaik.test.jwt.issuer";
@@ -320,7 +320,7 @@ async fn dynamic_tag_reevaluation() -> anyhow::Result<()> {
 /// that present a valid JWT ticket: valid ticket → subscribed,
 /// expired ticket or no ticket → rejected.
 #[tokio::test]
-async fn with_ticket_validator() -> anyhow::Result<()> {
+async fn with_jwt_ticket_validator() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 
 	let (n0, n1, n2, n3) = tokio::try_join!(
@@ -330,11 +330,11 @@ async fn with_ticket_validator() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let jwt_validator = JwtValidator::default();
+	let jwt_issuer = JwtIssuer::default();
 
 	// n1 gets a valid ticket, n2 an expired one, n3 none
-	let n1_ticket = jwt_validator.make_valid_ticket(&n1.local().id());
-	let n2_ticket = jwt_validator.make_expired_ticket(&n2.local().id());
+	let n1_ticket = jwt_issuer.make_valid_ticket(&n1.local().id());
+	let n2_ticket = jwt_issuer.make_expired_ticket(&n2.local().id());
 
 	n1.discovery().add_ticket(n1_ticket);
 	n2.discovery().add_ticket(n2_ticket);
@@ -347,7 +347,10 @@ async fn with_ticket_validator() -> anyhow::Result<()> {
 	let mut c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.with_ticket_validator(jwt_validator)
+		.with_ticket_validator(
+			JwtTicketValidator::with_key(jwt_issuer.key())
+				.allow_issuer(jwt_issuer.issuer()),
+		)
 		.build();
 
 	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
@@ -368,16 +371,16 @@ async fn with_ticket_validator() -> anyhow::Result<()> {
 
 /// Consumer disconnects from a producer whose ticket expires mid-session.
 #[tokio::test]
-async fn with_ticket_validator_expiry() -> anyhow::Result<()> {
+async fn with_jwt_ticket_validator_expiry() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 
 	let (n0, n1) =
 		tokio::try_join!(Network::new(network_id), Network::new(network_id),)?;
 
-	let jwt_validator = JwtValidator::default();
+	let jwt_issuer = JwtIssuer::default();
 
 	// Short-lived ticket (3 seconds)
-	let n1_ticket = jwt_validator
+	let n1_ticket = jwt_issuer
 		.make_ticket_expiring_in(&n1.local().id(), Duration::from_secs(3));
 	n1.discovery().add_ticket(n1_ticket);
 
@@ -385,7 +388,10 @@ async fn with_ticket_validator_expiry() -> anyhow::Result<()> {
 	let mut c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.with_ticket_validator(jwt_validator)
+		.with_ticket_validator(
+			JwtTicketValidator::with_key(jwt_issuer.key())
+				.allow_issuer(jwt_issuer.issuer()),
+		)
 		.build();
 
 	timeout_s(5, discover_all([&n0, &n1])).await??;

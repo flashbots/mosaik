@@ -1,8 +1,8 @@
 use {
 	super::*,
-	crate::utils::{JwtValidator, discover_all, sleep_s, timeout_s},
+	crate::utils::{JwtIssuer, discover_all, sleep_s, timeout_s},
 	futures::{SinkExt, StreamExt},
-	mosaik::{declare, *},
+	mosaik::{declare, tickets::jwt::JwtTicketValidator, *},
 	serde::{Deserialize, Serialize},
 };
 
@@ -72,21 +72,26 @@ declare::stream!(
 declare::stream!(
 	pub(crate) TicketAuthStream = Data1,
 		"ticket.auth.stream",
-		require_ticket: JwtValidator::default(),
+		require_ticket: JwtTicketValidator::with_key(
+				JwtIssuer::default().key()
+			),
 );
 
 // Producer-only with ticket validator.
 declare::stream!(
 	pub(crate) producer ProducerTicketStream = Data1,
 		"producer.ticket.stream",
-		require_ticket: JwtValidator::default(),
+		require_ticket: {
+			let issuer = JwtIssuer::default();
+			JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer())
+		},
 );
 
 // Consumer-only with ticket validator.
 declare::stream!(
 	pub(crate) consumer ConsumerTicketStream = Data1,
 		"consumer.ticket.stream",
-		require_ticket: JwtValidator::default(),
+		require_ticket: JwtTicketValidator::with_key(JwtIssuer::default().key()),
 );
 
 #[tokio::test]
@@ -328,7 +333,7 @@ async fn stream_macro_require_ticket() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let jwt_validator = JwtValidator::default();
+	let jwt_validator = JwtIssuer::default();
 
 	// n0 and n1 get valid tickets; n2 gets an expired one; n3 gets none.
 	n0.discovery()
@@ -379,7 +384,7 @@ async fn stream_macro_producer_require_ticket() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let jwt_validator = JwtValidator::default();
+	let jwt_validator = JwtIssuer::default();
 
 	n1.discovery()
 		.add_ticket(jwt_validator.make_valid_ticket(&n1.local().id()));
@@ -427,7 +432,7 @@ async fn stream_macro_consumer_require_ticket() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let jwt_validator = JwtValidator::default();
+	let jwt_validator = JwtIssuer::default();
 
 	n1.discovery()
 		.add_ticket(jwt_validator.make_valid_ticket(&n1.local().id()));
