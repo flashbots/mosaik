@@ -32,7 +32,7 @@ Mosaik initially targets trusted, permissioned networks such as L2 chains contro
 >
 > ```bash
 > # p2p group chat — start several instances to chat
-> cargo run -p group-chat -- --nickname Alice
+> cargo run --example group-chat -- --nickname Alice
 >
 > # distributed order-matching engine
 > cargo run -p orderbook

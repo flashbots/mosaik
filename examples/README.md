@@ -68,7 +68,7 @@ The example spins up 5 in-process nodes (3 matchers + 2 traders), submits a hand
 
 ## Group Chat
 
-**[`group-chat/`](group-chat/)** — a peer-to-peer group chat room using mosaik replicated collections.
+**[`group-chat.rs`](group-chat.rs)** — a peer-to-peer group chat room using mosaik replicated collections.
 
 The simplest possible networked application: each running instance is one participant. Participants in the same room automatically discover each other — no server, no configuration.
 
@@ -83,9 +83,9 @@ Features demonstrated:
 Start two or more instances in separate terminals:
 
 ```bash
-cargo run -p group-chat -- --nickname Alice
-cargo run -p group-chat -- --nickname Bob --color 33
-cargo run -p group-chat -- --nickname Charlie --color 34
+cargo run --example group-chat -- --nickname Alice
+cargo run --example group-chat -- --nickname Bob --color 33
+cargo run --example group-chat -- --nickname Charlie --color 34
 ```
 
 Key options:

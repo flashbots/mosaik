@@ -3,7 +3,7 @@ use {
 	crate::utils::{discover_all, timeout_s},
 	core::convert::Infallible,
 	futures::{SinkExt, StreamExt, join},
-	mosaik::*,
+	mosaik::{streams::StreamDef, *},
 	std::string::FromUtf8Error,
 	tokio::sync::watch,
 };

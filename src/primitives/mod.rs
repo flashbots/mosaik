@@ -6,13 +6,13 @@ mod fut;
 mod id;
 mod iter;
 mod queue;
-mod ticket;
 
 pub mod datum;
 pub mod encoding;
 
 /// Public API re-exported byte types.
 pub use bytes::{Bytes, BytesMut};
+pub use datum::{Datum, Encoded};
 #[doc(hidden)]
 pub use fmt::*;
 /// Public API re-exported primitives.
@@ -25,10 +25,6 @@ pub(crate) use {
 	fut::InternalFutureExt,
 	iter::IntoIterOrSingle,
 	queue::AsyncWorkQueue,
-};
-pub use {
-	datum::{Datum, Encoded},
-	ticket::{Expiration, InvalidTicket, Ticket, TicketValidator},
 };
 
 /// Used internally as a sentinel type for generic parameters.

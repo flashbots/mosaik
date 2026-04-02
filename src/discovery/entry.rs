@@ -7,6 +7,7 @@ use {
 		groups::GroupId,
 		network::PeerId,
 		primitives::*,
+		tickets::{Expiration, InvalidTicket, TicketValidator},
 	},
 	chrono::{DateTime, Utc},
 	core::fmt,

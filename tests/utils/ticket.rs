@@ -3,14 +3,12 @@ use {
 	hmac::{Hmac, digest::KeyInit},
 	jwt::{RegisteredClaims, SignWithKey, VerifyWithKey},
 	mosaik::{
-		Expiration,
-		InvalidTicket,
 		PeerId,
 		Ticket,
-		TicketValidator,
 		UniqueId,
 		discovery::PeerEntry,
 		id,
+		tickets::{Expiration, InvalidTicket, TicketValidator},
 	},
 };
 

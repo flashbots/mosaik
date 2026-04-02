@@ -2,12 +2,21 @@
 //!
 //! Each running instance is one participant. Start several to chat:
 //!
-//!   cargo run -p group-chat -- --nickname Alice
-//!   cargo run -p group-chat -- --nickname Bob --color 33
-//!   cargo run -p group-chat -- --nickname Charlie --color 34
+//!   cargo run --example group-chat -- --nickname Alice
+//!   cargo run --example group-chat -- --nickname Bob --color 33
+//!   cargo run --example group-chat -- --nickname Charlie --color 34
 //!
 //! Participants in the same room automatically discover each other via
 //! mosaik's built-in gossip and DHT. No central server needed.
+//!
+//! If you want to speed up discovery, you can copy the peer ID printed by one
+//! instance and pass it to the others with the `--peer` option:
+//!
+//! ```
+//!   cargo run --example group-chat -- --nickname Alice --peer <Alice's peer ID>
+//!   cargo run --example group-chat -- --nickname Bob --color 33 --peer <Alice's peer ID>
+//!   cargo run --example group-chat -- --nickname Charlie --color 34 --peer <Alice's peer ID>
+//! ```
 
 use {
 	clap::Parser,
@@ -106,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
 	// Print current participants and any existing message history.
 	let initial_users: HashMap<String, UserInfo> = users.iter().collect();
 	println!("--- {} participant(s) ---", initial_users.len());
+
 	for u in initial_users.values() {
 		println!("  \x1b[{}m{}\x1b[0m", u.color, u.nickname);
 	}

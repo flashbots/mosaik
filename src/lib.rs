@@ -8,9 +8,7 @@ pub mod groups;
 pub mod network;
 pub mod primitives;
 pub mod streams;
-
-#[cfg(feature = "sgx")]
-pub mod tee;
+pub mod tickets;
 
 #[doc(hidden)]
 pub use mosaik_macros::{__collection_impl, __stream_impl, __unique_id_impl};
@@ -34,25 +32,16 @@ pub use {
 	},
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},
-	primitives::{
-		Datum,
-		Digest,
-		Expiration,
-		InvalidTicket,
-		Tag,
-		Ticket,
-		TicketValidator,
-		UniqueId,
-	},
+	primitives::{Datum, Digest, Tag, UniqueId},
 	streams::{
 		ConsumerOf,
 		Criteria,
 		ProducerOf,
 		StreamConsumer,
-		StreamDef,
 		StreamId,
 		StreamProducer,
 	},
+	tickets::Ticket,
 };
 
 pub mod declare {

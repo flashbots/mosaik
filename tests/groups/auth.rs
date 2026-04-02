@@ -1,7 +1,7 @@
 use {
 	super::*,
 	crate::utils::{JwtValidator, discover_all, sleep_s, timeout_s},
-	mosaik::{GroupKey, Network, NetworkId, TicketValidator},
+	mosaik::{GroupKey, Network, NetworkId, tickets::TicketValidator},
 	std::sync::Arc,
 };
 
