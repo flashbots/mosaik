@@ -3,7 +3,7 @@ use {
 		Criteria,
 		StreamId,
 		discovery::PeerEntry,
-		primitives::BackoffFactory,
+		primitives::{BackoffFactory, TicketValidator},
 		streams::{
 			Consumer,
 			Datum,
@@ -11,7 +11,6 @@ use {
 			consumer::worker,
 			status::ChannelConditions,
 		},
-		tickets::TicketValidator,
 	},
 	backoff::backoff::Backoff,
 	core::marker::PhantomData,

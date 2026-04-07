@@ -1,0 +1,28 @@
+[package]
+name = "tdx-example"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+authors.workspace = true
+exclude.workspace = true
+publish.workspace = true
+
+
+[lints]
+workspace = true
+
+[dependencies]
+mosaik = { workspace = true, features = ["tdx"] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+
+tdx-quote = "0.0.5"
+configfs-tsm = { version = "0.0.2" }
+
+[build-dependencies]
+mosaik = { workspace = true, features = ["tdx"] }

@@ -1,4 +1,5 @@
 use {
+	crate::utils::JwtTicketValidator,
 	core::time::Duration,
 	hmac::{Hmac, digest::KeyInit},
 	jwt::{RegisteredClaims, SignWithKey, VerifyWithKey},
@@ -8,7 +9,7 @@ use {
 		UniqueId,
 		discovery::PeerEntry,
 		id,
-		tickets::{self, Expiration, InvalidTicket, TicketValidator},
+		primitives::{Expiration, InvalidTicket, TicketValidator},
 	},
 };
 
@@ -52,7 +53,7 @@ impl JwtIssuer {
 		expiration: Expiration,
 	) -> Ticket {
 		Ticket::new(
-			tickets::jwt::JwtTicketValidator::CLASS,
+			JwtTicketValidator::CLASS,
 			jwt::Claims::new(RegisteredClaims {
 				issuer: Some(self.issuer.to_string()),
 				subject: Some(peer_id.to_string().to_lowercase()),

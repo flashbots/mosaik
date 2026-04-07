@@ -8,7 +8,9 @@ pub mod groups;
 pub mod network;
 pub mod primitives;
 pub mod streams;
-pub mod tickets;
+
+#[cfg(feature = "tee")]
+pub mod tee;
 
 #[doc(hidden)]
 pub use mosaik_macros::{__collection_impl, __stream_impl, __unique_id_impl};
@@ -32,7 +34,7 @@ pub use {
 	},
 	iroh::{self, SecretKey, Signature},
 	network::{Network, NetworkId, PeerId},
-	primitives::{Datum, Digest, Tag, UniqueId},
+	primitives::{Datum, Digest, Tag, Ticket, TicketValidator, UniqueId},
 	streams::{
 		ConsumerOf,
 		Criteria,
@@ -41,7 +43,6 @@ pub use {
 		StreamId,
 		StreamProducer,
 	},
-	tickets::Ticket,
 };
 
 pub mod declare {

@@ -12,8 +12,7 @@ use {
 			state::WorkerState,
 		},
 		network::{link::*, *},
-		primitives::{Short, UnboundedChannel},
-		tickets::Expiration,
+		primitives::{Expiration, Short, UnboundedChannel},
 	},
 	bytes::Bytes,
 	core::{

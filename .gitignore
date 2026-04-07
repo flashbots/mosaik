@@ -119,3 +119,5 @@ $RECYCLE.BIN/
 
 # GitHub Agents
 .github/agents
+
+.claude

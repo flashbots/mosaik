@@ -1,5 +1,5 @@
 [package]
-name = "orderbook"
+name = "orderbook-example"
 version.workspace = true
 license.workspace = true
 homepage.workspace = true

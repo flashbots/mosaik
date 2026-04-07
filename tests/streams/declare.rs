@@ -1,8 +1,14 @@
 use {
 	super::*,
-	crate::utils::{JwtIssuer, discover_all, sleep_s, timeout_s},
+	crate::utils::{
+		JwtIssuer,
+		JwtTicketValidator,
+		discover_all,
+		sleep_s,
+		timeout_s,
+	},
 	futures::{SinkExt, StreamExt},
-	mosaik::{declare, tickets::jwt::JwtTicketValidator, *},
+	mosaik::{declare, *},
 	serde::{Deserialize, Serialize},
 };
 

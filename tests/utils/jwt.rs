@@ -1,56 +1,63 @@
 use {
-	super::TicketValidator,
-	crate::{
+	chrono::Utc,
+	core::time::Duration,
+	itertools::Itertools,
+	jwt::{FromBase64, Header, ToBase64, VerifyingAlgorithm},
+	mosaik::{
+		TicketValidator,
 		UniqueId,
 		discovery::PeerEntry,
 		id,
-		tickets::{Expiration, InvalidTicket},
+		primitives::{Expiration, InvalidTicket},
 	},
-	chrono::Utc,
-	itertools::Itertools,
-	jwt::{FromBase64, Header, ToBase64, VerifyingAlgorithm},
 	serde_json::Value,
 	std::{collections::BTreeMap, sync::Arc},
 };
 
 /// A configurable JWT ticket validator.
 ///
-/// Validates the `iss`, `sub`, `exp`, and `nbf` claims of a JWT ticket
-/// presented by a peer. Build instances via the builder methods on this type
-/// ([`with_key`], [`allow_issuer`], [`allow_audience`], [`require_subject`],
-/// [`require_claim`], [`allow_non_expiring`]).
+/// Validates the `iss`, `sub`, `exp`, `nbf`, and `iat` claims of a
+/// JWT ticket presented by a peer. Build instances via the builder
+/// methods on this type ([`with_key`], [`add_key`],
+/// [`allow_issuer`], [`allow_audience`], [`require_subject`],
+/// [`require_claim`], [`allow_non_expiring`], [`max_lifetime`],
+/// [`max_age`]).
 ///
 /// # Group identity
 ///
-/// [`TicketValidator::signature`] is derived from the validator configuration,
-/// so two [`JwtTicketValidator`] instances with different settings will produce
-/// different signatures — and therefore different group ids.
+/// [`TicketValidator::signature`] is derived from the validator
+/// configuration, so two [`JwtTicketValidator`] instances with
+/// different settings will produce different signatures — and
+/// therefore different group ids.
 ///
 /// [`with_key`]: JwtTicketValidator::with_key
+/// [`add_key`]: JwtTicketValidator::add_key
 /// [`allow_issuer`]: JwtTicketValidator::allow_issuer
 /// [`allow_audience`]: JwtTicketValidator::allow_audience
 /// [`require_subject`]: JwtTicketValidator::require_subject
 /// [`require_claim`]: JwtTicketValidator::require_claim
 /// [`allow_non_expiring`]: JwtTicketValidator::allow_non_expiring
+/// [`max_lifetime`]: JwtTicketValidator::max_lifetime
+/// [`max_age`]: JwtTicketValidator::max_age
 #[derive(Clone)]
 pub struct JwtTicketValidator {
-	/// The expected issuer claim in the JWT.
+	/// The expected issuer `iss` claim in the JWT.
 	///
-	/// If this list is non-empty, then the JWT must contain an "iss" claim that
+	/// If this list is non-empty, then the JWT must contain an `iss` claim that
 	/// matches one of the issuers in the list.
 	issuers: Vec<String>,
 
-	/// Whether to allow non-expiring JWTs (i.e. those without an "exp" claim).
+	/// Whether to allow non-expiring JWTs (i.e. those without an `exp` claim).
 	allow_non_expiring: bool,
 
-	/// The expected subject claim in the JWT.
+	/// The expected subject `sub` claim in the JWT.
 	///
 	/// If not set, then the subject must be the peer id in lower-case hex.
 	subject: Option<String>,
 
 	/// Required `aud` claim in the JWT with the specified value.
 	///
-	/// If this list is non-empty, then the JWT must contain an "aud" claim that
+	/// If this list is non-empty, then the JWT must contain an `aud` claim that
 	/// matches one of the values in the list.
 	audience: Vec<String>,
 
@@ -58,24 +65,54 @@ pub struct JwtTicketValidator {
 	/// values.
 	custom_claims: BTreeMap<String, Value>,
 
-	/// The verifying algorithm and key to use for validating the JWT signature.
-	alg: Arc<dyn ::jwt::VerifyingAlgorithm + Send + Sync + 'static>,
+	/// The maximum allowed remaining lifetime of a token. If set,
+	/// tokens with `exp - now > max_lifetime` are rejected.
+	max_lifetime: Option<Duration>,
+
+	/// The maximum allowed age of a token since issuance. If set, the
+	/// `iat` claim is required and tokens where `now - iat > max_age`
+	/// are rejected.
+	max_age: Option<Duration>,
+
+	/// The verifying algorithms and keys to use for validating the JWT
+	/// signature. Multiple keys support zero-downtime key rotation.
+	keys: Vec<Arc<dyn ::jwt::VerifyingAlgorithm + Send + Sync + 'static>>,
 }
 
 impl JwtTicketValidator {
+	pub const CLASS: UniqueId = id!("mosaik.tickets.jwt.v1");
+
 	/// Creates a new JWT ticket validator against the specified verifying key.
 	#[must_use]
 	pub fn with_key(
 		key: impl VerifyingAlgorithm + Send + Sync + 'static,
 	) -> Self {
 		Self {
-			alg: Arc::new(key),
+			keys: vec![Arc::new(key)],
 			issuers: Vec::new(),
 			allow_non_expiring: false,
 			subject: None,
 			audience: Vec::new(),
 			custom_claims: BTreeMap::new(),
+			max_lifetime: None,
+			max_age: None,
 		}
+	}
+
+	/// Adds an additional verifying key for signature validation.
+	///
+	/// When multiple keys are configured, the JWT signature is
+	/// verified against each key with a matching algorithm type
+	/// until one succeeds. This enables zero-downtime key rotation
+	/// by accepting tokens signed with either the current or
+	/// previous key.
+	#[must_use]
+	pub fn add_key(
+		mut self,
+		key: impl VerifyingAlgorithm + Send + Sync + 'static,
+	) -> Self {
+		self.keys.push(Arc::new(key));
+		self
 	}
 
 	/// Requires the JWT token to contain an `sub` claim that matches the
@@ -133,10 +170,29 @@ impl JwtTicketValidator {
 		self.audience.push(audience.into());
 		self
 	}
-}
 
-impl JwtTicketValidator {
-	pub const CLASS: UniqueId = id!("mosaik.tickets.jwt.v1");
+	/// Sets the maximum allowed remaining lifetime of a token.
+	///
+	/// If set, tokens with an `exp` claim where `exp - now` exceeds
+	/// this duration are rejected. This prevents acceptance of
+	/// tokens with unreasonably distant expiration times.
+	#[must_use]
+	pub const fn max_lifetime(mut self, duration: Duration) -> Self {
+		self.max_lifetime = Some(duration);
+		self
+	}
+
+	/// Sets the maximum allowed age of a token since issuance.
+	///
+	/// If set, the `iat` (issued-at) claim is required and tokens
+	/// where `now - iat` exceeds this duration are rejected. This
+	/// prevents acceptance of tokens that were issued too far in
+	/// the past.
+	#[must_use]
+	pub const fn max_age(mut self, duration: Duration) -> Self {
+		self.max_age = Some(duration);
+		self
+	}
 }
 
 impl TicketValidator for JwtTicketValidator {
@@ -145,20 +201,25 @@ impl TicketValidator for JwtTicketValidator {
 	}
 
 	fn signature(&self) -> UniqueId {
-		let mut sig = self
-			.class()
-			.derive(
-				self
-					.alg
+		let mut sig = self.class();
+
+		for key in &self.keys {
+			sig = sig.derive(
+				key
 					.algorithm_type()
 					.to_base64()
 					.expect("algorithm type is base64 encodable")
 					.as_bytes(),
-			)
+			);
+		}
+
+		sig = sig
 			.derive(if self.allow_non_expiring { [1] } else { [0] })
 			.derive(self.issuers.iter().join(","))
 			.derive(self.audience.iter().join(","))
-			.derive(self.subject.as_deref().unwrap_or(""));
+			.derive(self.subject.as_deref().unwrap_or(""))
+			.derive(self.max_lifetime.map_or(0, |d| d.as_secs()).to_le_bytes())
+			.derive(self.max_age.map_or(0, |d| d.as_secs()).to_le_bytes());
 
 		for (key, value) in &self.custom_claims {
 			sig = sig.derive(key).derive(value.to_string());
@@ -185,18 +246,26 @@ impl TicketValidator for JwtTicketValidator {
 		let claims_str = parts.next().ok_or(InvalidTicket)?;
 		let sig_str = parts.next().ok_or(InvalidTicket)?;
 
-		// Reject if the header declares a different algorithm than the key.
+		// Reject if the header declares an algorithm that none of the
+		// configured keys support.
 		let header = Header::from_base64(header_str).map_err(|_| InvalidTicket)?;
-		if header.algorithm != self.alg.algorithm_type() {
+		if !self
+			.keys
+			.iter()
+			.any(|k| k.algorithm_type() == header.algorithm)
+		{
 			return Err(InvalidTicket);
 		}
 
-		// Verify the cryptographic signature.
-		if !self
-			.alg
-			.verify(header_str, claims_str, sig_str)
-			.map_err(|_| InvalidTicket)?
-		{
+		// Verify the cryptographic signature against each key with a
+		// matching algorithm type. Succeed if any key verifies.
+		let signature_verified = self
+			.keys
+			.iter()
+			.filter(|k| k.algorithm_type() == header.algorithm)
+			.any(|k| k.verify(header_str, claims_str, sig_str).unwrap_or(false));
+
+		if !signature_verified {
 			return Err(InvalidTicket);
 		}
 
@@ -232,6 +301,29 @@ impl TicketValidator for JwtTicketValidator {
 			None if !self.allow_non_expiring => return Err(InvalidTicket),
 			Some(e) if e <= now => return Err(InvalidTicket),
 			_ => {}
+		}
+
+		// Validate maximum token lifetime.
+		if let Some(max_lifetime) = self.max_lifetime
+			&& let Some(e) = exp
+		{
+			let remaining = e.saturating_sub(now);
+			if remaining > max_lifetime.as_secs() {
+				return Err(InvalidTicket);
+			}
+		}
+
+		// Validate issued-at age.
+		if let Some(max_age) = self.max_age {
+			match reg.issued_at {
+				Some(iat) => {
+					let age = now.saturating_sub(iat);
+					if age > max_age.as_secs() {
+						return Err(InvalidTicket);
+					}
+				}
+				None => return Err(InvalidTicket),
+			}
 		}
 
 		// Validate audience.

@@ -39,7 +39,7 @@ impl Ticket {
 
 /// This type represents the expiration policy of a ticket, which determines
 /// when a ticket should be reevaluated after successful validation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Expiration {
 	/// The ticket never expires.
 	Never,

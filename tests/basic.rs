@@ -7,6 +7,7 @@ mod collections;
 mod discovery;
 mod groups;
 mod streams;
+mod tickets;
 mod utils;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

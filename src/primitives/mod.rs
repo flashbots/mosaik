@@ -9,14 +9,12 @@ mod queue;
 
 pub mod datum;
 pub mod encoding;
+pub mod ticket;
 
 /// Public API re-exported byte types.
 pub use bytes::{Bytes, BytesMut};
-pub use datum::{Datum, Encoded};
 #[doc(hidden)]
 pub use fmt::*;
-/// Public API re-exported primitives.
-pub use id::{Digest, Tag, UniqueId};
 /// Internal primitives.
 pub(crate) use {
 	channel::UnboundedChannel,
@@ -25,6 +23,12 @@ pub(crate) use {
 	fut::InternalFutureExt,
 	iter::IntoIterOrSingle,
 	queue::AsyncWorkQueue,
+};
+/// Public API re-exported primitives.
+pub use {
+	datum::{Datum, Encoded},
+	id::{Digest, Tag, UniqueId},
+	ticket::{Expiration, InvalidTicket, Ticket, TicketValidator},
 };
 
 /// Used internally as a sentinel type for generic parameters.

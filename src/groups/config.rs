@@ -2,7 +2,7 @@ use {
 	crate::{
 		GroupKey,
 		groups::{ConsensusConfig, GroupId, StateMachine, StateSync},
-		tickets::TicketValidator,
+		primitives::TicketValidator,
 	},
 	core::time::Duration,
 	derive_builder::Builder,

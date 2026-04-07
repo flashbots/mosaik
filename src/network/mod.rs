@@ -4,7 +4,7 @@ use {
 	crate::{
 		discovery::Discovery,
 		groups::Groups,
-		primitives::Digest,
+		primitives::{Digest, sealed::Sealed},
 		streams::Streams,
 	},
 	iroh::protocol::{Router, RouterBuilder},
@@ -148,3 +148,5 @@ pub(crate) trait ProtocolProvider {
 	/// Installs the protocol's ALPN handler into the given router builder.
 	fn install(&self, protocols: RouterBuilder) -> RouterBuilder;
 }
+
+impl Sealed for Network {}
