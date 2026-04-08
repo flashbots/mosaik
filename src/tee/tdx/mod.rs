@@ -8,4 +8,7 @@ pub const TICKET_CLASS: crate::UniqueId =
 pub use {local::NetworkTicketExt, validator::TdxValidator};
 
 #[cfg(feature = "tdx-builder")]
-pub mod builder;
+mod builder;
+
+#[cfg(feature = "tdx-builder")]
+pub use builder::ImageBuilder;

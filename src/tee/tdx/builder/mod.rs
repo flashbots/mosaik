@@ -10,8 +10,8 @@ pub struct ImageBuilder;
 
 impl ImageBuilder {
 	#[cfg(feature = "tdx-builder-alpine")]
-	pub const fn alpine() -> alpine::AlpineBuilder {
-		alpine::AlpineBuilder
+	pub fn alpine() -> alpine::AlpineBuilder {
+		alpine::AlpineBuilder::default()
 	}
 
 	#[cfg(feature = "tdx-builder-ubuntu")]
