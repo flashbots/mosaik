@@ -36,7 +36,7 @@ use std::{
 	fs::{self, File},
 	io::{self, BufWriter, Write},
 	path::{Path, PathBuf},
-	process::Command,
+	process::{Command, Stdio},
 };
 
 /// Builder for Alpine-based TDX guest images.
@@ -358,6 +358,27 @@ impl AlpineBuilder {
 			auto_modules_dir = modules_dir;
 		}
 
+		// When a custom kernel is provided but no modules directory is
+		// specified, still auto-download Ubuntu kernel modules so that
+		// TDX attestation drivers (tsm, tdx-guest, vsock, …) are
+		// bundled into the initramfs.
+		let has_explicit_modules_dir = self.kernel_modules_dir.is_some()
+			|| env::var("TDX_IMAGE_KERNEL_MODULES_DIR").is_ok()
+			|| !self.extra_kernel_modules.is_empty();
+
+		if auto_modules_dir.is_none() && !has_explicit_modules_dir {
+			eprintln!(
+				"==> No modules directory — auto-downloading Ubuntu kernel modules \
+				 for TDX support..."
+			);
+			let (_, modules_dir) = auto_download_kernel(
+				&kernel_cache_dir,
+				self.kernel_version.as_deref(),
+				self.kernel_abi.as_deref(),
+			);
+			auto_modules_dir = modules_dir;
+		}
+
 		// ---------------------------------------------------------------
 		// 5. Assemble CPIO
 		// ---------------------------------------------------------------
@@ -485,10 +506,22 @@ impl AlpineBuilder {
 			.or_else(|| auto_modules_dir.clone());
 
 		if let Some(ref modules_dir) = effective_modules_dir {
-			bundle_auto_discovered_modules(&mut cpio, modules_dir);
+			let n = bundle_auto_discovered_modules(&mut cpio, modules_dir);
+			if n == 0 {
+				println!(
+					"cargo:warning=No TDX kernel modules found in {}. TDX attestation \
+					 (configfs-tsm) will not work. Set TDX_IMAGE_KERNEL_MODULES_DIR to \
+					 a directory containing the kernel modules.",
+					modules_dir.display()
+				);
+			} else {
+				eprintln!("  [ok] {n} kernel module(s) bundled");
+			}
 		} else {
-			eprintln!(
-				"==> No kernel modules directory -- TDX modules will not be bundled."
+			println!(
+				"cargo:warning=No kernel modules directory — TDX modules will not be \
+				 bundled. Set TDX_IMAGE_KERNEL_MODULES_DIR or let auto-download \
+				 handle it."
 			);
 		}
 
@@ -752,11 +785,7 @@ impl<W: Write> CpioWriter<W> {
 		data: &[u8],
 		executable: bool,
 	) -> io::Result<()> {
-		self.write_entry(
-			path,
-			data,
-			if executable { 0o100_755 } else { 0o100_6444 },
-		)
+		self.write_entry(path, data, if executable { 0o100_755 } else { 0o100_644 })
 	}
 
 	fn add_dir(&mut self, path: &str) -> io::Result<()> {
@@ -802,8 +831,17 @@ fn ssh_fwd_rule(ssh_forward: Option<(u16, u16)>) -> String {
 fn download_cached(url: &str, cache_dir: &Path, filename: &str) -> PathBuf {
 	let cached = cache_dir.join(filename);
 	if cached.exists() {
-		eprintln!("  [cached] {}", cached.display());
-		return cached;
+		// Reject obviously truncated files (e.g. interrupted downloads).
+		let size = fs::metadata(&cached).map(|m| m.len()).unwrap_or(0);
+		if size > 1024 {
+			eprintln!("  [cached] {}", cached.display());
+			return cached;
+		}
+		eprintln!(
+			"  [stale] {} is only {size} bytes — re-downloading",
+			cached.display()
+		);
+		let _ = fs::remove_file(&cached);
 	}
 	eprintln!("  [download] {url}");
 
@@ -857,6 +895,77 @@ fn list_tar_gz(archive: &Path) -> Vec<String> {
 		.map(|l| l.trim_start_matches("./").to_string())
 		.filter(|l| !l.is_empty())
 		.collect()
+}
+
+/// Extract a `data.tar.*` archive into `target_dir`, handling `.zst`
+/// compression explicitly (macOS and some Linux `tar` builds lack native
+/// zstd support).
+fn extract_data_tar(data_tar: &Path, target_dir: &Path) {
+	let name = data_tar.file_name().unwrap().to_str().unwrap_or_default();
+
+	if std::path::Path::new(name)
+		.extension()
+		.is_some_and(|ext| ext.eq_ignore_ascii_case("zst"))
+	{
+		let mut zstd = Command::new("zstd")
+			.args(["-d", "-c"])
+			.arg(data_tar)
+			.stdout(Stdio::piped())
+			.spawn()
+			.expect("failed to run zstd — install zstd to extract .deb packages");
+
+		let status = Command::new("tar")
+			.args(["xf", "-", "-C"])
+			.arg(target_dir)
+			.stdin(zstd.stdout.take().unwrap())
+			.status()
+			.expect("failed to run tar");
+
+		let zstd_status = zstd.wait().expect("zstd process failed");
+
+		assert!(
+			zstd_status.success() && status.success(),
+			"failed to extract {} (zstd | tar)",
+			data_tar.display()
+		);
+	} else if std::path::Path::new(name)
+		.extension()
+		.is_some_and(|ext| ext.eq_ignore_ascii_case("xz"))
+		|| std::path::Path::new(name)
+			.extension()
+			.is_some_and(|ext| ext.eq_ignore_ascii_case("lzma"))
+	{
+		let mut xz = Command::new("xz")
+			.args(["-d", "-c"])
+			.arg(data_tar)
+			.stdout(Stdio::piped())
+			.spawn()
+			.expect("failed to run xz — install xz to extract .deb packages");
+
+		let status = Command::new("tar")
+			.args(["xf", "-", "-C"])
+			.arg(target_dir)
+			.stdin(xz.stdout.take().unwrap())
+			.status()
+			.expect("failed to run tar");
+
+		let xz_status = xz.wait().expect("xz process failed");
+		assert!(
+			xz_status.success() && status.success(),
+			"failed to extract {} (xz | tar)",
+			data_tar.display()
+		);
+	} else {
+		// .gz / plain tar — handled natively by all tar implementations
+		let status = Command::new("tar")
+			.args(["xf"])
+			.arg(data_tar)
+			.args(["-C"])
+			.arg(target_dir)
+			.status()
+			.expect("failed to run tar");
+		assert!(status.success(), "failed to extract {}", data_tar.display());
+	}
 }
 
 fn find_file_starting_with(dir: &Path, prefix: &str) -> Option<PathBuf> {
@@ -1103,12 +1212,7 @@ fn auto_download_kernel(
 		.expect("failed to run `ar` — install binutils");
 
 	if let Some(data_tar) = find_file_starting_with(&extract_dir, "data.tar") {
-		let _ = Command::new("tar")
-			.args(["xf"])
-			.arg(&data_tar)
-			.args(["-C"])
-			.arg(&extract_dir)
-			.status();
+		extract_data_tar(&data_tar, &extract_dir);
 	}
 
 	let found_vmlinuz = find_file_recursive(&extract_dir, "vmlinuz");
@@ -1156,12 +1260,7 @@ fn auto_download_kernel(
 
 		if ar_status.map(|s| s.success()).unwrap_or(false) {
 			if let Some(data_tar) = find_file_starting_with(&tmp_dir, "data.tar") {
-				let _ = Command::new("tar")
-					.args(["xf"])
-					.arg(&data_tar)
-					.args(["-C"])
-					.arg(&modules_extract_dir)
-					.status();
+				extract_data_tar(&data_tar, &modules_extract_dir);
 				eprintln!("  [ok] {label} extracted");
 			} else {
 				eprintln!("  [warn] no data.tar.* in {deb_name}");
@@ -1183,7 +1282,7 @@ fn auto_download_kernel(
 fn bundle_auto_discovered_modules<W: Write>(
 	cpio: &mut CpioWriter<W>,
 	modules_dir: &Path,
-) {
+) -> u32 {
 	eprintln!(
 		"==> Auto-discovering TDX kernel modules from {}...",
 		modules_dir.display()
@@ -1198,6 +1297,8 @@ fn bundle_auto_discovered_modules<W: Write>(
 		"vmw_vsock_virtio_transport",
 		"vmw_vsock_virtio_transport_common",
 	];
+
+	let mut bundled_count: u32 = 0;
 
 	for module_name in &wanted_modules {
 		let find_output = Command::new("find")
@@ -1273,10 +1374,13 @@ fn bundle_auto_discovered_modules<W: Write>(
 				data.len() as f64 / 1024.0
 			);
 			cpio.add_file(&guest_path, &data, false).unwrap();
+			bundled_count += 1;
 		} else {
 			eprintln!("  [module] {module_name}.ko not found (may be built-in)");
 		}
 	}
+
+	bundled_count
 }
 
 // ===========================================================================
@@ -1300,6 +1404,7 @@ fn generate_init_script(crate_name: &str, ssh_keys: &[String]) -> String {
 // OVMF acquisition
 // ===========================================================================
 
+#[allow(clippy::ref_option)]
 fn obtain_ovmf(
 	custom_ovmf: &Option<Vec<u8>>,
 	kernel_cache_dir: &Path,
@@ -1378,12 +1483,7 @@ fn obtain_ovmf(
 		.status();
 
 	if let Some(data_tar) = find_file_starting_with(&ovmf_extract, "data.tar") {
-		let _ = Command::new("tar")
-			.args(["xf"])
-			.arg(&data_tar)
-			.args(["-C"])
-			.arg(&ovmf_extract)
-			.status();
+		extract_data_tar(&data_tar, &ovmf_extract);
 	}
 
 	let found = find_file_recursive(&ovmf_extract, "OVMF.fd");
@@ -1551,16 +1651,23 @@ const UDHCPC_SCRIPT: &str = include_str!("templates/alpine/udhcpc.sh");
 // ===========================================================================
 
 mod mrtd {
-	use std::process::Command;
+	use sha2::{Digest, Sha384};
 
 	const PAGE_SIZE: usize = 4096;
 	const CHUNK_SIZE: usize = 256;
 	const CHUNKS_PER_PAGE: usize = PAGE_SIZE / CHUNK_SIZE;
 	const SHA384_LEN: usize = 48;
 
+	// e47a6535-984a-4798-865e-4685a7bf8ec2 (little-endian)
 	const TDVF_METADATA_GUID: [u8; 16] = [
 		0x35, 0x65, 0x7a, 0xe4, 0x4a, 0x98, 0x98, 0x47, 0x86, 0x5e, 0x46, 0x85,
 		0xa7, 0xbf, 0x8e, 0xc2,
+	];
+
+	// 96b582de-1fb2-45f7-baea-a366c55a082d (little-endian)
+	const TABLE_FOOTER_GUID: [u8; 16] = [
+		0xde, 0x82, 0xb5, 0x96, 0xb2, 0x1f, 0xf7, 0x45, 0xba, 0xea, 0xa3, 0x66,
+		0xc5, 0x5a, 0x08, 0x2d,
 	];
 
 	#[derive(Debug)]
@@ -1580,47 +1687,110 @@ mod mrtd {
 	const ATTR_MR_EXTEND: u32 = 0x0000_0001;
 	const ATTR_PAGE_AUG: u32 = 0x0000_0002;
 
-	fn parse_tdvf_sections(ovmf: &[u8]) -> Result<Vec<TdvfSection>, String> {
+	/// Locate the start of the TDVF metadata descriptor in the
+	/// OVMF image. Returns the byte offset (from the start of
+	/// `ovmf`) where the descriptor begins.
+	///
+	/// Two discovery methods are tried in order:
+	///  1. **GUID table** (modern OVMF builds): a footer GUID at `file_end −
+	///     0x30` points to a table of entries; the TDVF metadata offset entry
+	///     stores a negative offset from the end of the file.
+	///  2. **Legacy pointer** (deprecated): a 32-bit *absolute* offset stored at
+	///     `file_end − 0x20`.
+	fn find_tdvf_descriptor_offset(ovmf: &[u8]) -> Result<usize, String> {
 		let len = ovmf.len();
-		if len < 0x28 {
-			return Err("OVMF.fd too small".into());
+
+		// --- Method 1: GUID table ---
+		if len >= 0x32 {
+			let footer_start = len - 0x30;
+			let footer_guid = &ovmf[footer_start..footer_start + 16];
+
+			if footer_guid == TABLE_FOOTER_GUID {
+				eprintln!("  [tdvf] Found GUID table footer");
+
+				let table_size =
+					u16::from_le_bytes(ovmf[len - 0x32..len - 0x30].try_into().unwrap())
+						as usize;
+
+				let table_start = len - 0x20 - table_size;
+				let table = &ovmf[table_start..table_start + table_size];
+
+				// Walk backward: skip footer GUID (16) + size (2)
+				let mut offset = table_size.saturating_sub(18);
+				while offset >= 18 {
+					let entry_guid = &table[offset - 16..offset];
+					let entry_size = u16::from_le_bytes(
+						table[offset - 18..offset - 16].try_into().unwrap(),
+					) as usize;
+
+					if entry_size == 0 {
+						break;
+					}
+					offset -= entry_size;
+
+					if entry_guid == TDVF_METADATA_GUID && entry_size == 22 {
+						let desc_off =
+							u32::from_le_bytes(table[offset..offset + 4].try_into().unwrap())
+								as usize;
+						eprintln!("  [tdvf] GUID table: descriptor at end-0x{desc_off:x}");
+						return Ok(len - desc_off);
+					}
+				}
+				eprintln!(
+					"  [tdvf] GUID table present but TDVF metadata entry not found, \
+					 trying legacy"
+				);
+			}
 		}
 
-		let offset_location = len - 0x20;
-		let descriptor_offset = u32::from_le_bytes(
-			ovmf[offset_location..offset_location + 4]
-				.try_into()
-				.unwrap(),
-		) as usize;
+		// --- Method 2: legacy absolute offset at file_end - 0x20 ---
+		if len >= 0x28 {
+			let descriptor_offset =
+				u32::from_le_bytes(ovmf[len - 0x20..len - 0x1c].try_into().unwrap())
+					as usize;
 
-		if descriptor_offset == 0 || descriptor_offset > len {
-			return Err(format!(
-				"Invalid TDVF descriptor offset: 0x{descriptor_offset:x} (file size: \
-				 0x{len:x})"
-			));
+			if descriptor_offset > 0 && descriptor_offset < len {
+				eprintln!(
+					"  [tdvf] Legacy pointer: descriptor at 0x{descriptor_offset:x}"
+				);
+				return Ok(descriptor_offset);
+			}
 		}
 
-		let desc_start = len - descriptor_offset;
+		Err(format!(
+			"Could not locate TDVF metadata (no GUID table entry, legacy offset is \
+			 0x0, file size: 0x{len:x})"
+		))
+	}
+
+	const TDVF_SIGNATURE: &[u8; 4] = b"TDVF";
+	const TDVF_HEADER_SIZE: usize = 16; // signature(4) + length(4) + version(4) + num_sections(4)
+
+	fn parse_tdvf_sections(ovmf: &[u8]) -> Result<Vec<TdvfSection>, String> {
+		let desc_start = find_tdvf_descriptor_offset(ovmf)?;
 		let desc = &ovmf[desc_start..];
 
-		if desc.len() < 28 {
+		if desc.len() < TDVF_HEADER_SIZE {
 			return Err("TDVF descriptor region too small".into());
 		}
 
-		let guid = &desc[0..16];
-		if guid != TDVF_METADATA_GUID {
-			return Err(format!("TDVF metadata GUID mismatch: got {guid:02x?}"));
+		let signature = &desc[0..4];
+		if signature != TDVF_SIGNATURE {
+			return Err(format!(
+				"TDVF descriptor signature mismatch: expected \"TDVF\", got \
+				 {signature:02x?}"
+			));
 		}
 
-		let _length = u32::from_le_bytes(desc[16..20].try_into().unwrap());
-		let version = u32::from_le_bytes(desc[20..24].try_into().unwrap());
-		let num_sections = u32::from_le_bytes(desc[24..28].try_into().unwrap());
+		let _length = u32::from_le_bytes(desc[4..8].try_into().unwrap());
+		let version = u32::from_le_bytes(desc[8..12].try_into().unwrap());
+		let num_sections = u32::from_le_bytes(desc[12..16].try_into().unwrap());
 
 		eprintln!("  [tdvf] version={version}, sections={num_sections}");
 
 		let mut sections = Vec::new();
 		for i in 0..num_sections as usize {
-			let base = 28 + i * 32;
+			let base = TDVF_HEADER_SIZE + i * 32;
 			if base + 32 > desc.len() {
 				return Err(format!("TDVF section {i} extends past descriptor"));
 			}
@@ -1664,56 +1834,22 @@ mod mrtd {
 		Ok(sections)
 	}
 
-	fn sha384(data: &[u8]) -> Result<[u8; SHA384_LEN], String> {
-		use std::{io::Write, process::Stdio};
-
-		let mut child = Command::new("openssl")
-			.args(["dgst", "-sha384", "-binary"])
-			.stdin(Stdio::piped())
-			.stdout(Stdio::piped())
-			.stderr(Stdio::piped())
-			.spawn()
-			.map_err(|e| format!("failed to run openssl: {e}"))?;
-
-		child
-			.stdin
-			.as_mut()
-			.unwrap()
-			.write_all(data)
-			.map_err(|e| format!("failed to write to openssl stdin: {e}"))?;
-
-		let output = child
-			.wait_with_output()
-			.map_err(|e| format!("openssl failed: {e}"))?;
-
-		if !output.status.success() {
-			return Err(format!(
-				"openssl sha384 failed: {}",
-				String::from_utf8_lossy(&output.stderr)
-			));
-		}
-
-		if output.stdout.len() != SHA384_LEN {
-			return Err(format!(
-				"openssl sha384 returned {} bytes, expected {SHA384_LEN}",
-				output.stdout.len()
-			));
-		}
-
-		let mut hash = [0u8; SHA384_LEN];
-		hash.copy_from_slice(&output.stdout);
-		Ok(hash)
-	}
-
 	pub fn compute_mrtd(ovmf: &[u8]) -> Result<[u8; SHA384_LEN], String> {
 		let sections = parse_tdvf_sections(ovmf)?;
-		let mut mrtd = [0u8; SHA384_LEN];
+
+		// The TDX module maintains a running SHA-384 context across
+		// all TDH.MEM.PAGE.ADD and TDH.MR.EXTEND calls, then
+		// finalizes it on TDH.MR.FINALIZE.  This is equivalent to
+		// SHA384(concat of all 128-byte headers and data chunks).
+		let mut hasher = Sha384::new();
 
 		for section in &sections {
 			let extend_mr = section.attributes & ATTR_MR_EXTEND != 0;
 			let page_aug = section.attributes & ATTR_PAGE_AUG != 0;
 
-			if !extend_mr || page_aug {
+			// PAGE_AUG pages are added lazily via TDH.MEM.PAGE.AUG
+			// which does NOT update MRTD.
+			if page_aug {
 				continue;
 			}
 
@@ -1732,53 +1868,56 @@ mod mrtd {
 			let num_pages = mem_size.div_ceil(PAGE_SIZE);
 
 			eprintln!(
-				"  [mrtd] Measuring section at GPA 0x{gpa_base:x}, {num_pages} \
-				 pages..."
+				"  [mrtd] section GPA 0x{gpa_base:x}, {num_pages} pages{}",
+				if extend_mr { " [MR.EXTEND]" } else { "" },
 			);
 
+			// Phase 1: TDH.MEM.PAGE.ADD for every page in this section
 			for page_idx in 0..num_pages {
 				let page_gpa = gpa_base + (page_idx as u64) * (PAGE_SIZE as u64);
 
-				// TDH.MEM.PAGE.ADD
 				let mut add_buf = [0u8; 128];
 				add_buf[..12].copy_from_slice(b"MEM.PAGE.ADD");
 				add_buf[16..24].copy_from_slice(&page_gpa.to_le_bytes());
 
-				let mut hash_input = Vec::with_capacity(SHA384_LEN + 128);
-				hash_input.extend_from_slice(&mrtd);
-				hash_input.extend_from_slice(&add_buf);
-				mrtd = sha384(&hash_input)?;
+				hasher.update(&add_buf);
+			}
 
-				// TDH.MR.EXTEND for each 256-byte chunk
-				let page_data_start = page_idx * PAGE_SIZE;
-				let mut page_data = [0u8; PAGE_SIZE];
-				if page_data_start < section_data.len() {
-					let available = section_data.len() - page_data_start;
-					let copy_len = available.min(PAGE_SIZE);
-					page_data[..copy_len].copy_from_slice(
-						&section_data[page_data_start..page_data_start + copy_len],
-					);
-				}
+			// Phase 2: TDH.MR.EXTEND for every 256-byte chunk (only
+			// for sections with the MR_EXTEND attribute)
+			if extend_mr {
+				for page_idx in 0..num_pages {
+					let page_gpa = gpa_base + (page_idx as u64) * (PAGE_SIZE as u64);
 
-				for chunk_idx in 0..CHUNKS_PER_PAGE {
-					let chunk_gpa = page_gpa + (chunk_idx as u64) * (CHUNK_SIZE as u64);
+					let page_data_start = page_idx * PAGE_SIZE;
+					let mut page_data = [0u8; PAGE_SIZE];
+					if page_data_start < section_data.len() {
+						let available = section_data.len() - page_data_start;
+						let copy_len = available.min(PAGE_SIZE);
+						page_data[..copy_len].copy_from_slice(
+							&section_data[page_data_start..page_data_start + copy_len],
+						);
+					}
 
-					let mut ext_header = [0u8; 128];
-					ext_header[..9].copy_from_slice(b"MR.EXTEND");
-					ext_header[16..24].copy_from_slice(&chunk_gpa.to_le_bytes());
+					for chunk_idx in 0..CHUNKS_PER_PAGE {
+						let chunk_gpa = page_gpa + (chunk_idx as u64) * (CHUNK_SIZE as u64);
 
-					let chunk_start = chunk_idx * CHUNK_SIZE;
-					let chunk_data = &page_data[chunk_start..chunk_start + CHUNK_SIZE];
+						let mut ext_header = [0u8; 128];
+						ext_header[..9].copy_from_slice(b"MR.EXTEND");
+						ext_header[16..24].copy_from_slice(&chunk_gpa.to_le_bytes());
 
-					let mut hash_input =
-						Vec::with_capacity(SHA384_LEN + 128 + CHUNK_SIZE);
-					hash_input.extend_from_slice(&mrtd);
-					hash_input.extend_from_slice(&ext_header);
-					hash_input.extend_from_slice(chunk_data);
-					mrtd = sha384(&hash_input)?;
+						let chunk_start = chunk_idx * CHUNK_SIZE;
+						let chunk_data = &page_data[chunk_start..chunk_start + CHUNK_SIZE];
+
+						hasher.update(&ext_header);
+						hasher.update(chunk_data);
+					}
 				}
 			}
 		}
+
+		let mut mrtd = [0u8; SHA384_LEN];
+		mrtd.copy_from_slice(&hasher.finalize());
 
 		let hex = mrtd.iter().map(|b| format!("{b:02x}")).collect::<String>();
 		eprintln!("  [mrtd] MRTD = {hex}");
