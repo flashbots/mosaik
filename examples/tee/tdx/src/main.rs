@@ -5,12 +5,7 @@ use {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-	// use tracing_subscriber::prelude::*;
-	// tracing_subscriber::registry()
-	// 	.with(tracing_subscriber::fmt::layer())
-	// 	.try_init()?;
-
-	let network_id = NetworkId::from("tdx-example");
+	let network_id = NetworkId::from("tdx-example2");
 	let network = Network::new(network_id).await?;
 
 	println!("Network {network_id} created.");

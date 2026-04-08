@@ -555,7 +555,7 @@ impl AlpineBuilder {
 
 		let gz_file = File::create(&gz_path).unwrap();
 		let status = Command::new("gzip")
-			.args(["-9", "-c"])
+			.args(["-9", "-n", "-c"])
 			.arg(&cpio_path)
 			.stdout(gz_file)
 			.status()
@@ -1145,6 +1145,86 @@ fn cross_compile_musl(
 
 	cmd.env("__TDX_IMAGE_INNER_BUILD", "1");
 
+	// Reproducible builds: disable incremental compilation to
+	// ensure identical output for identical source code.
+	cmd.env("CARGO_INCREMENTAL", "0");
+
+	// Reproducible builds: remap absolute paths out of the binary.
+	//
+	// --remap-path-prefix strips the local checkout and cargo
+	// registry paths from panic messages, debug info, `file!()`,
+	// and DWARF DW_AT_comp_dir entries.  This prevents the binary
+	// from changing when the same source is built from a different
+	// directory.
+	//
+	// We also set CARGO_ENCODED_RUSTFLAGS rather than RUSTFLAGS
+	// because the former is the delimiter-safe cargo-internal
+	// form and won't clobber any flags the user already set.
+	let remap_flags = {
+		let mut flags = String::new();
+
+		// Remap the crate source tree
+		flags.push_str(&format!(
+			"--remap-path-prefix={}=/build",
+			manifest_dir.display()
+		));
+
+		// Remap the cargo registry / git sources.
+		// Always remap both CARGO_HOME (if set) and $HOME/.cargo
+		// so the remap matches regardless of how cargo resolves it.
+		let mut cargo_homes: Vec<String> = Vec::new();
+		if let Ok(ch) = env::var("CARGO_HOME") {
+			cargo_homes.push(ch);
+		}
+		if let Ok(home) = env::var("HOME") {
+			let default = format!("{home}/.cargo");
+			if !cargo_homes.contains(&default) {
+				cargo_homes.push(default);
+			}
+		}
+		for home in &cargo_homes {
+			flags.push_str(&format!(
+				"\x1f--remap-path-prefix={home}/registry/src=/registry"
+			));
+			flags.push_str(&format!(
+				"\x1f--remap-path-prefix={home}/git/checkouts=/git"
+			));
+		}
+
+		// Remap the rustup toolchain sysroot
+		if let Ok(sysroot) = {
+			Command::new("rustc")
+				.args(["--print", "sysroot"])
+				.output()
+				.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+		} {
+			if !sysroot.is_empty() {
+				flags
+					.push_str(&format!("\x1f--remap-path-prefix={sysroot}/lib=/rustlib"));
+			}
+		}
+
+		flags
+	};
+
+	// Merge with any existing CARGO_ENCODED_RUSTFLAGS the user
+	// already set so we don't silently clobber their flags.
+	//
+	// Also append linker + strip flags to the same variable:
+	//  - --build-id=none: emit a zeroed ELF .note.gnu.build-id instead of one
+	//    derived from file hashes (which vary with path-dependent debug info
+	//    before stripping).
+	//  - strip=symbols: remove all debug/symbol sections that carry absolute
+	//    paths even after --remap-path-prefix.
+	let existing = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
+	let mut combined = if existing.is_empty() {
+		remap_flags
+	} else {
+		format!("{existing}\x1f{remap_flags}")
+	};
+	combined.push_str("\x1f-Clink-arg=-Wl,--build-id=none\x1f-Cstrip=symbols");
+	cmd.env("CARGO_ENCODED_RUSTFLAGS", &combined);
+
 	let musl_linker_env = "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER";
 	let musl_cc_env = "CC_x86_64_unknown_linux_musl";
 
@@ -1663,25 +1743,48 @@ fn generate_self_extracting_script(
 	}
 
 	let tar_path = out_dir.join("payload.tar.gz");
+	let uncompressed_tar = out_dir.join("payload.tar");
 	let mut tar_args = vec!["vmlinuz", "initramfs.cpio.gz"];
 	if ovmf_output.exists() {
 		tar_args.push("OVMF.fd");
 	}
 
+	// Reproducible tar: SOURCE_DATE_EPOCH=0 clamps file mtimes to
+	// epoch, --numeric-owner avoids embedding user/group names.
+	// Compression is handled separately by gzip -n to suppress the
+	// OS byte and MTIME header field.
 	let tar_status = Command::new("tar")
-		.args(["czf"])
-		.arg(&tar_path)
-		.args(["-C"])
+		.args(["cf"])
+		.arg(&uncompressed_tar)
+		.args(["--numeric-owner", "-C"])
 		.arg(&bundle_dir)
 		.args(&tar_args)
+		.env("SOURCE_DATE_EPOCH", "0")
 		.status()
 		.expect("failed to run tar");
 
 	if !tar_status.success() {
 		eprintln!("  [warn] Failed to create tar payload — skipping run-qemu.sh");
 		let _ = fs::remove_dir_all(&bundle_dir);
+		let _ = fs::remove_file(&uncompressed_tar);
 		return;
 	}
+
+	let gz_file = File::create(&tar_path).unwrap();
+	let gz_status = Command::new("gzip")
+		.args(["-9", "-n", "-c"])
+		.arg(&uncompressed_tar)
+		.stdout(gz_file)
+		.status()
+		.expect("failed to run gzip");
+
+	if !gz_status.success() {
+		eprintln!("  [warn] Failed to compress tar payload — skipping run-qemu.sh");
+		let _ = fs::remove_dir_all(&bundle_dir);
+		let _ = fs::remove_file(&uncompressed_tar);
+		return;
+	}
+	let _ = fs::remove_file(&uncompressed_tar);
 
 	let payload = fs::read(&tar_path).unwrap();
 
