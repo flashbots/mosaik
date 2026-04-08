@@ -72,6 +72,11 @@ cli = ["clap", "colored"]
 tee = []
 tdx = ["tee", "configfs-tsm"]
 
+tdx-builder-all = ["tdx-builder-alpine", "tdx-builder-ubuntu"]
+tdx-builder-alpine = ["tdx-builder"]
+tdx-builder-ubuntu = ["tdx-builder"]
+tdx-builder = []
+
 [dependencies]
 tokio.workspace = true
 tracing.workspace = true

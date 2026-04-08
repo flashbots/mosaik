@@ -21,8 +21,9 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
 
-tdx-quote = "0.0.5"
+tdx-quote = { version = "0.0.5", features = ["pck"] }
 configfs-tsm = { version = "0.0.2" }
+reqwest = { version = "0.13" }
 
 [build-dependencies]
-mosaik = { workspace = true, features = ["tdx"] }
+mosaik = { workspace = true, features = ["tdx-builder-all"] }

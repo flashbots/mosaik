@@ -12,8 +12,8 @@
 //!    /init              — shell wrapper: mounts, loads tdx_guest, exec's
 //!    binary /bin/busybox       — from Alpine minirootfs /bin/sh            —
 //!    symlink → busybox /usr/bin/<binary>  — your compiled static Rust binary
-//!    /lib/...           — musl dynamic linker (for busybox) /lib/modules/...
-//!    — (optional) tdx_guest.ko if provided
+//!    /lib/...           — musl dynamic linker (for busybox) /lib/modules/... —
+//!    (optional) tdx_guest.ko if provided
 //! 4. gzip-compresses the CPIO into:
 //!    target/{release,debug}/<binary_name>-initramfs.cpio.gz
 //!
@@ -445,8 +445,8 @@ fn main() {
 	if !status.success() {
 		panic!(
 			"\n══════════════════════════════════════════════════════════════════\\
-			 nCross-compilation to {musl_target} failed.\n\nCheck the compiler \
-			 output above for details.\nIf the linker failed, ensure your musl \
+			 nCross-compilation to {musl_target} failed.\n\nCheck the compiler output \
+			 above for details.\nIf the linker failed, ensure your musl \
 			 cross-toolchain is correct:\n\nexport \
 			 CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=x86_64-linux-musl-gcc\\
 			 n══════════════════════════════════════════════════════════════════\n"
@@ -899,14 +899,14 @@ exec /usr/bin/{name} "$@"
 		);
 
 		let wanted_modules = [
-			"configfs",                          // configfs filesystem
-			"tsm",                               // TSM core (CONFIG_TSM_REPORTS)
-			"tdx_guest",                         /* TDX guest driver (underscore
-			                                      * variant) */
-			"tdx-guest",                  // TDX guest driver (hyphen variant)
-			"vsock",                      // core vsock (CONFIG_VSOCKETS)
+			"configfs", // configfs filesystem
+			"tsm",      // TSM core (CONFIG_TSM_REPORTS)
+			"tdx_guest", /* TDX guest driver (underscore
+			             * variant) */
+			"tdx-guest", // TDX guest driver (hyphen variant)
+			"vsock",     // core vsock (CONFIG_VSOCKETS)
 			"vmw_vsock_virtio_transport", /* virtio vsock transport (for QGS
-			                               * communication) */
+			              * communication) */
 			"vmw_vsock_virtio_transport_common", // shared code for virtio vsock
 		];
 
@@ -1131,7 +1131,11 @@ set -euo pipefail
 # Resolve the directory this script lives in (works even if called via symlink)
 SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
-OVMF="${{OVMF:-/usr/share/ovmf/OVMF.fd}}"
+OVMF="${{OVMF:-$SCRIPT_DIR/{crate_name}-OVMF.fd}}"
+# Fall back to host system OVMF if bundled one doesn't exist
+if [ ! -f "$OVMF" ]; then
+    OVMF="/usr/share/ovmf/OVMF.fd"
+fi
 KERNEL="${{KERNEL:-$SCRIPT_DIR/{crate_name}-vmlinuz}}"
 INITRD="${{INITRD:-$SCRIPT_DIR/{crate_name}-initramfs.cpio.gz}}"
 MEMORY="${{MEMORY:-4G}}"
@@ -1204,24 +1208,149 @@ exec qemu-system-x86_64 \
 	);
 
 	// -------------------------------------------------------------------
-	// 10. Precompute MRTD from OVMF.fd
+	// 10. Obtain OVMF.fd and precompute MRTD
 	// -------------------------------------------------------------------
 	// MRTD only depends on the OVMF.fd firmware binary — it does NOT include
 	// the kernel, initrd, or rootfs (those go into RTMRs at runtime).
 	//
-	// Set TDX_IMAGE_OVMF to your OVMF.fd path to enable this.
-	// On the TDX host after Canonical's setup: /usr/share/ovmf/OVMF.fd
+	// Strategy:
+	//   a) TDX_IMAGE_OVMF is set → use that file
+	//   b) Auto-download from Canonical's TDX PPA (tdx-specific OVMF build)
+	//      or from Ubuntu's main archive (standard OVMF with TDX support)
+	//
+	// IMPORTANT: The MRTD depends on the EXACT OVMF.fd binary. The precomputed
+	// MRTD will only match a live TD if the same OVMF.fd is used to launch it.
+	// Canonical's TDX build (/usr/share/ovmf/OVMF.fd on TDX hosts) differs
+	// from Ubuntu's stock OVMF package.
 
 	println!("cargo:rerun-if-env-changed=TDX_IMAGE_OVMF");
+	println!("cargo:rerun-if-env-changed=TDX_IMAGE_OVMF_VERSION");
 
-	if let Ok(ovmf_path) = env::var("TDX_IMAGE_OVMF") {
-		eprintln!("==> Precomputing MRTD from {ovmf_path}...");
+	let ovmf_output = target_dir
+		.join(profile)
+		.join(format!("{crate_name}-OVMF.fd"));
+
+	let ovmf_data: Option<Vec<u8>> = if let Ok(ovmf_path) =
+		env::var("TDX_IMAGE_OVMF")
+	{
+		// User provided an explicit OVMF path
+		eprintln!("==> Using user-provided OVMF: {ovmf_path}");
 		println!("cargo:rerun-if-changed={ovmf_path}");
+		Some(
+			fs::read(&ovmf_path).unwrap_or_else(|e| {
+				panic!("Failed to read OVMF.fd at {ovmf_path}: {e}")
+			}),
+		)
+	} else {
+		// Auto-download OVMF .deb and extract OVMF.fd
+		// Try Canonical's TDX PPA first, then fall back to Ubuntu's archive
+		eprintln!("==> Auto-downloading OVMF.fd...");
 
-		let ovmf_data = fs::read(&ovmf_path)
-			.unwrap_or_else(|e| panic!("Failed to read OVMF.fd at {ovmf_path}: {e}"));
+		let ovmf_version = env_or("TDX_IMAGE_OVMF_VERSION", "2024.02-3+tdx1.0");
 
-		match mrtd::compute_mrtd(&ovmf_data) {
+		// Canonical's TDX PPA: ovmf_2024.02-3+tdx1.0_all.deb
+		// Ubuntu archive:      ovmf_2024.02-2ubuntu0.4_all.deb
+		let ovmf_urls = if ovmf_version.contains("tdx") {
+			vec![
+                format!(
+                    "https://ppa.launchpadcontent.net/kobuk-team/tdx-release/ubuntu/pool/main/e/edk2/ovmf_{ovmf_version}_all.deb"
+                ),
+            ]
+		} else {
+			vec![
+                format!(
+                    "https://archive.ubuntu.com/ubuntu/pool/main/e/edk2/ovmf_{ovmf_version}_all.deb"
+                ),
+            ]
+		};
+
+		let mut downloaded = None;
+		let ovmf_deb_name = format!("ovmf_{ovmf_version}_all.deb");
+
+		for url in &ovmf_urls {
+			let cached = kernel_cache_dir.join(&ovmf_deb_name);
+			if cached.exists() {
+				eprintln!("  [cached] {}", cached.display());
+				downloaded = Some(cached);
+				break;
+			}
+			eprintln!("  [download] {url}");
+			let status = Command::new("curl")
+				.args(["-fSL", "--retry", "3", "-o"])
+				.arg(&cached)
+				.arg(url)
+				.status();
+			if status.map(|s| s.success()).unwrap_or(false) {
+				downloaded = Some(cached);
+				break;
+			} else {
+				let _ = fs::remove_file(&cached);
+				eprintln!("  [warn] Failed to download from {url}");
+			}
+		}
+
+		if let Some(deb_path) = downloaded {
+			// Extract OVMF.fd from the .deb
+			let ovmf_extract = kernel_cache_dir.join("extract-ovmf");
+			let _ = fs::remove_dir_all(&ovmf_extract);
+			fs::create_dir_all(&ovmf_extract).unwrap();
+
+			let _ = Command::new("ar")
+				.args(["x"])
+				.arg(&deb_path)
+				.current_dir(&ovmf_extract)
+				.status();
+
+			if let Some(data_tar) = find_file_starting_with(&ovmf_extract, "data.tar")
+			{
+				let _ = Command::new("tar")
+					.args(["xf"])
+					.arg(&data_tar)
+					.args(["-C"])
+					.arg(&ovmf_extract)
+					.status();
+			}
+
+			// Look for OVMF.fd — it's at /usr/share/ovmf/OVMF.fd inside the .deb
+			let found = find_file_recursive(&ovmf_extract, "OVMF.fd");
+			let result = if let Some(ref ovmf_path) = found {
+				let data = fs::read(ovmf_path).ok();
+				if let Some(ref d) = data {
+					eprintln!(
+						"  [ok] OVMF.fd extracted ({:.1} MB)",
+						d.len() as f64 / 1_048_576.0
+					);
+				}
+				data
+			} else {
+				eprintln!("  [warn] OVMF.fd not found in .deb");
+				None
+			};
+
+			let _ = fs::remove_dir_all(&ovmf_extract);
+			result
+		} else {
+			eprintln!(
+				"  [warn] Could not download OVMF .deb — skipping MRTD precomputation"
+			);
+			eprintln!(
+				"         Set TDX_IMAGE_OVMF=/path/to/OVMF.fd to provide it manually"
+			);
+			None
+		}
+	};
+
+	// Copy OVMF.fd to output directory and precompute MRTD
+	if let Some(ref data) = ovmf_data {
+		fs::write(&ovmf_output, data).unwrap();
+		println!(
+			"cargo:warning=OVMF: {} ({:.1} MB)",
+			ovmf_output.display(),
+			data.len() as f64 / 1_048_576.0,
+		);
+
+		eprintln!("==> Precomputing MRTD...");
+		match mrtd::compute_mrtd(data) {
 			Ok(digest) => {
 				let hex = digest
 					.iter()
@@ -1230,7 +1359,6 @@ exec qemu-system-x86_64 \
 				println!("cargo:warning=MRTD: {hex}");
 				println!("cargo:rustc-env=TDX_EXPECTED_MRTD={hex}");
 
-				// Also write to a file next to the initramfs
 				let mrtd_path = target_dir
 					.join(profile)
 					.join(format!("{crate_name}-mrtd.hex"));
@@ -1241,11 +1369,194 @@ exec qemu-system-x86_64 \
 				println!("cargo:warning=MRTD computation failed: {e}");
 			}
 		}
+	}
+
+	// -------------------------------------------------------------------
+	// 11. Generate self-extracting run-qemu.sh
+	// -------------------------------------------------------------------
+	// Bundles vmlinuz + initramfs + OVMF.fd + launch logic into a single
+	// file that can be scp'd to a TDX host and run directly:
+	//
+	//   scp target/release/<crate>-run-qemu.sh tdxhost:~/
+	//   ssh tdxhost 'sudo ~/run-qemu.sh'
+	//
+	// The script extracts the payload to a temp dir, launches QEMU, and
+	// cleans up on exit.
+
+	let run_qemu_path = target_dir
+		.join(profile)
+		.join(format!("{crate_name}-run-qemu.sh"));
+
+	if kernel_output.exists() && final_path.exists() {
+		eprintln!("==> Generating self-extracting {crate_name}-run-qemu.sh...");
+
+		// Create a tar archive of the three payload files in a temp dir
+		let bundle_dir = out_dir.join("bundle");
+		let _ = fs::remove_dir_all(&bundle_dir);
+		fs::create_dir_all(&bundle_dir).unwrap();
+
+		// Copy files with short names into bundle dir
+		fs::copy(&kernel_output, bundle_dir.join("vmlinuz")).unwrap();
+		fs::copy(&final_path, bundle_dir.join("initramfs.cpio.gz")).unwrap();
+		if ovmf_output.exists() {
+			fs::copy(&ovmf_output, bundle_dir.join("OVMF.fd")).unwrap();
+		}
+
+		// Create the tar payload
+		let tar_path = out_dir.join("payload.tar.gz");
+		let tar_status = Command::new("tar")
+			.args(["czf"])
+			.arg(&tar_path)
+			.args(["-C"])
+			.arg(&bundle_dir)
+			.args(["vmlinuz", "initramfs.cpio.gz"])
+			.args(if ovmf_output.exists() {
+				vec!["OVMF.fd"]
+			} else {
+				vec![]
+			})
+			.status()
+			.expect("failed to run tar");
+
+		if !tar_status.success() {
+			eprintln!("  [warn] Failed to create tar payload — skipping run-qemu.sh");
+		} else {
+			let payload = fs::read(&tar_path).unwrap();
+
+			let header = format!(
+				r#"#!/usr/bin/env bash
+# Self-extracting TDX guest launcher for {crate_name}
+# Generated by build.rs — contains vmlinuz + initramfs + OVMF.fd
+#
+# Usage:
+#   sudo ./{crate_name}-run-qemu.sh
+#
+# Environment variables:
+#   MEMORY    — guest RAM (default: 4G)
+#   CPUS      — guest vCPUs (default: 4)
+#   SSH_PORT  — host port forwarded to guest :22 (default: 10022)
+#   OVMF      — override OVMF.fd path (default: extracted from this script)
+#   KERNEL    — override vmlinuz path
+#   INITRD    — override initramfs path
+#   KEEP      — set to 1 to keep extracted files after exit
+
+set -euo pipefail
+
+MARKER="__PAYLOAD_BELOW__"
+MEMORY="${{MEMORY:-4G}}"
+CPUS="${{CPUS:-4}}"
+SSH_PORT="${{SSH_PORT:-10022}}"
+
+# Create temp dir and ensure cleanup
+WORK_DIR=$(mktemp -d /tmp/{crate_name}-tdx.XXXXXX)
+cleanup() {{
+    if [ "${{KEEP:-0}}" = "1" ]; then
+        echo "Extracted files kept at: $WORK_DIR"
+    else
+        rm -rf "$WORK_DIR"
+    fi
+}}
+trap cleanup EXIT
+
+# Extract payload
+echo "Extracting TDX guest image..."
+PAYLOAD_LINE=$(grep -an "^$MARKER" "$0" | tail -1 | cut -d: -f1)
+PAYLOAD_START=$((PAYLOAD_LINE + 1))
+tail -n +$PAYLOAD_START "$0" | tar xzf - -C "$WORK_DIR"
+
+OVMF="${{OVMF:-$WORK_DIR/OVMF.fd}}"
+KERNEL="${{KERNEL:-$WORK_DIR/vmlinuz}}"
+INITRD="${{INITRD:-$WORK_DIR/initramfs.cpio.gz}}"
+
+# Fall back to system OVMF if not bundled
+if [ ! -f "$OVMF" ]; then
+    OVMF="/usr/share/ovmf/OVMF.fd"
+fi
+
+for f in "$OVMF" "$KERNEL" "$INITRD"; do
+    if [ ! -f "$f" ]; then
+        echo "ERROR: Missing file: $f" >&2
+        exit 1
+    fi
+done
+
+TDX_OBJECT='{{"qom-type":"tdx-guest","id":"tdx0","sept-ve-disable":true,"quote-generation-socket":{{"type":"vsock","cid":"2","port":"4050"}}}}'
+CMDLINE="console=ttyS0 ip=dhcp"
+
+echo "=== Launching TDX Guest: {crate_name} ==="
+echo "  OVMF:     $OVMF"
+echo "  Kernel:   $KERNEL"
+echo "  Initrd:   $INITRD"
+echo "  Memory:   $MEMORY"
+echo "  CPUs:     $CPUS"
+echo "  SSH:      localhost:$SSH_PORT"
+echo ""
+
+exec qemu-system-x86_64 \
+    -accel kvm \
+    -cpu host,pmu=off \
+    -smp "$CPUS" \
+    -m "$MEMORY" \
+    \
+    -object "$TDX_OBJECT" \
+    -machine q35,kernel-irqchip=split,confidential-guest-support=tdx0 \
+    \
+    -bios "$OVMF" \
+    -kernel "$KERNEL" \
+    -initrd "$INITRD" \
+    -append "$CMDLINE" \
+    \
+    -netdev user,id=net0,hostfwd=tcp::"$SSH_PORT"-:22 \
+    -device virtio-net-pci,netdev=net0 \
+    -device vhost-vsock-pci,guest-cid=3 \
+    \
+    -nographic \
+    -nodefaults \
+    -serial mon:stdio
+
+# The payload tar is appended below this marker — do not remove it
+{marker}
+"#,
+				crate_name = crate_name,
+				marker = "MARKER", // placeholder, replaced below
+			);
+
+			// Replace the "MARKER" placeholder with the actual marker string
+			let header = header.replace(
+				&format!("\n{}\n", "MARKER"),
+				&format!("\n{}\n", "__PAYLOAD_BELOW__"),
+			);
+
+			// Write header + payload
+			let mut out_file = File::create(&run_qemu_path).unwrap();
+			out_file.write_all(header.as_bytes()).unwrap();
+			out_file.write_all(&payload).unwrap();
+			out_file.sync_all().unwrap();
+
+			// Make executable
+			#[cfg(unix)]
+			{
+				use std::os::unix::fs::PermissionsExt;
+				let mut perms = fs::metadata(&run_qemu_path).unwrap().permissions();
+				perms.set_mode(0o755);
+				fs::set_permissions(&run_qemu_path, perms).unwrap();
+			}
+
+			let run_qemu_size =
+				fs::metadata(&run_qemu_path).map(|m| m.len()).unwrap_or(0);
+
+			println!(
+				"cargo:warning=run-qemu: {} ({:.1} MB — single-file deployment)",
+				run_qemu_path.display(),
+				run_qemu_size as f64 / 1_048_576.0,
+			);
+		}
+
+		// Cleanup
+		let _ = fs::remove_dir_all(&bundle_dir);
+		let _ = fs::remove_file(out_dir.join("payload.tar.gz"));
 	} else {
-		eprintln!(
-			"==> Skipping MRTD precomputation (set TDX_IMAGE_OVMF=/path/to/OVMF.fd \
-			 to enable)"
-		);
+		eprintln!("==> Skipping run-qemu.sh (kernel or initramfs not available)");
 	}
 }
 
