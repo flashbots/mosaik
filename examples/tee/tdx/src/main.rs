@@ -1,19 +1,7 @@
 use {
 	mosaik::{tee::tdx::NetworkTicketExt, *},
-	tdx_quote::{
-		CertificationData,
-		CertificationDataInner,
-		Quote,
-		QuoteVerificationError,
-	},
+	tdx_quote::Quote,
 };
-
-/// Default URL for the host's PCCS, reachable from inside a QEMU
-/// user-mode-networking guest at the gateway address.
-const DEFAULT_PCCS_URL: &str = "https://10.0.2.2:8081";
-
-/// Intel's public Provisioning Certification Service.
-const INTEL_PCS_URL: &str = "https://api.trustedservices.intel.com";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -38,6 +26,15 @@ async fn main() -> anyhow::Result<()> {
 
 	let mrtd = network.tdx().mrtd().unwrap();
 	println!("MR_TD measurement: {mrtd}");
+
+	let rtmr0 = network.tdx().rtmr0().unwrap();
+	println!("RTMR0 measurement: {rtmr0}");
+
+	let rtmr1 = network.tdx().rtmr1().unwrap();
+	println!("RTMR1 measurement: {rtmr1}");
+
+	let rtmr2 = network.tdx().rtmr2().unwrap();
+	println!("RTMR2 measurement: {rtmr2}");
 
 	Ok(())
 }

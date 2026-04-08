@@ -31,6 +31,27 @@ impl TdxNetworkHelpers<'_> {
 		let quote = tdx_quote::Quote::from_bytes(quote.as_slice())?;
 		Ok(quote.mrtd().into())
 	}
+
+	pub fn rtmr0(&self) -> Result<Measurement, Error> {
+		let _ = self.0;
+		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
+		let quote = tdx_quote::Quote::from_bytes(quote.as_slice())?;
+		Ok(quote.rtmr0().into())
+	}
+
+	pub fn rtmr1(&self) -> Result<Measurement, Error> {
+		let _ = self.0;
+		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
+		let quote = tdx_quote::Quote::from_bytes(quote.as_slice())?;
+		Ok(quote.rtmr1().into())
+	}
+
+	pub fn rtmr2(&self) -> Result<Measurement, Error> {
+		let _ = self.0;
+		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
+		let quote = tdx_quote::Quote::from_bytes(quote.as_slice())?;
+		Ok(quote.rtmr2().into())
+	}
 }
 
 /// Extension trait for `Network` to provide TDX-specific ticket support.

@@ -13,7 +13,7 @@ use {
 ///
 /// Used to express an expected measurement when configuring a
 /// [`TdxValidator`].
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Measurement([u8; 48]);
 
 impl Measurement {
@@ -77,7 +77,7 @@ impl From<[u8; 48]> for Measurement {
 
 impl core::fmt::Debug for Measurement {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-		write!(f, "TdxMeasurement({})", hex::encode(self.0))
+		write!(f, "Measurement({})", hex::encode(self.0))
 	}
 }
 

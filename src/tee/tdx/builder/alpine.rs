@@ -31,12 +31,15 @@
 //! All builder methods are optional — defaults match an auto-downloaded
 //! Ubuntu 24.04 kernel with Alpine 3.21.0 minirootfs.
 
-use std::{
-	env,
-	fs::{self, File},
-	io::{self, BufWriter, Write},
-	path::{Path, PathBuf},
-	process::{Command, Stdio},
+use {
+	crate::tee::tdx::ticket::Measurement,
+	std::{
+		env,
+		fs::{self, File},
+		io::{self, BufWriter, Write},
+		path::{Path, PathBuf},
+		process::{Command, Stdio},
+	},
 };
 
 /// Builder for Alpine-based TDX guest images.
@@ -230,10 +233,10 @@ impl AlpineBuilder {
 	///
 	/// Panics if any required tool (`curl`, `tar`, `gzip`, `ar`,
 	/// etc.) is missing or if cross-compilation fails.
-	pub fn build(self) {
+	pub fn build(self) -> Option<BuiltOutput> {
 		// --- Recursion guard -----------------------------------------------
 		if env::var("__TDX_IMAGE_INNER_BUILD").is_ok() {
-			return;
+			return None;
 		}
 
 		println!("cargo:rerun-if-env-changed=TDX_IMAGE_SKIP");
@@ -244,7 +247,7 @@ impl AlpineBuilder {
 
 		if env_or("TDX_IMAGE_SKIP", "0") == "1" {
 			eprintln!("TDX_IMAGE_SKIP=1 — skipping initramfs build");
-			return;
+			return None;
 		}
 
 		let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
@@ -636,6 +639,10 @@ impl AlpineBuilder {
 			self.ovmf_version.as_deref(),
 		);
 
+		let mut mrtd_value = [0u8; 48];
+		let mut rtmr1_value = [0u8; 48];
+		let mut rtmr2_value = [0u8; 48];
+
 		if let Some(ref data) = ovmf_data {
 			fs::write(&ovmf_output, data).unwrap();
 			println!(
@@ -647,6 +654,7 @@ impl AlpineBuilder {
 			eprintln!("==> Precomputing MRTD...");
 			match mrtd::compute_mrtd(data) {
 				Ok(digest) => {
+					mrtd_value = digest;
 					let hex = digest
 						.iter()
 						.map(|b| format!("{b:02x}"))
@@ -667,6 +675,51 @@ impl AlpineBuilder {
 		}
 
 		// ---------------------------------------------------------------
+		// 10b. Precompute RTMR[2] (initrd + cmdline measurement)
+		// ---------------------------------------------------------------
+		if final_path.exists() {
+			eprintln!("==> Precomputing RTMR[2]...");
+			let initrd_data = fs::read(&final_path).unwrap();
+			let cmdline = "console=ttyS0 ip=dhcp";
+			rtmr2_value = mrtd::compute_rtmr2(cmdline, &initrd_data);
+			let hex = rtmr2_value
+				.iter()
+				.map(|b| format!("{b:02x}"))
+				.collect::<String>();
+			println!("cargo:warning=RTMR[2]: {hex}");
+			println!("cargo:rustc-env=TDX_EXPECTED_RTMR2={hex}");
+
+			let rtmr2_path = target_dir
+				.join(profile)
+				.join(format!("{crate_name}-rtmr2.hex"));
+			fs::write(&rtmr2_path, &hex).unwrap();
+			println!("cargo:warning=RTMR[2] written to: {}", rtmr2_path.display());
+		}
+
+		// ---------------------------------------------------------------
+		// 10c. Precompute RTMR[1] (kernel boot measurement)
+		// ---------------------------------------------------------------
+		if kernel_output.exists() && final_path.exists() {
+			eprintln!("==> Precomputing RTMR[1]...");
+			let kernel_data = fs::read(&kernel_output).unwrap();
+			let initrd_data = fs::read(&final_path).unwrap();
+			rtmr1_value =
+				mrtd::compute_rtmr1(&kernel_data, &initrd_data, &self.default_memory);
+			let hex = rtmr1_value
+				.iter()
+				.map(|b| format!("{b:02x}"))
+				.collect::<String>();
+			println!("cargo:warning=RTMR[1]: {hex}");
+			println!("cargo:rustc-env=TDX_EXPECTED_RTMR1={hex}");
+
+			let rtmr1_path = target_dir
+				.join(profile)
+				.join(format!("{crate_name}-rtmr1.hex"));
+			fs::write(&rtmr1_path, &hex).unwrap();
+			println!("cargo:warning=RTMR[1] written to: {}", rtmr1_path.display(),);
+		}
+
+		// ---------------------------------------------------------------
 		// 11. Generate self-extracting run-qemu.sh
 		// ---------------------------------------------------------------
 		generate_self_extracting_script(
@@ -681,6 +734,20 @@ impl AlpineBuilder {
 			&self.default_memory,
 			self.ssh_forward,
 		);
+
+		let bundle_path = target_dir
+			.join(profile)
+			.join(format!("{crate_name}-run-qemu.sh"));
+
+		Some(BuiltOutput {
+			initramfs_path: final_path,
+			kernel_path: kernel_output,
+			ovmf_path: ovmf_output,
+			bundle_path,
+			mrtd: Measurement::from(mrtd_value),
+			rtmr1: Measurement::from(rtmr1_value),
+			rtmr2: Measurement::from(rtmr2_value),
+		})
 	}
 }
 
@@ -705,6 +772,17 @@ impl Default for AlpineBuilder {
 			ovmf_version: None,
 		}
 	}
+}
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct BuiltOutput {
+	pub initramfs_path: PathBuf,
+	pub kernel_path: PathBuf,
+	pub ovmf_path: PathBuf,
+	pub bundle_path: PathBuf,
+	pub mrtd: Measurement,
+	pub rtmr1: Measurement,
+	pub rtmr2: Measurement,
 }
 
 // ===========================================================================
@@ -1923,5 +2001,356 @@ mod mrtd {
 		eprintln!("  [mrtd] MRTD = {hex}");
 
 		Ok(mrtd)
+	}
+
+	/// Compute the expected RTMR[2] register value.
+	///
+	/// RTMR[2] receives exactly two events during TDX boot:
+	///  1. Kernel command line (UTF-16LE with null terminator)
+	///  2. Initrd (raw file bytes, typically gzipped CPIO)
+	///
+	/// Each event extends the register:
+	///   `RTMR[2] = SHA384(RTMR[2] || SHA384(preimage))`
+	///
+	/// For non-UKI boots (separate -kernel/-initrd), QEMU appends
+	/// `" initrd=initrd"` to the measured command line when an initrd
+	/// is present.
+	pub fn compute_rtmr2(cmdline: &str, initrd: &[u8]) -> [u8; SHA384_LEN] {
+		let mut rtmr2 = [0u8; SHA384_LEN];
+
+		// Event 1: kernel command line
+		// QEMU appends " initrd=initrd" when an initrd is provided.
+		let measured_cmdline = if !initrd.is_empty() {
+			format!("{cmdline} initrd=initrd\0")
+		} else {
+			format!("{cmdline}\0")
+		};
+
+		// Encode as UTF-16LE
+		let cmdline_utf16: Vec<u8> = measured_cmdline
+			.encode_utf16()
+			.flat_map(|c| c.to_le_bytes())
+			.collect();
+
+		let cmdline_digest = Sha384::digest(&cmdline_utf16);
+		let mut extend_input = Vec::with_capacity(SHA384_LEN * 2);
+		extend_input.extend_from_slice(&rtmr2);
+		extend_input.extend_from_slice(&cmdline_digest);
+		rtmr2.copy_from_slice(&Sha384::digest(&extend_input));
+
+		eprintln!(
+			"  [rtmr2] event 1: cmdline ({} UTF-16LE bytes)",
+			cmdline_utf16.len(),
+		);
+
+		// Event 2: initrd (raw file bytes as loaded by QEMU)
+		if !initrd.is_empty() {
+			let initrd_digest = Sha384::digest(initrd);
+			extend_input.clear();
+			extend_input.extend_from_slice(&rtmr2);
+			extend_input.extend_from_slice(&initrd_digest);
+			rtmr2.copy_from_slice(&Sha384::digest(&extend_input));
+
+			eprintln!(
+				"  [rtmr2] event 2: initrd ({:.1} MB)",
+				initrd.len() as f64 / 1_048_576.0,
+			);
+		}
+
+		let hex = rtmr2.iter().map(|b| format!("{b:02x}")).collect::<String>();
+		eprintln!("  [rtmr2] RTMR[2] = {hex}");
+
+		rtmr2
+	}
+
+	// -----------------------------------------------------------------
+	// RTMR[1] — kernel boot measurement
+	// -----------------------------------------------------------------
+
+	/// QEMU memory layout: determines the below-4G RAM size which
+	/// affects where the initrd is loaded and thus the kernel setup
+	/// header patches.
+	struct MemoryLayout {
+		below_4g: u64,
+	}
+
+	/// Size of QEMU's ACPI data region.
+	const ACPI_DATA_SIZE: u64 = 0x20000 + 0x8000;
+
+	/// Parse a QEMU `-m` memory string into bytes.
+	/// Accepts "4G", "4096M", or bare MiB number.
+	fn parse_memory_bytes(s: &str) -> u64 {
+		let s = s.trim();
+		if let Some(n) = s.strip_suffix('G').or_else(|| s.strip_suffix('g')) {
+			n.trim().parse::<u64>().unwrap() * 1024 * 1024 * 1024
+		} else if let Some(n) = s.strip_suffix('M').or_else(|| s.strip_suffix('m'))
+		{
+			n.trim().parse::<u64>().unwrap() * 1024 * 1024
+		} else {
+			s.parse::<u64>().unwrap() * 1024 * 1024
+		}
+	}
+
+	/// Compute the QEMU PC memory layout from total RAM bytes.
+	fn memory_layout(total: u64) -> MemoryLayout {
+		let lowmem = if total >= 0xb000_0000 {
+			0x8000_0000
+		} else {
+			0xb000_0000
+		};
+		MemoryLayout {
+			below_4g: if total >= lowmem { lowmem } else { total },
+		}
+	}
+
+	/// Replicate QEMU's `x86_load_linux` kernel setup-header patches.
+	///
+	/// QEMU modifies the kernel image in memory before OVMF measures
+	/// it, so the PE Authenticode hash must be computed over the
+	/// patched bytes.
+	fn patch_kernel_setup(
+		kernel: &mut [u8],
+		initrd_len: usize,
+		layout: &MemoryLayout,
+	) {
+		let magic = &kernel[0x202..0x206];
+		let protocol = if magic == b"HdrS" {
+			u16::from_le_bytes(kernel[0x206..0x208].try_into().unwrap())
+		} else {
+			0
+		};
+
+		let (real_addr, cmdline_addr): (u32, u32) =
+			if protocol >= 0x202 && (kernel[0x211] & 0x01) != 0 {
+				(0x10000, 0x20000)
+			} else {
+				(0x90000, 0x9a000_u32.wrapping_sub(32))
+			};
+
+		// Determine maximum initrd address
+		let mut initrd_max: u64 = if protocol >= 0x20c
+			&& (u16::from_le_bytes(kernel[0x236..0x238].try_into().unwrap()) & 2) != 0
+		{
+			0xffff_ffff
+		} else if protocol >= 0x203 {
+			u32::from_le_bytes(kernel[0x22c..0x230].try_into().unwrap()) as u64
+		} else {
+			0x37ff_ffff
+		};
+
+		let mem_cap = layout.below_4g - ACPI_DATA_SIZE;
+		if initrd_max >= mem_cap {
+			initrd_max = mem_cap - 1;
+		}
+
+		// Patch cmdline pointer
+		if protocol >= 0x202 {
+			kernel[0x228..0x22c].copy_from_slice(&cmdline_addr.to_le_bytes());
+		} else {
+			kernel[0x20..0x22].copy_from_slice(&0xa33f_u16.to_le_bytes());
+			kernel[0x22..0x24].copy_from_slice(
+				&(cmdline_addr.wrapping_sub(real_addr) as u16).to_le_bytes(),
+			);
+		}
+
+		// type_of_loader
+		if protocol >= 0x200 {
+			kernel[0x210] = 0xb0;
+		}
+
+		// loadflags + heap_end_ptr
+		if protocol >= 0x201 {
+			kernel[0x211] |= 0x80;
+			kernel[0x224..0x226].copy_from_slice(
+				&((cmdline_addr.wrapping_sub(real_addr).wrapping_sub(0x200)) as u16)
+					.to_le_bytes(),
+			);
+		}
+
+		// initrd address + size
+		if initrd_len > 0 {
+			assert!(
+				(initrd_len as u64) < initrd_max,
+				"initrd too large for memory layout"
+			);
+			let initrd_addr = ((initrd_max - initrd_len as u64) & !4095) as u32;
+			kernel[0x218..0x21c].copy_from_slice(&initrd_addr.to_le_bytes());
+			kernel[0x21c..0x220].copy_from_slice(&(initrd_len as u32).to_le_bytes());
+		}
+	}
+
+	/// Compute the PE Authenticode hash preimage.
+	///
+	/// This concatenates the PE file contents in hash order: headers
+	/// (excluding the checksum field and certificate directory entry),
+	/// then section bodies sorted by raw data pointer, then any
+	/// trailing data minus the certificate blob.
+	fn pe_hash_preimage(data: &[u8]) -> Vec<u8> {
+		let e_lfanew =
+			u32::from_le_bytes(data[0x3c..0x40].try_into().unwrap()) as usize;
+
+		let file_header_offset = e_lfanew + 4;
+		let num_sections = u16::from_le_bytes(
+			data[file_header_offset + 2..file_header_offset + 4]
+				.try_into()
+				.unwrap(),
+		) as usize;
+		let size_of_optional_header = u16::from_le_bytes(
+			data[file_header_offset + 16..file_header_offset + 18]
+				.try_into()
+				.unwrap(),
+		) as usize;
+		let opt = file_header_offset + 20;
+
+		let magic = u16::from_le_bytes(data[opt..opt + 2].try_into().unwrap());
+		let fixed_opt_size: usize = match magic {
+			0x10b => 96,  // PE32
+			0x20b => 112, // PE32+
+			_ => panic!("Unknown PE optional-header magic: {magic:#x}"),
+		};
+
+		let size_of_headers =
+			u32::from_le_bytes(data[opt + 60..opt + 64].try_into().unwrap()) as usize;
+		let num_rva = u32::from_le_bytes(
+			data[opt + fixed_opt_size - 4..opt + fixed_opt_size]
+				.try_into()
+				.unwrap(),
+		) as usize;
+
+		let checksum_off = opt + 0x40;
+		let security_dir_idx = 4;
+
+		let mut parts: Vec<&[u8]> = Vec::new();
+
+		// Everything before the checksum field
+		parts.push(&data[..checksum_off]);
+
+		// After checksum, skip cert-dir entry if present
+		let after_checksum = checksum_off + 4;
+		if num_rva <= security_dir_idx {
+			parts.push(&data[after_checksum..size_of_headers]);
+		} else {
+			let cert_dir_off = opt + fixed_opt_size + security_dir_idx * 8;
+			parts.push(&data[after_checksum..cert_dir_off]);
+			let after_cert = cert_dir_off + 8;
+			parts.push(&data[after_cert..size_of_headers]);
+		}
+
+		// Section bodies sorted by raw-data pointer
+		struct SecInfo {
+			ptr: usize,
+			size: usize,
+		}
+
+		let sh_start = opt + size_of_optional_header;
+		let mut sections: Vec<SecInfo> = (0..num_sections)
+			.filter_map(|i| {
+				let sh = sh_start + i * 40;
+				let raw_size =
+					u32::from_le_bytes(data[sh + 16..sh + 20].try_into().unwrap())
+						as usize;
+				let raw_ptr =
+					u32::from_le_bytes(data[sh + 20..sh + 24].try_into().unwrap())
+						as usize;
+				if raw_size > 0 {
+					Some(SecInfo {
+						ptr: raw_ptr,
+						size: raw_size,
+					})
+				} else {
+					None
+				}
+			})
+			.collect();
+		sections.sort_by_key(|s| s.ptr);
+
+		let mut sum_hashed = size_of_headers;
+		for s in &sections {
+			parts.push(&data[s.ptr..s.ptr + s.size]);
+			sum_hashed += s.size;
+		}
+
+		// Trailing data beyond sections, minus cert blob
+		if data.len() > sum_hashed {
+			let mut cert_size = 0usize;
+			if num_rva > security_dir_idx {
+				let off = opt + fixed_opt_size + security_dir_idx * 8 + 4;
+				if off + 4 <= data.len() {
+					cert_size =
+						u32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as usize;
+				}
+			}
+			if data.len() > sum_hashed + cert_size {
+				parts.push(&data[sum_hashed..data.len() - cert_size]);
+			}
+		}
+
+		let total_len: usize = parts.iter().map(|p| p.len()).sum();
+		let mut result = Vec::with_capacity(total_len);
+		for part in parts {
+			result.extend_from_slice(part);
+		}
+		result
+	}
+
+	/// Precompute RTMR[1] for a non-UKI TDX boot.
+	///
+	/// RTMR[1] receives four events:
+	///  1. Kernel PE Authenticode hash (after QEMU setup-header patches)
+	///  2. "Calling EFI Application from Boot Option"
+	///  3. "Exit Boot Services Invocation"
+	///  4. "Exit Boot Services Returned with Success"
+	///
+	/// The kernel is cloned and patched exactly as QEMU does before
+	/// OVMF measures it: cmdline pointer, initrd address/size,
+	/// type_of_loader, loadflags, and heap_end_ptr.
+	pub fn compute_rtmr1(
+		kernel: &[u8],
+		initrd: &[u8],
+		memory: &str,
+	) -> [u8; SHA384_LEN] {
+		let mut rtmr1 = [0u8; SHA384_LEN];
+		let mut extend = Vec::with_capacity(SHA384_LEN * 2);
+
+		// Clone kernel and apply QEMU setup-header patches
+		let mut patched = kernel.to_vec();
+		let layout = memory_layout(parse_memory_bytes(memory));
+		patch_kernel_setup(&mut patched, initrd.len(), &layout);
+
+		// Event 1: kernel PE Authenticode hash
+		let preimage = pe_hash_preimage(&patched);
+		let digest = Sha384::digest(&preimage);
+		extend.extend_from_slice(&rtmr1);
+		extend.extend_from_slice(&digest);
+		rtmr1.copy_from_slice(&Sha384::digest(&extend));
+		eprintln!(
+			"  [rtmr1] event 1: kernel PE hash ({} bytes preimage)",
+			preimage.len(),
+		);
+
+		// Events 2-4: fixed EFI action strings
+		const EFI_ACTIONS: [&[u8]; 3] = [
+			b"Calling EFI Application from Boot Option",
+			b"Exit Boot Services Invocation",
+			b"Exit Boot Services Returned with Success",
+		];
+
+		for (i, action) in EFI_ACTIONS.iter().enumerate() {
+			let digest = Sha384::digest(action);
+			extend.clear();
+			extend.extend_from_slice(&rtmr1);
+			extend.extend_from_slice(&digest);
+			rtmr1.copy_from_slice(&Sha384::digest(&extend));
+			eprintln!(
+				"  [rtmr1] event {}: {:?}",
+				i + 2,
+				std::str::from_utf8(action).unwrap(),
+			);
+		}
+
+		let hex = rtmr1.iter().map(|b| format!("{b:02x}")).collect::<String>();
+		eprintln!("  [rtmr1] RTMR[1] = {hex}");
+
+		rtmr1
 	}
 }
