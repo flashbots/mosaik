@@ -1,5 +1,5 @@
 use {
-	super::ticket::Measurement,
+	super::{Measurement, Measurements, Quote},
 	crate::{Network, Ticket, primitives::sealed::Sealed},
 };
 
@@ -24,33 +24,43 @@ impl TdxNetworkHelpers<'_> {
 		todo!()
 	}
 
+	/// Generates a TDX quote for the local machine
+	pub fn quote(&self) -> Result<Quote, Error> {
+		let _ = self.0;
+		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
+		let quote = tdx_quote::Quote::from_bytes(quote.as_slice())?;
+		Ok(quote)
+	}
+
+	/// Returns all measurements (MR_TD and RTMRs) of the local machine's TDX
+	/// environment.
+	pub fn measurements(&self) -> Result<Measurements, Error> {
+		self.quote().map(Measurements::from)
+	}
+
 	/// Returns the `MR_TD` measurement of the local machine's TDX environment.
 	pub fn mrtd(&self) -> Result<Measurement, Error> {
-		let _ = self.0;
-		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
-		let quote = tdx_quote::Quote::from_bytes(quote.as_slice())?;
-		Ok(quote.mrtd().into())
+		self.measurements().map(|m| m.mrtd)
 	}
 
+	/// Returns the `RTMR[0]` measurement of the local machine's TDX environment.
 	pub fn rtmr0(&self) -> Result<Measurement, Error> {
-		let _ = self.0;
-		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
-		let quote = tdx_quote::Quote::from_bytes(quote.as_slice())?;
-		Ok(quote.rtmr0().into())
+		self.measurements().map(|m| m.rtmr[0])
 	}
 
+	/// Returns the `RTMR[1]` measurement of the local machine's TDX environment.
 	pub fn rtmr1(&self) -> Result<Measurement, Error> {
-		let _ = self.0;
-		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
-		let quote = tdx_quote::Quote::from_bytes(quote.as_slice())?;
-		Ok(quote.rtmr1().into())
+		self.measurements().map(|m| m.rtmr[1])
 	}
 
+	/// Returns the `RTMR[2]` measurement of the local machine's TDX environment.
 	pub fn rtmr2(&self) -> Result<Measurement, Error> {
-		let _ = self.0;
-		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
-		let quote = tdx_quote::Quote::from_bytes(quote.as_slice())?;
-		Ok(quote.rtmr2().into())
+		self.measurements().map(|m| m.rtmr[2])
+	}
+
+	/// Returns the `RTMR[3]` measurement of the local machine's TDX environment.
+	pub fn rtmr3(&self) -> Result<Measurement, Error> {
+		self.measurements().map(|m| m.rtmr[3])
 	}
 }
 

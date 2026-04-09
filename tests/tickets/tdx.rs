@@ -5,7 +5,12 @@ use {
 	},
 	futures::{SinkExt, StreamExt},
 	mosaik::{
-		tee::tdx::{NetworkTicketExt, TdxValidator},
+		tee::tdx::{
+			Measurement,
+			MeasurementsCriteria,
+			NetworkTicketExt,
+			TdxValidator,
+		},
 		*,
 	},
 };
@@ -24,7 +29,14 @@ async fn stream_consumer() -> anyhow::Result<()> {
 	let n1_ticket = n1.tdx().ticket()?;
 	let n2_ticket = n2.tdx().ticket()?;
 
-	let validator = TdxValidator::new().require_mrtd(n1.tdx().mrtd()?);
+	let validator =
+		TdxValidator::new(
+			MeasurementsCriteria::default()
+				.require_mrtd(
+					Measurement::hex("91eb2b44d141d4ece09f0c75c2c53d247a3c68edd7fafe8a3520c942a604a407de03ae6dc5f87f27428b2538873118b7"))
+				.require_rtmr1(Measurement::hex("87e50edd90e2f9d53a7f2a9bd51c1069a454b827f0e1002577c54e1c2a5985689f9d0cd8104a40fe7e1751e496b97ce8"))
+				.require_rtmr2(Measurement::hex("024159bb9157d05c9b0952e5d924790761e39c92135ffe1387fd0ab1d94a68fb1c61541859dc6de0f2b3147e25303b7c"))
+	);
 
 	n1.discovery().add_ticket(n1_ticket);
 	n2.discovery().add_ticket(n2_ticket);

@@ -1,11 +1,17 @@
 mod local;
+mod measure;
 mod ticket;
 mod validator;
 
 pub const TICKET_CLASS: crate::UniqueId =
 	crate::id!("mosaik.tee.tdx.ticket.v1");
 
-pub use {local::NetworkTicketExt, validator::TdxValidator};
+pub use {
+	local::NetworkTicketExt,
+	measure::*,
+	tdx_quote::Quote,
+	validator::TdxValidator,
+};
 
 #[cfg(feature = "tdx-builder")]
 mod builder;

@@ -18,7 +18,26 @@ KERNEL="${KERNEL:-$SCRIPT_DIR/{{CRATE_NAME}}-vmlinuz}"
 INITRD="${INITRD:-$SCRIPT_DIR/{{CRATE_NAME}}-initramfs.cpio.gz}"
 MEMORY="${MEMORY:-{{MEMORY}}}"
 CPUS="${CPUS:-{{CPUS}}}"
-SSH_PORT="${SSH_PORT:-10022}"
+VSOCK_CID="${VSOCK_CID:-auto}"
+
+# Find a free TCP port for SSH forwarding.
+find_free_port() {
+    python3 -c "import socket; s=socket.socket(); s.bind(('',0)); print(s.getsockname()[1]); s.close()" 2>/dev/null \
+    || perl -e 'use IO::Socket::INET; my $s=IO::Socket::INET->new(Listen=>1,LocalAddr=>"127.0.0.1",LocalPort=>0); print $s->sockport(),"\n"; $s->close();' 2>/dev/null \
+    || { echo "ERROR: cannot find free port (need python3 or perl)" >&2; exit 1; }
+}
+
+# Pick a unique vsock CID (3–0xFFFFFFFF).
+pick_vsock_cid() {
+    local cid
+    cid=$(shuf -i 3-2147483647 -n1 2>/dev/null || awk 'BEGIN{srand(); printf "%d\n", 3+int(rand()*2147483644)}')
+    echo "$cid"
+}
+
+SSH_PORT="${SSH_PORT:-$(find_free_port)}"
+if [ "$VSOCK_CID" = "auto" ]; then
+    VSOCK_CID=$(pick_vsock_cid)
+fi
 
 for f in "$OVMF" "$KERNEL" "$INITRD"; do
     if [ ! -f "$f" ]; then
@@ -38,6 +57,7 @@ echo "  Initrd:   $INITRD"
 echo "  Memory:   $MEMORY"
 echo "  CPUs:     $CPUS"
 echo "  SSH:      localhost:$SSH_PORT"
+echo "  CID:     $VSOCK_CID"
 echo ""
 
 exec qemu-system-x86_64 \
@@ -56,7 +76,7 @@ exec qemu-system-x86_64 \
     \
     -netdev user,id=net0,{{SSH_FWD}} \
     -device virtio-net-pci,netdev=net0 \
-    -device vhost-vsock-pci,guest-cid=3 \
+    -device vhost-vsock-pci,guest-cid="$VSOCK_CID" \
     \
     -nographic \
     -nodefaults \

@@ -2,7 +2,6 @@
 
 use {
 	super::helpers::{
-		download_cached,
 		env_or,
 		extract_data_tar,
 		find_file_recursive,
@@ -93,17 +92,17 @@ pub(super) fn obtain_ovmf(
 		extract_data_tar(&data_tar, &ovmf_extract);
 	}
 
-	let found = find_file_recursive(&ovmf_extract, "ovmf.fd");
+	let found = find_file_recursive(&ovmf_extract, "OVMF.fd");
 	let result = found.as_ref().map_or_else(
 		|| {
-			eprintln!("  [warn] ovmf.fd not found in .deb");
+			eprintln!("  [warn] OVMF.fd not found in .deb");
 			None
 		},
 		|ovmf_path| {
 			let data = fs::read(ovmf_path).ok();
 			if let Some(ref d) = data {
 				eprintln!(
-					"  [ok] ovmf.fd extracted ({:.1} MB)",
+					"  [ok] OVMF.fd extracted ({:.1} MB)",
 					d.len() as f64 / 1_048_576.0
 				);
 			}

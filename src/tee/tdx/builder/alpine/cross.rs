@@ -2,11 +2,13 @@
 
 use std::{
 	env,
+	fmt::Write,
 	fs,
 	path::{Path, PathBuf},
 	process::Command,
 };
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn cross_compile_musl(
 	crate_name: &str,
 	profile: &str,
@@ -56,10 +58,11 @@ pub(super) fn cross_compile_musl(
 		let mut flags = String::new();
 
 		// Remap the crate source tree
-		flags.push_str(&format!(
+		let _ = write!(
+			flags,
 			"--remap-path-prefix={}=/build",
 			manifest_dir.display()
-		));
+		);
 
 		// Remap the cargo registry / git sources.
 		// Always remap both CARGO_HOME (if set) and $HOME/.cargo
@@ -75,12 +78,12 @@ pub(super) fn cross_compile_musl(
 			}
 		}
 		for home in &cargo_homes {
-			flags.push_str(&format!(
+			let _ = write!(
+				flags,
 				"\x1f--remap-path-prefix={home}/registry/src=/registry"
-			));
-			flags.push_str(&format!(
-				"\x1f--remap-path-prefix={home}/git/checkouts=/git"
-			));
+			);
+			let _ =
+				write!(flags, "\x1f--remap-path-prefix={home}/git/checkouts=/git");
 		}
 
 		// Remap the rustup toolchain sysroot
@@ -89,11 +92,9 @@ pub(super) fn cross_compile_musl(
 				.args(["--print", "sysroot"])
 				.output()
 				.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-		} {
-			if !sysroot.is_empty() {
-				flags
-					.push_str(&format!("\x1f--remap-path-prefix={sysroot}/lib=/rustlib"));
-			}
+		} && !sysroot.is_empty()
+		{
+			let _ = write!(flags, "\x1f--remap-path-prefix={sysroot}/lib=/rustlib");
 		}
 
 		flags

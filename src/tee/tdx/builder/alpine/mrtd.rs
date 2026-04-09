@@ -228,7 +228,7 @@ pub(super) fn compute_mrtd(ovmf: &[u8]) -> Result<[u8; SHA384_LEN], String> {
 			add_buf[..12].copy_from_slice(b"MEM.PAGE.ADD");
 			add_buf[16..24].copy_from_slice(&page_gpa.to_le_bytes());
 
-			hasher.update(&add_buf);
+			hasher.update(add_buf);
 		}
 
 		// Phase 2: TDH.MR.EXTEND for every 256-byte chunk (only
@@ -257,7 +257,7 @@ pub(super) fn compute_mrtd(ovmf: &[u8]) -> Result<[u8; SHA384_LEN], String> {
 					let chunk_start = chunk_idx * CHUNK_SIZE;
 					let chunk_data = &page_data[chunk_start..chunk_start + CHUNK_SIZE];
 
-					hasher.update(&ext_header);
+					hasher.update(ext_header);
 					hasher.update(chunk_data);
 				}
 			}
@@ -267,8 +267,7 @@ pub(super) fn compute_mrtd(ovmf: &[u8]) -> Result<[u8; SHA384_LEN], String> {
 	let mut mrtd = [0u8; SHA384_LEN];
 	mrtd.copy_from_slice(&hasher.finalize());
 
-	let hex = mrtd.iter().map(|b| format!("{b:02x}")).collect::<String>();
-	eprintln!("  [mrtd] MRTD = {hex}");
+	eprintln!("  [mrtd] MRTD = {}", hex::encode(mrtd));
 
 	Ok(mrtd)
 }
@@ -290,10 +289,10 @@ pub(super) fn compute_rtmr2(cmdline: &str, initrd: &[u8]) -> [u8; SHA384_LEN] {
 
 	// Event 1: kernel command line
 	// QEMU appends " initrd=initrd" when an initrd is provided.
-	let measured_cmdline = if !initrd.is_empty() {
-		format!("{cmdline} initrd=initrd\0")
-	} else {
+	let measured_cmdline = if initrd.is_empty() {
 		format!("{cmdline}\0")
+	} else {
+		format!("{cmdline} initrd=initrd\0")
 	};
 
 	// Encode as UTF-16LE
@@ -327,7 +326,7 @@ pub(super) fn compute_rtmr2(cmdline: &str, initrd: &[u8]) -> [u8; SHA384_LEN] {
 		);
 	}
 
-	let hex = rtmr2.iter().map(|b| format!("{b:02x}")).collect::<String>();
+	let hex = hex::encode(rtmr2);
 	eprintln!("  [rtmr2] RTMR[2] = {hex}");
 
 	rtmr2
@@ -351,17 +350,23 @@ const ACPI_DATA_SIZE: u64 = 0x20000 + 0x8000;
 /// Accepts "4G", "4096M", or bare MiB number.
 fn parse_memory_bytes(s: &str) -> u64 {
 	let s = s.trim();
-	if let Some(n) = s.strip_suffix('G').or_else(|| s.strip_suffix('g')) {
-		n.trim().parse::<u64>().unwrap() * 1024 * 1024 * 1024
-	} else if let Some(n) = s.strip_suffix('M').or_else(|| s.strip_suffix('m')) {
-		n.trim().parse::<u64>().unwrap() * 1024 * 1024
-	} else {
-		s.parse::<u64>().unwrap() * 1024 * 1024
-	}
+	s.strip_suffix('G')
+		.or_else(|| s.strip_suffix('g'))
+		.map_or_else(
+			|| {
+				s.strip_suffix('M')
+					.or_else(|| s.strip_suffix('m'))
+					.map_or_else(
+						|| s.parse::<u64>().unwrap() * 1024 * 1024,
+						|n| n.trim().parse::<u64>().unwrap() * 1024 * 1024,
+					)
+			},
+			|n| n.trim().parse::<u64>().unwrap() * 1024 * 1024 * 1024,
+		)
 }
 
 /// Compute the QEMU PC memory layout from total RAM bytes.
-fn memory_layout(total: u64) -> MemoryLayout {
+const fn memory_layout(total: u64) -> MemoryLayout {
 	let lowmem = if total >= 0xb000_0000 {
 		0x8000_0000
 	} else {
@@ -402,7 +407,7 @@ fn patch_kernel_setup(
 	{
 		0xffff_ffff
 	} else if protocol >= 0x203 {
-		u32::from_le_bytes(kernel[0x22c..0x230].try_into().unwrap()) as u64
+		u64::from(u32::from_le_bytes(kernel[0x22c..0x230].try_into().unwrap()))
 	} else {
 		0x37ff_ffff
 	};
@@ -455,6 +460,12 @@ fn patch_kernel_setup(
 /// then section bodies sorted by raw data pointer, then any
 /// trailing data minus the certificate blob.
 fn pe_hash_preimage(data: &[u8]) -> Vec<u8> {
+	// Section bodies sorted by raw-data pointer
+	struct SecInfo {
+		ptr: usize,
+		size: usize,
+	}
+
 	let e_lfanew =
 		u32::from_le_bytes(data[0x3c..0x40].try_into().unwrap()) as usize;
 
@@ -503,12 +514,6 @@ fn pe_hash_preimage(data: &[u8]) -> Vec<u8> {
 		parts.push(&data[after_checksum..cert_dir_off]);
 		let after_cert = cert_dir_off + 8;
 		parts.push(&data[after_cert..size_of_headers]);
-	}
-
-	// Section bodies sorted by raw-data pointer
-	struct SecInfo {
-		ptr: usize,
-		size: usize,
 	}
 
 	let sh_start = opt + size_of_optional_header;
@@ -570,7 +575,7 @@ fn pe_hash_preimage(data: &[u8]) -> Vec<u8> {
 ///
 /// The kernel is cloned and patched exactly as QEMU does before
 /// OVMF measures it: cmdline pointer, initrd address/size,
-/// type_of_loader, loadflags, and heap_end_ptr.
+/// `type_of_loader`, `loadflags`, and `heap_end_ptr`.
 pub(super) fn compute_rtmr1(
 	kernel: &[u8],
 	initrd: &[u8],
@@ -596,6 +601,7 @@ pub(super) fn compute_rtmr1(
 	);
 
 	// Events 2-4: fixed EFI action strings
+	#[allow(clippy::items_after_statements)]
 	const EFI_ACTIONS: [&[u8]; 3] = [
 		b"Calling EFI Application from Boot Option",
 		b"Exit Boot Services Invocation",
@@ -615,7 +621,7 @@ pub(super) fn compute_rtmr1(
 		);
 	}
 
-	let hex = rtmr1.iter().map(|b| format!("{b:02x}")).collect::<String>();
+	let hex = hex::encode(rtmr1);
 	eprintln!("  [rtmr1] RTMR[1] = {hex}");
 
 	rtmr1

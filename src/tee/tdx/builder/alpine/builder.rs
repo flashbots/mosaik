@@ -22,7 +22,7 @@ use {
 			generate_self_extracting_script,
 		},
 	},
-	crate::tee::tdx::ticket::Measurement,
+	crate::tee::tdx::Measurement,
 	std::{
 		env,
 		fs::{self, File},
@@ -102,7 +102,7 @@ impl AlpineBuilder {
 	/// inside the VM (typically 22). Calling this also adds the
 	/// `hostfwd` rule to the generated QEMU launch scripts.
 	///
-	/// Use [`with_ssh_key`](Self::with_ssh_key) to authorise public
+	/// Use [`with_ssh_key`](Self::with_ssh_key) to authorize public
 	/// keys.
 	///
 	/// # Example
@@ -122,7 +122,7 @@ impl AlpineBuilder {
 
 	/// Add an SSH public key to the guest's `/root/.ssh/authorized_keys`.
 	///
-	/// Can be called multiple times to authorise several keys.
+	/// Can be called multiple times to authorize several keys.
 	/// Has no effect unless [`with_ssh_forward`](Self::with_ssh_forward)
 	/// is also called.
 	#[must_use]
@@ -223,6 +223,7 @@ impl AlpineBuilder {
 	///
 	/// Panics if any required tool (`curl`, `tar`, `gzip`, `ar`,
 	/// etc.) is missing or if cross-compilation fails.
+	#[allow(clippy::too_many_lines)]
 	pub fn build(self) -> Option<AlpineBuilderOutput> {
 		// --- Recursion guard -----------------------------------------------
 		if env::var("__TDX_IMAGE_INNER_BUILD").is_ok() {
@@ -331,8 +332,8 @@ impl AlpineBuilder {
 		let kernel_cache_dir = cache_dir.join("kernel");
 		fs::create_dir_all(&kernel_cache_dir).unwrap();
 
+		let kernel_vmlinuz: Option<PathBuf>;
 		let mut auto_modules_dir: Option<PathBuf> = None;
-		let mut kernel_vmlinuz: Option<PathBuf> = None;
 
 		if let Some(ref custom_vmlinuz) = self.custom_vmlinuz {
 			let path = kernel_cache_dir.join("custom-vmlinuz");
@@ -645,10 +646,7 @@ impl AlpineBuilder {
 			match mrtd::compute_mrtd(data) {
 				Ok(digest) => {
 					mrtd_value = digest;
-					let hex = digest
-						.iter()
-						.map(|b| format!("{b:02x}"))
-						.collect::<String>();
+					let hex = hex::encode(digest);
 					println!("cargo:warning=MRTD: {hex}");
 					println!("cargo:rustc-env=TDX_EXPECTED_MRTD={hex}");
 
@@ -672,10 +670,7 @@ impl AlpineBuilder {
 			let initrd_data = fs::read(&final_path).unwrap();
 			let cmdline = "console=ttyS0 ip=dhcp";
 			rtmr2_value = mrtd::compute_rtmr2(cmdline, &initrd_data);
-			let hex = rtmr2_value
-				.iter()
-				.map(|b| format!("{b:02x}"))
-				.collect::<String>();
+			let hex = hex::encode(rtmr2_value);
 			println!("cargo:warning=RTMR[2]: {hex}");
 			println!("cargo:rustc-env=TDX_EXPECTED_RTMR2={hex}");
 
@@ -695,10 +690,7 @@ impl AlpineBuilder {
 			let initrd_data = fs::read(&final_path).unwrap();
 			rtmr1_value =
 				mrtd::compute_rtmr1(&kernel_data, &initrd_data, &self.default_memory);
-			let hex = rtmr1_value
-				.iter()
-				.map(|b| format!("{b:02x}"))
-				.collect::<String>();
+			let hex = hex::encode(rtmr1_value);
 			println!("cargo:warning=RTMR[1]: {hex}");
 			println!("cargo:rustc-env=TDX_EXPECTED_RTMR1={hex}");
 
