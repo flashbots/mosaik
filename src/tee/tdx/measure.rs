@@ -1,4 +1,8 @@
-use {core::str::FromStr, tdx_quote::Quote};
+use {
+	crate::{UniqueId, id},
+	core::str::FromStr,
+	tdx_quote::Quote,
+};
 
 /// A 48-byte TDX measurement register value (MRTD, RTMR0–3).
 ///
@@ -84,20 +88,59 @@ impl core::fmt::Display for Measurement {
 	}
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Measurements {
 	pub mrtd: Measurement,
 	pub rtmr: [Measurement; 4],
 }
 
+impl Measurements {
+	pub const fn from_quote(quote: &Quote) -> Self {
+		Self {
+			mrtd: Measurement::new(quote.body.mrtd),
+			rtmr: [
+				Measurement::new(quote.body.rtmr0),
+				Measurement::new(quote.body.rtmr1),
+				Measurement::new(quote.body.rtmr2),
+				Measurement::new(quote.body.rtmr3),
+			],
+		}
+	}
+
+	pub const fn mrtd(&self) -> Measurement {
+		self.mrtd
+	}
+
+	pub const fn rtmr(&self, index: usize) -> Measurement {
+		self.rtmr[index]
+	}
+
+	pub const fn rtmr0(&self) -> Measurement {
+		self.rtmr[0]
+	}
+
+	pub const fn rtmr1(&self) -> Measurement {
+		self.rtmr[1]
+	}
+
+	pub const fn rtmr2(&self) -> Measurement {
+		self.rtmr[2]
+	}
+
+	pub const fn rtmr3(&self) -> Measurement {
+		self.rtmr[3]
+	}
+}
+
 impl From<Quote> for Measurements {
 	fn from(quote: Quote) -> Self {
 		Self {
-			mrtd: Measurement::from(quote.mrtd()),
+			mrtd: Measurement::new(quote.body.mrtd),
 			rtmr: [
-				Measurement::from(quote.rtmr0()),
-				Measurement::from(quote.rtmr1()),
-				Measurement::from(quote.rtmr2()),
-				Measurement::from(quote.rtmr3()),
+				Measurement::new(quote.body.rtmr0),
+				Measurement::new(quote.body.rtmr1),
+				Measurement::new(quote.body.rtmr2),
+				Measurement::new(quote.body.rtmr3),
 			],
 		}
 	}
@@ -105,15 +148,7 @@ impl From<Quote> for Measurements {
 
 impl From<&Quote> for Measurements {
 	fn from(quote: &Quote) -> Self {
-		Self {
-			mrtd: Measurement::from(quote.mrtd()),
-			rtmr: [
-				Measurement::from(quote.rtmr0()),
-				Measurement::from(quote.rtmr1()),
-				Measurement::from(quote.rtmr2()),
-				Measurement::from(quote.rtmr3()),
-			],
-		}
+		Self::from_quote(quote)
 	}
 }
 
@@ -178,6 +213,15 @@ impl MeasurementsCriteria {
 			}
 		}
 		true
+	}
+
+	pub fn signature(&self) -> UniqueId {
+		id!("mosaik.tee.tdx.measurements-criteria.v1")
+			.derive(self.mrtd.as_ref().map_or(&[0u8; 48], |m| m.as_bytes()))
+			.derive(self.rtmr[0].as_ref().map_or(&[1u8; 48], |m| m.as_bytes()))
+			.derive(self.rtmr[1].as_ref().map_or(&[2u8; 48], |m| m.as_bytes()))
+			.derive(self.rtmr[2].as_ref().map_or(&[3u8; 48], |m| m.as_bytes()))
+			.derive(self.rtmr[3].as_ref().map_or(&[4u8; 48], |m| m.as_bytes()))
 	}
 }
 

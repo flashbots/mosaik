@@ -3,35 +3,54 @@ use crate::{
 	UniqueId,
 	discovery::PeerEntry,
 	id,
-	primitives::{Expiration, InvalidTicket, encoding},
-	tee::tdx::{MeasurementsCriteria, ticket::TdxTicket},
+	primitives::{Expiration, InvalidTicket},
+	tee::tdx::{MeasurementsCriteria, ticket::TdxTicketData},
 };
 
 /// A TDX-based ticket validator.
+///
+/// This validator checks that a peer's TDX measurements (`MR_TD` and `RTMRs`)
+/// match specified criteria, and that the ticket's system data matches the
+/// peer's identity and network. It allows for specifying a baseline set of
+/// criteria that must be satisfied, as well as additional sets of criteria that
+/// can be satisfied as alternatives.
+///
+/// Rejects any tickets with invalid TDX signatures in their TDX Quote.
 #[derive(Clone)]
 pub struct TdxValidator {
+	/// The `MeasurementsCriteria` that must be satisfied by all peers for their
+	/// tickets to be considered valid.
+	///
+	/// This allows for specifying a baseline TDX measurement profile that all
+	/// peers must satisfy, while the `any` field allows for specifying
+	/// additional acceptable profiles that can be satisfied as alternatives to
+	/// the baseline.
 	all: MeasurementsCriteria,
+
+	/// A list of `MeasurementsCriteria`, at least one of which must be satisfied
+	/// by a peer for their ticket to be considered valid. This allows for
+	/// specifying multiple acceptable TDX measurement profiles, any of which can
+	/// be satisfied in addition to the baseline.
 	any: Vec<MeasurementsCriteria>,
 }
 
 // Public API
 impl TdxValidator {
-	pub const CLASS: UniqueId = id!("mosaik.tickets.tdx.v1");
+	pub const CLASS: UniqueId = id!("mosaik.tee.tdx.ticket-validator.v1");
 
-	/// Creates a new validator that accepts any TDX quote with a valid
-	/// Intel certificate chain and correct peer identity binding.
-	///
-	/// Use [`require_mrtd`] and [`require_rtmr`] to add measurement
-	/// constraints.
-	///
-	/// [`require_mrtd`]: TdxValidator::require_mrtd
-	/// [`require_rtmr`]: TdxValidator::require_rtmr
 	#[must_use]
-	pub const fn new(all: MeasurementsCriteria) -> Self {
+	pub const fn new(baseline: MeasurementsCriteria) -> Self {
 		Self {
-			all,
+			all: baseline,
 			any: Vec::new(),
 		}
+	}
+
+	/// Creates a new `TdxValidator` that allows any ticket as long as it carries
+	/// valid TDX signatures in their TDX Quote.
+	#[must_use]
+	pub const fn empty() -> Self {
+		Self::new(MeasurementsCriteria::new())
 	}
 }
 
@@ -47,34 +66,20 @@ impl TicketValidator for TdxValidator {
 	}
 
 	fn signature(&self) -> UniqueId {
-		let mut sig = self.class();
-
-		let zero = [0u8; 48];
-
-		sig = sig.derive(self.all.mrtd.as_ref().map_or(&zero, |m| m.as_bytes()));
-		sig = sig.derive(self.all.rtmr[0].as_ref().map_or(&zero, |m| m.as_bytes()));
-		sig = sig.derive(self.all.rtmr[1].as_ref().map_or(&zero, |m| m.as_bytes()));
-		sig = sig.derive(self.all.rtmr[2].as_ref().map_or(&zero, |m| m.as_bytes()));
-		sig = sig.derive(self.all.rtmr[3].as_ref().map_or(&zero, |m| m.as_bytes()));
-
-		for (ix, r) in self.any.iter().enumerate() {
-			sig = sig.derive((ix as u64).to_le_bytes());
-			sig = sig.derive(r.mrtd.as_ref().map_or(&zero, |m| m.as_bytes()));
-			sig = sig.derive(r.rtmr[0].as_ref().map_or(&zero, |m| m.as_bytes()));
-			sig = sig.derive(r.rtmr[1].as_ref().map_or(&zero, |m| m.as_bytes()));
-			sig = sig.derive(r.rtmr[2].as_ref().map_or(&zero, |m| m.as_bytes()));
-			sig = sig.derive(r.rtmr[3].as_ref().map_or(&zero, |m| m.as_bytes()));
-		}
-
-		sig
+		self
+			.any
+			.iter()
+			.fold(self.class().derive(self.all.signature()), |s, c| {
+				s.derive(c.signature())
+			})
 	}
 
 	fn validate(
 		&self,
-		ticket_bytes: &[u8],
+		bytes: &[u8],
 		peer: &PeerEntry,
 	) -> Result<Expiration, InvalidTicket> {
-		let Ok(ticket) = encoding::deserialize::<TdxTicket>(ticket_bytes) else {
+		let Ok(ticket) = TdxTicketData::try_from(bytes) else {
 			return Err(InvalidTicket);
 		};
 
@@ -90,14 +95,14 @@ impl TicketValidator for TdxValidator {
 			return Err(InvalidTicket);
 		}
 
-		if ticket.system().peer_id != *peer.id() {
+		if ticket.peer_id() != peer.id() {
 			return Err(InvalidTicket);
 		}
 
-		if ticket.system().network_id != peer.network_id() {
+		if ticket.network_id() != peer.network_id() {
 			return Err(InvalidTicket);
 		}
 
-		Ok(ticket.system().expires_at)
+		Ok(*ticket.expiration())
 	}
 }

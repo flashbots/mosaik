@@ -1,7 +1,4 @@
-use {
-	mosaik::{tee::tdx::NetworkTicketExt, *},
-	tdx_quote::Quote,
-};
+use mosaik::{tee::tdx::*, *};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -10,27 +7,37 @@ async fn main() -> anyhow::Result<()> {
 
 	println!("Network {network_id} created.");
 
-	println!("Retrieving TDX quote...");
-	let raw_quote = configfs_tsm::create_tdx_quote([0u8; 64]).unwrap();
+	println!("Generating TDX ticket...");
+	let ticket = network.tdx().ticket()?;
+	println!("TDX ticket generated: {ticket:?}");
 
-	let quote = Quote::from_bytes(raw_quote.as_slice()).unwrap();
+	let tdx_ticket: TdxTicketData = ticket.try_into()?;
 	println!(
-		"verifying quote: {}",
-		hex_encode(&quote.verify().unwrap().to_sec1_bytes())
+		"tdx ticket contents: {tdx_ticket:?}, quote signer: {}",
+		hex_encode(&tdx_ticket.quote().verify()?.to_sec1_bytes())
 	);
 
 	let mrtd = network.tdx().mrtd().unwrap();
 	println!("MR_TD measurement: {mrtd}");
 
+	let measurements = network.tdx().measurements()?;
+	println!("All measurements: {measurements:#?}");
+
 	let rtmr0 = network.tdx().rtmr0().unwrap();
 	println!("RTMR0 measurement: {rtmr0}");
 
-	let rtmr1 = network.tdx().rtmr1().unwrap();
+	let rtmr1 = tdx_ticket.measurements().rtmr[1];
 	println!("RTMR1 measurement: {rtmr1}");
 
-	let rtmr2 = network.tdx().rtmr2().unwrap();
+	let rtmr2 = tdx_ticket.measurements().rtmr2();
 	println!("RTMR2 measurement: {rtmr2}");
 
+	println!("ticket peer id: {}", tdx_ticket.peer_id());
+	println!("ticket network id: {}", tdx_ticket.network_id());
+	println!("ticket started at: {}", tdx_ticket.started_at());
+	println!("ticket expiration: {:?}", tdx_ticket.expiration());
+
+	println!("All done!");
 	Ok(())
 }
 

@@ -218,6 +218,11 @@ impl PeerEntry {
 		self.version.updated_at()
 	}
 
+	/// The self-declared startup time of the peer process.
+	pub fn started_at(&self) -> DateTime<Utc> {
+		self.version.started_at()
+	}
+
 	/// The self-declared duration since the start of the peer's process.
 	pub fn uptime(&self) -> core::time::Duration {
 		(Utc::now() - self.version.started_at())

@@ -11,7 +11,7 @@ use {
 /// This type represents authentication tokens, credentials, or any other type
 /// of data that may be used to authorize a peer.
 #[derive(
-	Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
+	Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
 pub struct Ticket {
 	/// The unique identifier of the type of ticket.
@@ -81,6 +81,26 @@ impl Expiration {
 			Self::Never => None,
 			Self::At(t) => (*t - Utc::now()).to_std().ok(),
 		}
+	}
+}
+
+impl core::fmt::Debug for Ticket {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		f.debug_struct("Ticket")
+			.field("class", &self.class)
+			.field("data", &hex::encode(&self.data))
+			.finish()
+	}
+}
+
+impl core::fmt::Display for Ticket {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		write!(
+			f,
+			"Ticket(class={}, data={})",
+			self.class,
+			humansize::format_size(self.data.len(), humansize::DECIMAL)
+		)
 	}
 }
 
