@@ -41,6 +41,7 @@ cast_precision_loss = "allow"
 cast_possible_truncation = "allow"
 unused_async = "warn"
 future_not_send = "allow"
+needless_doctest_main = "allow"
 
 [package]
 name = "mosaik"

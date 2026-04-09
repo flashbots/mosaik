@@ -10,7 +10,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-OVMF="${OVMF:-$SCRIPT_DIR/{{CRATE_NAME}}-OVMF.fd}"
+OVMF="${OVMF:-$SCRIPT_DIR/{{CRATE_NAME}}-ovmf.fd}"
 if [ ! -f "$OVMF" ]; then
     OVMF="/usr/share/ovmf/OVMF.fd"
 fi
