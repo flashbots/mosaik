@@ -27,9 +27,11 @@ pub enum Error {
 	ExpirationInThePast,
 }
 
-pub struct TdxNetworkHelpers<'a>(&'a Network);
+/// Provides TDX-specific operations for a `Network`, such as creating TDX
+/// tickets and retrieving TDX measurements.
+pub struct NetworkTdxOps<'a>(&'a Network);
 
-impl TdxNetworkHelpers<'_> {
+impl NetworkTdxOps<'_> {
 	/// Creates a TDX attestation ticket for the given network and measurement
 	/// that never expires.
 	pub fn ticket(&self) -> Result<Ticket, Error> {
@@ -126,13 +128,13 @@ impl TdxNetworkHelpers<'_> {
 	}
 }
 
-/// Extension trait for `Network` to provide TDX-specific ticket support.
-pub trait NetworkTicketExt: Sealed {
-	fn tdx(&self) -> TdxNetworkHelpers<'_>;
+/// Extension trait for `Network` to provide TDX-specific support.
+pub trait NetworkTdxExt: Sealed {
+	fn tdx(&self) -> NetworkTdxOps<'_>;
 }
 
-impl NetworkTicketExt for Network {
-	fn tdx(&self) -> TdxNetworkHelpers<'_> {
-		TdxNetworkHelpers(self)
+impl NetworkTdxExt for Network {
+	fn tdx(&self) -> NetworkTdxOps<'_> {
+		NetworkTdxOps(self)
 	}
 }

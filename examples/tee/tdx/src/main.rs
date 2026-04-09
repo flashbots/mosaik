@@ -1,4 +1,4 @@
-use mosaik::{tee::tdx::*, *};
+use mosaik::*;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -42,5 +42,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
-	bytes.iter().map(|b| format!("{b:02x}")).collect()
+	use std::fmt::Write;
+	bytes.iter().fold(String::new(), |mut output, b| {
+		let _ = write!(output, "{b:02x}");
+		output
+	})
 }

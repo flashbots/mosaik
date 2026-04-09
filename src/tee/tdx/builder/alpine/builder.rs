@@ -663,26 +663,7 @@ impl AlpineBuilder {
 		}
 
 		// ---------------------------------------------------------------
-		// 10b. Precompute RTMR[2] (initrd + cmdline measurement)
-		// ---------------------------------------------------------------
-		if final_path.exists() {
-			eprintln!("==> Precomputing RTMR[2]...");
-			let initrd_data = fs::read(&final_path).unwrap();
-			let cmdline = "console=ttyS0 ip=dhcp";
-			rtmr2_value = mrtd::compute_rtmr2(cmdline, &initrd_data);
-			let hex = hex::encode(rtmr2_value);
-			println!("cargo:warning=RTMR[2]: {hex}");
-			println!("cargo:rustc-env=TDX_EXPECTED_RTMR2={hex}");
-
-			let rtmr2_path = target_dir
-				.join(profile)
-				.join(format!("{crate_name}-rtmr2.hex"));
-			fs::write(&rtmr2_path, &hex).unwrap();
-			println!("cargo:warning=RTMR[2] written to: {}", rtmr2_path.display());
-		}
-
-		// ---------------------------------------------------------------
-		// 10c. Precompute RTMR[1] (kernel boot measurement)
+		// 10b. Precompute RTMR[1] (kernel boot measurement)
 		// ---------------------------------------------------------------
 		if kernel_output.exists() && final_path.exists() {
 			eprintln!("==> Precomputing RTMR[1]...");
@@ -699,6 +680,25 @@ impl AlpineBuilder {
 				.join(format!("{crate_name}-rtmr1.hex"));
 			fs::write(&rtmr1_path, &hex).unwrap();
 			println!("cargo:warning=RTMR[1] written to: {}", rtmr1_path.display(),);
+		}
+
+		// ---------------------------------------------------------------
+		// 10c. Precompute RTMR[2] (initrd + cmdline measurement)
+		// ---------------------------------------------------------------
+		if final_path.exists() {
+			eprintln!("==> Precomputing RTMR[2]...");
+			let initrd_data = fs::read(&final_path).unwrap();
+			let cmdline = "console=ttyS0 ip=dhcp";
+			rtmr2_value = mrtd::compute_rtmr2(cmdline, &initrd_data);
+			let hex = hex::encode(rtmr2_value);
+			println!("cargo:warning=RTMR[2]: {hex}");
+			println!("cargo:rustc-env=TDX_EXPECTED_RTMR2={hex}");
+
+			let rtmr2_path = target_dir
+				.join(profile)
+				.join(format!("{crate_name}-rtmr2.hex"));
+			fs::write(&rtmr2_path, &hex).unwrap();
+			println!("cargo:warning=RTMR[2] written to: {}", rtmr2_path.display());
 		}
 
 		// ---------------------------------------------------------------

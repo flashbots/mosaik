@@ -7,7 +7,7 @@ pub const TICKET_CLASS: crate::UniqueId =
 	crate::id!("mosaik.tee.tdx.ticket.v1");
 
 pub use {
-	local::NetworkTicketExt,
+	local::NetworkTdxExt,
 	measure::*,
 	tdx_quote::Quote,
 	ticket::{TdxTicketData, TicketError},
@@ -28,7 +28,7 @@ pub mod build {
 	///
 	/// ```no_run
 	/// fn main() {
-	/// 	let output = mosaik::tee::tdx::build::alpine().build();
+	/// 	let output = mosaik::tdx::build::alpine().build();
 	/// 	println!("cargo:warning=Alpine Image build output: {output:#?}");
 	/// }
 	/// ```
@@ -46,7 +46,7 @@ pub mod build {
 	///
 	/// ```no_run
 	/// fn main() {
-	/// 	let output = mosaik::tee::tdx::build::ubuntu().build();
+	/// 	let output = mosaik::tdx::build::ubuntu().build();
 	/// 	println!("cargo:warning=Ubuntu Image build output: {output:#?}");
 	/// }
 	/// ```

@@ -8,7 +8,7 @@ use {
 		tee::tdx::{
 			Measurement,
 			MeasurementsCriteria,
-			NetworkTicketExt,
+			NetworkTdxExt,
 			TdxValidator,
 		},
 		*,

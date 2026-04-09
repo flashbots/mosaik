@@ -48,3 +48,6 @@ pub use {
 pub mod declare {
 	pub use crate::{collection, stream};
 }
+
+#[cfg(feature = "tdx")]
+pub use tee::{tdx, tdx::NetworkTdxExt};
