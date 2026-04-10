@@ -165,11 +165,6 @@ impl<D: Datum> ConsumerWorker<D> {
 		reason = "Catalog is cheaply cloneable and we don't want to hold a lock \
 		          on the watcher while processing"
 	)]
-	#[expect(
-		clippy::too_many_lines,
-		reason = "Complex control flow for producer discovery, ticket validation, \
-		          and eligibility re-evaluation"
-	)]
 	fn on_catalog_update(&mut self, latest: Catalog) {
 		// identify all producers that are producing the desired stream id
 		// and satisfy the user-provided additional eligibility criteria.
@@ -199,24 +194,18 @@ impl<D: Datum> ConsumerWorker<D> {
 					continue;
 				}
 
-				// Validate the producer's ticket if a validator is configured
-				let ticket_expiration =
-					if let Some(ref validator) = self.config.ticket_validator {
-						match producer.validate_ticket(validator.as_ref()) {
-							Err(_) => {
-								tracing::debug!(
-									stream_id = %Short(self.config.stream_id),
-									producer_id = %Short(producer),
-									network = %producer.network_id(),
-									"skipping producer with invalid ticket"
-								);
-								continue;
-							}
-							Ok(expiration) => Some(expiration),
-						}
-					} else {
-						None
-					};
+				// Validate the producer's ticket against all validators
+				let Ok(ticket_expiration) =
+					producer.validate_tickets(&self.config.ticket_validators)
+				else {
+					tracing::debug!(
+						stream_id = %Short(self.config.stream_id),
+						producer_id = %Short(producer),
+						network = %producer.network_id(),
+						"skipping producer with invalid ticket"
+					);
+					continue;
+				};
 
 				// create a per-receiver cancellation token so the consumer worker
 				// can terminate this specific receiver independently
@@ -270,11 +259,9 @@ impl<D: Datum> ConsumerWorker<D> {
 				let dominated = latest.get(&peer_id).is_none_or(|entry| {
 					!entry.streams().contains(&self.config.stream_id)
 						|| !(self.config.require)(entry)
-						|| self
-							.config
-							.ticket_validator
-							.as_ref()
-							.is_some_and(|v| entry.validate_ticket(v.as_ref()).is_err())
+						|| entry
+							.validate_tickets(&self.config.ticket_validators)
+							.is_err()
 				});
 				dominated.then_some((*sub_id, peer_id))
 			})

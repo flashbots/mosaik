@@ -342,25 +342,19 @@ impl<D: Datum> WorkerLoop<D> {
 			return;
 		}
 
-		// Validate the consumer's ticket if a ticket validator is configured
-		let ticket_expiration =
-			if let Some(ref validator) = self.config.ticket_validator {
-				match peer.validate_ticket(validator.as_ref()) {
-					Err(_) => {
-						tracing::warn!(
-							stream_id = %Short(self.config.stream_id),
-							consumer_id = %Short(&peer),
-							"rejected consumer connection: invalid ticket",
-						);
+		// Validate the consumer's ticket against all configured validators
+		let Ok(ticket_expiration) =
+			peer.validate_tickets(&self.config.ticket_validators)
+		else {
+			tracing::warn!(
+				stream_id = %Short(self.config.stream_id),
+				consumer_id = %Short(&peer),
+				"rejected consumer connection: invalid ticket",
+			);
 
-						let _ = link.close(NotAllowed).await;
-						return;
-					}
-					Ok(expiration) => Some(expiration),
-				}
-			} else {
-				None
-			};
+			let _ = link.close(NotAllowed).await;
+			return;
+		};
 
 		// create and spawn a new sender task for this consumer
 		let (sub, info) = Sender::spawn(

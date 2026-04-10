@@ -270,3 +270,108 @@ async fn mismatched_jwt_auth_config_prevents_bonding() -> anyhow::Result<()> {
 
 	Ok(())
 }
+
+/// Verifies that when a group requires multiple ticket validators, peers
+/// must satisfy **all** of them to form bonds. Peers that only carry a
+/// subset of the required tickets are rejected.
+#[tokio::test]
+async fn multiple_ticket_validators() -> anyhow::Result<()> {
+	const T: u64 = 8;
+
+	let network_id = NetworkId::random();
+	let key = GroupKey::from_secret("multi-auth-group-secret");
+
+	// Two independent JWT issuers with different keys and issuer names.
+	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
+	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
+
+	let validator_a = JwtTicketValidator::with_key(issuer_a.key())
+		.allow_issuer(issuer_a.issuer());
+	let validator_b = JwtTicketValidator::with_key(issuer_b.key())
+		.allow_issuer(issuer_b.issuer());
+
+	// n0 and n1 carry tickets from BOTH issuers → should bond.
+	// n2 only carries issuer_a's ticket → should be rejected.
+	// n3 only carries issuer_b's ticket → should be rejected.
+	let (n0, n1, n2, n3) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+	)?;
+
+	n0.discovery().add_ticket(issuer_a.make_valid_ticket(&n0.local().id()));
+	n0.discovery().add_ticket(issuer_b.make_valid_ticket(&n0.local().id()));
+
+	n1.discovery().add_ticket(issuer_a.make_valid_ticket(&n1.local().id()));
+	n1.discovery().add_ticket(issuer_b.make_valid_ticket(&n1.local().id()));
+
+	n2.discovery().add_ticket(issuer_a.make_valid_ticket(&n2.local().id()));
+	// n2 missing issuer_b ticket
+
+	// n3 missing issuer_a ticket
+	n3.discovery().add_ticket(issuer_b.make_valid_ticket(&n3.local().id()));
+
+	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
+
+	// All nodes join the same group requiring both validators.
+	let g0 = n0
+		.groups()
+		.with_key(key)
+		.with_state_machine(Counter::default())
+		.require_ticket(validator_a.clone())
+		.require_ticket(validator_b.clone())
+		.join();
+
+	let g1 = n1
+		.groups()
+		.with_key(key)
+		.with_state_machine(Counter::default())
+		.require_ticket(validator_a.clone())
+		.require_ticket(validator_b.clone())
+		.join();
+
+	let g2 = n2
+		.groups()
+		.with_key(key)
+		.with_state_machine(Counter::default())
+		.require_ticket(validator_a.clone())
+		.require_ticket(validator_b.clone())
+		.join();
+
+	let g3 = n3
+		.groups()
+		.with_key(key)
+		.with_state_machine(Counter::default())
+		.require_ticket(validator_a.clone())
+		.require_ticket(validator_b.clone())
+		.join();
+
+	// n0 and n1 should bond with each other
+	timeout_s(T, ensure_bonds_formed(&g0, &n0, &[&n1], "g0")).await?;
+	timeout_s(T, ensure_bonds_formed(&g1, &n1, &[&n0], "g1")).await?;
+
+	// Allow time for n2 and n3 to attempt bonding
+	sleep_s(3).await;
+
+	let g0_bonds: Vec<_> = g0.bonds().iter().map(|b| *b.peer().id()).collect();
+	assert_eq!(g0_bonds.len(), 1, "g0 should have exactly one bond");
+	assert!(g0_bonds.contains(&n1.local().id()));
+
+	let g1_bonds: Vec<_> = g1.bonds().iter().map(|b| *b.peer().id()).collect();
+	assert_eq!(g1_bonds.len(), 1, "g1 should have exactly one bond");
+	assert!(g1_bonds.contains(&n0.local().id()));
+
+	assert_eq!(
+		g2.bonds().len(),
+		0,
+		"g2 should have no bonds (missing issuer_b ticket)"
+	);
+	assert_eq!(
+		g3.bonds().len(),
+		0,
+		"g3 should have no bonds (missing issuer_a ticket)"
+	);
+
+	Ok(())
+}

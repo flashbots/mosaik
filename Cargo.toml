@@ -6,7 +6,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.93"
-version = "0.3.5"
+version = "0.3.6"
 license = "MIT"
 homepage = "https://github.com/flashbots/mosaik"
 repository = "https://github.com/flashbots/mosaik"
@@ -71,8 +71,8 @@ default = ["cli"]
 cli = ["clap", "colored"]
 
 tee = []
-tdx = ["tee", "configfs-tsm", "sha2", "tdx-quote", "zstd"]
 
+tdx = ["tee", "configfs-tsm", "sha2", "tdx-quote", "zstd"]
 tdx-builder-all = ["tdx-builder-alpine", "tdx-builder-ubuntu"]
 tdx-builder-alpine = ["tdx-builder"]
 tdx-builder-ubuntu = ["tdx-builder"]
@@ -145,3 +145,4 @@ ctor = { version = "0.6" }
 rstest = "0.26"
 clap = { version = "4.5", features = ["derive", "env", "unicode", "wrap_help"] }
 hmac = "0.12"
+sha2 = { version = "0.10" }

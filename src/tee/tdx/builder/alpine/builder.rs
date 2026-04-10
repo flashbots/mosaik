@@ -607,8 +607,7 @@ impl AlpineBuilder {
 		// ---------------------------------------------------------------
 		// 8. Copy kernel to output directory
 		// ---------------------------------------------------------------
-		let kernel_output =
-			artifacts_dir.join(format!("{crate_name}-vmlinuz"));
+		let kernel_output = artifacts_dir.join(format!("{crate_name}-vmlinuz"));
 
 		if let Some(ref vmlinuz) = kernel_vmlinuz {
 			if vmlinuz.exists() {
@@ -645,8 +644,7 @@ impl AlpineBuilder {
 		// ---------------------------------------------------------------
 		// 10. Obtain ovmf.fd and precompute MRTD
 		// ---------------------------------------------------------------
-		let ovmf_output =
-			artifacts_dir.join(format!("{crate_name}-ovmf.fd"));
+		let ovmf_output = artifacts_dir.join(format!("{crate_name}-ovmf.fd"));
 
 		let ovmf_data = obtain_ovmf(
 			&self.custom_ovmf,
@@ -674,8 +672,7 @@ impl AlpineBuilder {
 					println!("cargo:warning=MRTD: {hex}");
 					println!("cargo:rustc-env=TDX_EXPECTED_MRTD={hex}");
 
-					let mrtd_path =
-						artifacts_dir.join(format!("{crate_name}-mrtd.hex"));
+					let mrtd_path = artifacts_dir.join(format!("{crate_name}-mrtd.hex"));
 					fs::write(&mrtd_path, &hex).unwrap();
 					println!("cargo:warning=MRTD written to: {}", mrtd_path.display());
 				}
@@ -698,8 +695,7 @@ impl AlpineBuilder {
 			println!("cargo:warning=RTMR[1]: {hex}");
 			println!("cargo:rustc-env=TDX_EXPECTED_RTMR1={hex}");
 
-			let rtmr1_path =
-				artifacts_dir.join(format!("{crate_name}-rtmr1.hex"));
+			let rtmr1_path = artifacts_dir.join(format!("{crate_name}-rtmr1.hex"));
 			fs::write(&rtmr1_path, &hex).unwrap();
 			println!("cargo:warning=RTMR[1] written to: {}", rtmr1_path.display(),);
 		}
@@ -716,8 +712,7 @@ impl AlpineBuilder {
 			println!("cargo:warning=RTMR[2]: {hex}");
 			println!("cargo:rustc-env=TDX_EXPECTED_RTMR2={hex}");
 
-			let rtmr2_path =
-				artifacts_dir.join(format!("{crate_name}-rtmr2.hex"));
+			let rtmr2_path = artifacts_dir.join(format!("{crate_name}-rtmr2.hex"));
 			fs::write(&rtmr2_path, &hex).unwrap();
 			println!("cargo:warning=RTMR[2] written to: {}", rtmr2_path.display());
 		}
@@ -737,8 +732,7 @@ impl AlpineBuilder {
 			self.ssh_forward,
 		);
 
-		let bundle_path =
-			artifacts_dir.join(format!("{crate_name}-run-qemu.sh"));
+		let bundle_path = artifacts_dir.join(format!("{crate_name}-run-qemu.sh"));
 
 		Some(AlpineBuilderOutput {
 			initramfs_path: final_path,

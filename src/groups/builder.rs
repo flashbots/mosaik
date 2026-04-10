@@ -53,11 +53,11 @@ pub struct GroupBuilder<'g, S = (), M = ()> {
 	/// must be running the same state machine implementation.
 	pub(super) state_machine: M,
 
-	/// Optional ticket validator for authenticating peers that attempt to join
-	/// the group. If set, this will be used to validate the tickets presented by
-	/// peers during the bonding process, and only peers with valid tickets will
-	/// be allowed to join the group and form a bond connection.
-	pub(super) auth: Option<Box<dyn TicketValidator>>,
+	/// Ticket validators for authenticating peers that attempt to join the
+	/// group. Each validator is used to validate the tickets presented by peers
+	/// during the bonding process. Peers must satisfy all configured validators
+	/// to be allowed to join the group and form a bond connection.
+	pub(super) auth: Vec<Box<dyn TicketValidator>>,
 }
 
 /// Setters that are available when neither the state machine nor the storage
@@ -71,7 +71,7 @@ impl<'g> GroupBuilder<'g, (), ()> {
 			consensus: None,
 			storage: (),
 			state_machine: (),
-			auth: None,
+			auth: Vec::new(),
 		}
 	}
 
@@ -92,7 +92,7 @@ impl<'g> GroupBuilder<'g, (), ()> {
 			consensus: None,
 			storage: InMemoryLogStore::<SM::Command>::default(),
 			state_machine,
-			auth: None,
+			auth: Vec::new(),
 		}
 	}
 
@@ -155,19 +155,18 @@ where
 		self
 	}
 
-	/// Configures an optional ticket validator for authenticating peers that
-	/// attempt to join the group. If set, this will be used to validate the
-	/// tickets presented by peers during the bonding process, and only peers
-	/// with valid tickets will be allowed to join the group and form a bond
-	/// connection.
+	/// Adds a ticket validator for authenticating peers that attempt to join
+	/// the group. Peers must satisfy all configured validators to be allowed
+	/// to join and form bond connections. Can be called multiple times to
+	/// require multiple types of tickets.
 	///
 	/// This does affect the generated group id, all members of the group must
-	/// have the same ticket validator configuration, otherwise they will derive
-	/// different group ids and will not be able to form a bond connection with
-	/// each other.
+	/// have the same ticket validators in the same order, otherwise they will
+	/// derive different group ids and will not be able to form a bond
+	/// connection with each other.
 	#[must_use]
 	pub fn require_ticket(mut self, auth: impl TicketValidator) -> Self {
-		self.auth = Some(Box::new(auth));
+		self.auth.push(Box::new(auth));
 		self
 	}
 }

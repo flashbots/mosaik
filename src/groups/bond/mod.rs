@@ -219,9 +219,7 @@ impl<M: StateMachine> Bond<M> {
 		group: Arc<WorkerState<M>>,
 		peer: SignedPeerEntry,
 	) -> Result<(Self, BondEvents<M>), Error> {
-		if let Some(auth) = group.config.auth()
-			&& peer.validate_ticket(auth).is_err()
-		{
+		if group.config.validate_peer(&peer).is_err() {
 			tracing::debug!(
 				network = %group.network_id(),
 				peer = %Short(peer.id()),
@@ -359,9 +357,7 @@ impl<M: StateMachine> Bond<M> {
 	) -> Result<(Self, BondEvents<M>), Error> {
 		let mut link = link;
 
-		if let Some(auth) = group.config.auth()
-			&& peer.validate_ticket(auth).is_err()
-		{
+		if group.config.validate_peer(&peer).is_err() {
 			tracing::debug!(
 				network = %group.network_id(),
 				peer = %Short(peer.id()),

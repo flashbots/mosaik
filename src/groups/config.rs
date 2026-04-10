@@ -1,8 +1,9 @@
 use {
 	crate::{
 		GroupKey,
+		discovery::SignedPeerEntry,
 		groups::{ConsensusConfig, GroupId, StateMachine, StateSync},
-		primitives::TicketValidator,
+		primitives::{Expiration, InvalidTicket, TicketValidator},
 	},
 	core::time::Duration,
 	derive_builder::Builder,
@@ -35,7 +36,7 @@ pub struct GroupConfig {
 	id: GroupId,
 	key: GroupKey,
 	consensus: ConsensusConfig,
-	auth: Option<Box<dyn TicketValidator>>,
+	auth: Vec<Box<dyn TicketValidator>>,
 }
 
 impl GroupConfig {
@@ -43,7 +44,7 @@ impl GroupConfig {
 		key: GroupKey,
 		consensus: ConsensusConfig,
 		state_machine: &impl StateMachine,
-		auth: Option<Box<dyn TicketValidator>>,
+		auth: Vec<Box<dyn TicketValidator>>,
 	) -> Self {
 		let mut id = key
 			.secret()
@@ -52,8 +53,8 @@ impl GroupConfig {
 			.derive(state_machine.signature())
 			.derive(state_machine.state_sync().signature());
 
-		if let Some(ref auth) = auth {
-			id = id.derive(auth.signature());
+		for validator in &auth {
+			id = id.derive(validator.signature());
 		}
 
 		Self {
@@ -76,7 +77,20 @@ impl GroupConfig {
 		&self.consensus
 	}
 
-	pub fn auth(&self) -> Option<&dyn TicketValidator> {
-		self.auth.as_ref().map(|auth| auth.as_ref())
+	pub fn auth(&self) -> &[Box<dyn TicketValidator>] {
+		&self.auth
+	}
+
+	/// Validates a peer's tickets against all configured validators.
+	///
+	/// Returns `Ok(None)` if no validators are configured.
+	/// Returns `Ok(Some(expiration))` with the earliest expiration if all
+	/// validators accept the peer.
+	/// Returns `Err(InvalidTicket)` if any validator rejects the peer.
+	pub fn validate_peer(
+		&self,
+		peer: &SignedPeerEntry,
+	) -> Result<Option<Expiration>, InvalidTicket> {
+		peer.validate_tickets(&self.auth)
 	}
 }

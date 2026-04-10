@@ -165,6 +165,142 @@ async fn stream_producer() -> anyhow::Result<()> {
 	Ok(())
 }
 
+/// Consumer with multiple ticket validators only subscribes to producers that
+/// satisfy **all** of them. Producers with only a subset of the required
+/// tickets are skipped.
+#[tokio::test]
+async fn stream_consumer_multiple_validators() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
+	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
+
+	let (n0, n1, n2, n3) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+	)?;
+
+	// n1 has both tickets → should be subscribed
+	n1.discovery()
+		.add_ticket(issuer_a.make_valid_ticket(&n1.local().id()));
+	n1.discovery()
+		.add_ticket(issuer_b.make_valid_ticket(&n1.local().id()));
+
+	// n2 has only issuer_a ticket → should be rejected
+	n2.discovery()
+		.add_ticket(issuer_a.make_valid_ticket(&n2.local().id()));
+
+	// n3 has only issuer_b ticket → should be rejected
+	n3.discovery()
+		.add_ticket(issuer_b.make_valid_ticket(&n3.local().id()));
+
+	let mut p1 = n1.streams().produce::<Data1>();
+	let _p2 = n2.streams().produce::<Data1>();
+	let _p3 = n3.streams().produce::<Data1>();
+
+	// Consumer requiring both validators
+	let mut c0 = n0
+		.streams()
+		.consumer::<Data1>()
+		.with_ticket_validator(
+			JwtTicketValidator::with_key(issuer_a.key())
+				.allow_issuer(issuer_a.issuer()),
+		)
+		.with_ticket_validator(
+			JwtTicketValidator::with_key(issuer_b.key())
+				.allow_issuer(issuer_b.issuer()),
+		)
+		.build();
+
+	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
+	sleep_s(5).await;
+
+	let producers = c0.producers().map(|p| *p.peer().id()).collect::<Vec<_>>();
+	assert_eq!(producers.len(), 1, "only n1 satisfies both validators");
+	assert!(producers.contains(&n1.local().id()));
+
+	// Data flows through the valid connection
+	p1.send(Data1("multi-auth".into())).await?;
+	assert_eq!(
+		timeout_s(2, c0.next()).await?,
+		Some(Data1("multi-auth".into()))
+	);
+
+	Ok(())
+}
+
+/// Producer with multiple ticket validators only accepts consumers that
+/// satisfy **all** of them. Consumers with only a subset of the required
+/// tickets are rejected.
+#[tokio::test]
+async fn stream_producer_multiple_validators() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
+	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
+
+	let (n0, n1, n2, n3) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+	)?;
+
+	// n1 has both tickets → should be accepted
+	n1.discovery()
+		.add_ticket(issuer_a.make_valid_ticket(&n1.local().id()));
+	n1.discovery()
+		.add_ticket(issuer_b.make_valid_ticket(&n1.local().id()));
+
+	// n2 has only issuer_a ticket → should be rejected
+	n2.discovery()
+		.add_ticket(issuer_a.make_valid_ticket(&n2.local().id()));
+
+	// n3 has only issuer_b ticket → should be rejected
+	n3.discovery()
+		.add_ticket(issuer_b.make_valid_ticket(&n3.local().id()));
+
+	// Producer requiring both validators
+	let mut p0 = n0
+		.streams()
+		.producer::<Data1>()
+		.with_ticket_validator(
+			JwtTicketValidator::with_key(issuer_a.key())
+				.allow_issuer(issuer_a.issuer()),
+		)
+		.with_ticket_validator(
+			JwtTicketValidator::with_key(issuer_b.key())
+				.allow_issuer(issuer_b.issuer()),
+		)
+		.build()?;
+
+	let mut c1 = n1.streams().consume::<Data1>();
+	let c2 = n2.streams().consume::<Data1>();
+	let c3 = n3.streams().consume::<Data1>();
+
+	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
+	sleep_s(5).await;
+
+	let subscribers =
+		p0.consumers().map(|s| *s.peer().id()).collect::<Vec<_>>();
+	assert_eq!(subscribers.len(), 1, "only n1 satisfies both validators");
+	assert!(subscribers.contains(&n1.local().id()));
+
+	// Data flows to the valid subscriber
+	p0.send(Data1("multi-auth".into())).await?;
+	assert_eq!(
+		timeout_s(2, c1.next()).await?,
+		Some(Data1("multi-auth".into()))
+	);
+
+	assert_eq!(c2.producers().count(), 0);
+	assert_eq!(c3.producers().count(), 0);
+
+	Ok(())
+}
+
 /// Producer disconnects a consumer whose ticket expires mid-session.
 #[tokio::test]
 async fn stream_producer_ticket_expiry() -> anyhow::Result<()> {

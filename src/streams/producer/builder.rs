@@ -70,12 +70,13 @@ pub struct ProducerConfig {
 	/// Defaults to unlimited if not set.
 	pub max_consumers: usize,
 
-	/// Optional ticket validator for authenticating consumer connections.
+	/// Ticket validators for authenticating consumer connections.
 	///
-	/// When set, consumers must present a valid ticket that passes validation
-	/// before being accepted. Tickets that carry an expiration are tracked
-	/// and consumers are automatically disconnected when their ticket expires.
-	pub ticket_validator: Option<Arc<dyn TicketValidator>>,
+	/// When non-empty, consumers must present valid tickets that pass all
+	/// configured validators before being accepted. Tickets that carry an
+	/// expiration are tracked and consumers are automatically disconnected
+	/// when their earliest ticket expires.
+	pub ticket_validators: Vec<Arc<dyn TicketValidator>>,
 
 	/// Optional sink for unsent datum that were not delivered to any consumers
 	/// because the datum did not meet any subscription criteria of any active
@@ -97,18 +98,19 @@ pub struct Builder<'s, D: Datum> {
 
 /// Public API
 impl<D: Datum> Builder<'_, D> {
-	/// Sets a ticket validator for authenticating consumer connections.
+	/// Adds a ticket validator for authenticating consumer connections.
 	///
-	/// When set, each consumer attempting to subscribe must present a valid
-	/// ticket that passes the validator. If the ticket carries an expiration,
+	/// Each consumer attempting to subscribe must present valid tickets that
+	/// pass all configured validators. If a ticket carries an expiration,
 	/// the producer will automatically disconnect the consumer when the
-	/// ticket expires.
+	/// earliest ticket expires. Can be called multiple times to require
+	/// multiple types of tickets.
 	#[must_use]
 	pub fn with_ticket_validator(
 		mut self,
 		validator: impl TicketValidator,
 	) -> Self {
-		self.config.ticket_validator = Some(Arc::new(validator));
+		self.config.ticket_validators.push(Arc::new(validator));
 		self
 	}
 
@@ -230,7 +232,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 				online_when: Box::new(|c| c.minimum_of(1)),
 				max_consumers: usize::MAX,
 				network_id: *streams.local.network_id(),
-				ticket_validator: None,
+				ticket_validators: Vec::new(),
 				undelivered: None,
 			},
 			_marker: PhantomData,

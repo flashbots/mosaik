@@ -72,8 +72,7 @@ pub(super) fn generate_self_extracting_script(
 	memory: &str,
 	ssh_forward: Option<(u16, u16)>,
 ) {
-	let run_qemu_path =
-		artifacts_dir.join(format!("{crate_name}-run-qemu.sh"));
+	let run_qemu_path = artifacts_dir.join(format!("{crate_name}-run-qemu.sh"));
 
 	if !kernel_output.exists() || !final_path.exists() {
 		eprintln!("==> Skipping run-qemu.sh (kernel or initramfs not available)");

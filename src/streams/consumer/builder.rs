@@ -43,13 +43,14 @@ pub struct ConsumerConfig {
 	pub online_when:
 		Box<dyn Fn(ChannelConditions) -> ChannelConditions + Send + Sync>,
 
-	/// Optional ticket validator for authenticating producer peers.
+	/// Ticket validators for authenticating producer peers.
 	///
-	/// When set, producers must present a valid ticket that passes validation
-	/// before the consumer will subscribe to them. Tickets that carry an
-	/// expiration are tracked and the consumer automatically disconnects
-	/// from producers when their ticket expires.
-	pub ticket_validator: Option<Arc<dyn TicketValidator>>,
+	/// When non-empty, producers must present valid tickets that pass all
+	/// configured validators before the consumer will subscribe to them.
+	/// Tickets that carry an expiration are tracked and the consumer
+	/// automatically disconnects from producers when their earliest ticket
+	/// expires.
+	pub ticket_validators: Vec<Arc<dyn TicketValidator>>,
 }
 
 /// Configurable builder for assembling a new consumer instance for a specific
@@ -68,18 +69,19 @@ impl<D: Datum> Builder<'_, D> {
 		self
 	}
 
-	/// Sets a ticket validator for authenticating producer peers.
+	/// Adds a ticket validator for authenticating producer peers.
 	///
-	/// When set, each discovered producer must present a valid ticket that
-	/// passes the validator before the consumer will subscribe. If the
+	/// Each discovered producer must present valid tickets that pass all
+	/// configured validators before the consumer will subscribe. If a
 	/// ticket carries an expiration, the consumer will automatically
-	/// disconnect from the producer when the ticket expires.
+	/// disconnect from the producer when the earliest ticket expires.
+	/// Can be called multiple times to require multiple types of tickets.
 	#[must_use]
 	pub fn with_ticket_validator(
 		mut self,
 		validator: impl TicketValidator,
 	) -> Self {
-		self.config.ticket_validator = Some(Arc::new(validator));
+		self.config.ticket_validators.push(Arc::new(validator));
 		self
 	}
 
@@ -159,7 +161,7 @@ impl<'s, D: Datum> Builder<'s, D> {
 				require: Box::new(|_| true),
 				backoff: streams.config.backoff.clone(),
 				online_when: Box::new(|c| c.minimum_of(0)),
-				ticket_validator: None,
+				ticket_validators: Vec::new(),
 			},
 			streams,
 			_marker: PhantomData,

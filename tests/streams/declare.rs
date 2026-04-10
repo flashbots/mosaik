@@ -7,7 +7,9 @@ use {
 		sleep_s,
 		timeout_s,
 	},
+	digest::KeyInit,
 	futures::{SinkExt, StreamExt},
+	hmac::Hmac,
 	mosaik::{declare, *},
 	serde::{Deserialize, Serialize},
 };
@@ -98,6 +100,18 @@ declare::stream!(
 	pub(crate) consumer ConsumerTicketStream = Data1,
 		"consumer.ticket.stream",
 		require_ticket: JwtTicketValidator::with_key(JwtIssuer::default().key()),
+);
+
+// Both sides require two independent JWT validators (different issuers).
+declare::stream!(
+	pub(crate) MultiTicketStream = Data1,
+		"multi.ticket.stream",
+		require_ticket: JwtTicketValidator::with_key(
+				Hmac::<sha2::Sha256>::new_from_slice(b"secret-alpha").unwrap()
+			).allow_issuer("issuer-alpha"),
+		require_ticket: JwtTicketValidator::with_key(
+				Hmac::<sha2::Sha256>::new_from_slice(b"secret-beta").unwrap()
+			).allow_issuer("issuer-beta"),
 );
 
 #[tokio::test]
@@ -469,6 +483,70 @@ async fn stream_macro_consumer_require_ticket() -> anyhow::Result<()> {
 	p1.send(Data1("consumer ticket".into())).await?;
 	let msg = timeout_s(3, c0.next()).await?.expect("expected message");
 	assert_eq!(msg, Data1("consumer ticket".into()));
+
+	Ok(())
+}
+
+/// Verifies that a `stream!` declaration with multiple `require_ticket`
+/// entries gates both sides: only peers carrying valid tickets from **all**
+/// issuers are connected.
+#[tokio::test]
+async fn stream_macro_multiple_require_ticket() -> anyhow::Result<()> {
+	let network_id = NetworkId::random();
+
+	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
+	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
+
+	let (n0, n1, n2, n3) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+	)?;
+
+	// n0 (producer) and n1 (consumer) carry tickets from BOTH issuers.
+	n0.discovery()
+		.add_ticket(issuer_a.make_valid_ticket(&n0.local().id()));
+	n0.discovery()
+		.add_ticket(issuer_b.make_valid_ticket(&n0.local().id()));
+	n1.discovery()
+		.add_ticket(issuer_a.make_valid_ticket(&n1.local().id()));
+	n1.discovery()
+		.add_ticket(issuer_b.make_valid_ticket(&n1.local().id()));
+
+	// n2 only has issuer_a ticket → should be rejected.
+	n2.discovery()
+		.add_ticket(issuer_a.make_valid_ticket(&n2.local().id()));
+
+	// n3 only has issuer_b ticket → should be rejected.
+	n3.discovery()
+		.add_ticket(issuer_b.make_valid_ticket(&n3.local().id()));
+
+	let mut p0 = MultiTicketStream::producer(&n0);
+	let mut c1 = MultiTicketStream::consumer(&n1);
+	let c2 = MultiTicketStream::consumer(&n2);
+	let c3 = MultiTicketStream::consumer(&n3);
+
+	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
+
+	// c1 should connect (both tickets valid on both sides).
+	timeout_s(3, c1.when().subscribed()).await?;
+
+	// c2 and c3 should not connect (missing one ticket each).
+	sleep_s(3).await;
+	assert!(
+		!c2.when().subscribed().is_condition_met(),
+		"consumer with only issuer_a ticket should not be subscribed"
+	);
+	assert!(
+		!c3.when().subscribed().is_condition_met(),
+		"consumer with only issuer_b ticket should not be subscribed"
+	);
+
+	// Data flows between n0 and n1.
+	p0.send(Data1("multi-ticket-gated".into())).await?;
+	let msg = timeout_s(3, c1.next()).await?.expect("expected message");
+	assert_eq!(msg, Data1("multi-ticket-gated".into()));
 
 	Ok(())
 }

@@ -206,6 +206,27 @@ impl PeerEntry {
 			.ok_or(InvalidTicket)
 	}
 
+	/// Validates the peer against all provided ticket validators.
+	///
+	/// Returns `Ok(None)` if the validator list is empty.
+	/// Returns `Ok(Some(expiration))` with the earliest expiration across all
+	/// validators if every validator accepts the peer.
+	/// Returns `Err(InvalidTicket)` if any validator rejects the peer.
+	pub fn validate_tickets(
+		&self,
+		validators: &[impl AsRef<dyn TicketValidator>],
+	) -> Result<Option<Expiration>, InvalidTicket> {
+		if validators.is_empty() {
+			return Ok(None);
+		}
+		let mut earliest = Expiration::Never;
+		for v in validators {
+			let expiration = self.validate_ticket(v.as_ref())?;
+			earliest = earliest.min(expiration);
+		}
+		Ok(Some(earliest))
+	}
+
 	/// The update version of the peer entry.
 	///
 	/// This is incremented each time the peer entry is updated.

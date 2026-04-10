@@ -71,8 +71,10 @@ impl TdxValidator {
 }
 
 impl Default for TdxValidator {
+	/// Creates a new `TdxValidator` that allows any ticket as long as it carries
+	/// valid TDX signatures in their TDX Quote.
 	fn default() -> Self {
-		Self::baseline(MeasurementsCriteria::new())
+		Self::new()
 	}
 }
 
