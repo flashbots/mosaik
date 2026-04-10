@@ -90,8 +90,8 @@ impl core::fmt::Display for Measurement {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Measurements {
-	pub mrtd: Measurement,
-	pub rtmr: [Measurement; 4],
+	mrtd: Measurement,
+	rtmr: [Measurement; 4],
 }
 
 impl Measurements {
@@ -217,7 +217,7 @@ impl MeasurementsCriteria {
 
 	pub fn signature(&self) -> UniqueId {
 		id!("mosaik.tee.tdx.measurements-criteria.v1")
-			.derive(self.mrtd.as_ref().map_or(&[0u8; 48], |m| m.as_bytes()))
+			.derive(self.mrtd.as_ref().map_or(&[9u8; 48], |m| m.as_bytes()))
 			.derive(self.rtmr[0].as_ref().map_or(&[1u8; 48], |m| m.as_bytes()))
 			.derive(self.rtmr[1].as_ref().map_or(&[2u8; 48], |m| m.as_bytes()))
 			.derive(self.rtmr[2].as_ref().map_or(&[3u8; 48], |m| m.as_bytes()))

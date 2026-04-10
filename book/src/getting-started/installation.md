@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- **Rust ≥ 1.89** (edition 2024)
+- **Rust ≥ 1.93** (edition 2024)
 - A Unix-like OS (Linux, macOS) or Windows
 
 ## Add to Your Project
@@ -11,7 +11,7 @@ Add mosaik to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-mosaik = "0.2"
+mosaik = "0.3"
 ```
 
 Mosaik pulls in its core dependencies automatically, including:

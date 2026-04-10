@@ -23,7 +23,7 @@ serde = { version = "1.0", features = ["derive"] }
 futures = "0.3.32"
 anyhow = "1.0"
 rand = "0.9.2"
-blake3 = { version = "1.5.4", features = ["serde", "traits-preview"] }
+blake3 = { version = "1.8.4", features = ["serde"] }
 
 [workspace.lints.rust]
 type_alias_bounds = "allow"
@@ -88,7 +88,7 @@ anyhow.workspace = true
 rand.workspace = true
 blake3.workspace = true
 
-mosaik-macros = { version = "0.3.3", path = "src/macros" }
+mosaik-macros = { version = "0.3.6", path = "src/macros" }
 
 thiserror = "2.0"
 postcard = "1.1.3"

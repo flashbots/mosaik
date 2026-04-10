@@ -9,7 +9,6 @@ use {
 		unique_id,
 	},
 	chrono::{DateTime, Utc},
-	core::{cell::OnceCell, time::Duration},
 	serde::{
 		Deserialize,
 		Deserializer,
@@ -17,11 +16,12 @@ use {
 		Serializer,
 		ser::SerializeStruct,
 	},
+	std::{sync::OnceLock, time::Duration},
 	tdx_quote::Quote,
 };
 
 #[derive(Debug, Clone, thiserror::Error)]
-pub enum TicketError {
+pub enum TdxTicketError {
 	#[error("Invalid ticket format")]
 	InvalidFormat,
 
@@ -52,7 +52,7 @@ pub enum TicketError {
 pub struct TdxTicket {
 	quote_bytes: Vec<u8>,
 	extra: ExtraData,
-	quote: OnceCell<Quote>,
+	quote: OnceLock<Quote>,
 }
 
 // Public API
@@ -171,11 +171,11 @@ impl TdxTicket {
 	pub(super) fn new(
 		quote_bytes: Vec<u8>,
 		extra: ExtraData,
-	) -> Result<Self, TicketError> {
+	) -> Result<Self, TdxTicketError> {
 		let ticket = Self {
 			quote_bytes,
 			extra,
-			quote: OnceCell::new(),
+			quote: OnceLock::new(),
 		};
 		let quote = ticket.verify_quote()?;
 		ticket.quote.set(quote).ok();
@@ -184,10 +184,10 @@ impl TdxTicket {
 
 	/// Verifies that the first 32 bytes of the quote's `report_data` match
 	/// the hash of the `ExtraData` signature.
-	fn verify_report_data(&self, quote: &Quote) -> Result<(), TicketError> {
+	fn verify_report_data(&self, quote: &Quote) -> Result<(), TdxTicketError> {
 		let report_data = quote.report_input_data();
 		if report_data[..32] != *self.extra.signature().as_bytes() {
-			return Err(TicketError::InvalidReportData);
+			return Err(TdxTicketError::InvalidReportData);
 		}
 		Ok(())
 	}
@@ -195,9 +195,9 @@ impl TdxTicket {
 	/// Parses and verifies the TDX Quote from the raw bytes, checks that
 	/// the `report_data` matches the `ExtraData` signature, and returns the
 	/// parsed quote.
-	fn verify_quote(&self) -> Result<Quote, TicketError> {
+	fn verify_quote(&self) -> Result<Quote, TdxTicketError> {
 		let quote = Quote::from_bytes(&self.quote_bytes)
-			.map_err(|_| TicketError::QuoteVerificationFailed)?;
+			.map_err(|_| TdxTicketError::QuoteVerificationFailed)?;
 		self.verify_report_data(&quote)?;
 		Ok(quote)
 	}
@@ -205,7 +205,6 @@ impl TdxTicket {
 
 impl Serialize for TdxTicket {
 	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-		self.verify_quote().map_err(serde::ser::Error::custom)?;
 		let mut state = serializer.serialize_struct("TdxTicket", 2)?;
 		state.serialize_field("quote_bytes", &self.quote_bytes)?;
 		state.serialize_field("extra", &self.extra)?;
@@ -227,7 +226,7 @@ impl<'de> Deserialize<'de> for TdxTicket {
 		let ticket = Self {
 			quote_bytes: wire.quote_bytes,
 			extra: wire.extra,
-			quote: OnceCell::new(),
+			quote: OnceLock::new(),
 		};
 		let quote = ticket.verify_quote().map_err(serde::de::Error::custom)?;
 		ticket.quote.set(quote).ok();
@@ -239,34 +238,35 @@ impl<'de> Deserialize<'de> for TdxTicket {
 /// `TdxTicket` and using the serialized bytes as the `data` field of the
 /// `Ticket` and setting its class to the TDX ticket class constant.
 impl TryFrom<TdxTicket> for Ticket {
-	type Error = TicketError;
+	type Error = TdxTicketError;
 
 	fn try_from(value: TdxTicket) -> Result<Self, Self::Error> {
 		let serialized = encoding::try_serialize(&value)
-			.map_err(|_| TicketError::QuoteVerificationFailed)?;
+			.map_err(|_| TdxTicketError::QuoteVerificationFailed)?;
 		let compressed =
 			zstd::bulk::compress(&serialized, TICKET_COMPRESSION_LEVEL)
-				.map_err(|_| TicketError::InvalidFormat)?;
+				.map_err(|_| TdxTicketError::InvalidFormat)?;
 		Ok(Self::new(super::TICKET_CLASS, compressed.into()))
 	}
 }
 
 impl TryFrom<&[u8]> for TdxTicket {
-	type Error = TicketError;
+	type Error = TdxTicketError;
 
 	fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
 		let decompressed = zstd::bulk::decompress(value, MAX_TICKET_SIZE)
-			.map_err(|_| TicketError::InvalidFormat)?;
-		encoding::deserialize(&decompressed).map_err(|_| TicketError::InvalidFormat)
+			.map_err(|_| TdxTicketError::InvalidFormat)?;
+		encoding::deserialize(&decompressed)
+			.map_err(|_| TdxTicketError::InvalidFormat)
 	}
 }
 
 impl TryFrom<Ticket> for TdxTicket {
-	type Error = TicketError;
+	type Error = TdxTicketError;
 
 	fn try_from(ticket: Ticket) -> Result<Self, Self::Error> {
 		if ticket.class != super::TICKET_CLASS {
-			return Err(TicketError::InvalidTicketType);
+			return Err(TdxTicketError::InvalidTicketType);
 		}
 		Self::try_from(ticket.data.as_ref())
 	}

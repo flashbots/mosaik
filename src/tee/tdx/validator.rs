@@ -121,6 +121,10 @@ impl TicketValidator for TdxValidator {
 			return Err(InvalidTicket);
 		}
 
+		if ticket.expiration().is_expired() {
+			return Err(InvalidTicket);
+		}
+
 		Ok(*ticket.expiration())
 	}
 }

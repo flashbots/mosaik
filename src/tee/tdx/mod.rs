@@ -7,10 +7,10 @@ pub const TICKET_CLASS: crate::UniqueId =
 	crate::id!("mosaik.tee.tdx.ticket.v1");
 
 pub use {
-	local::NetworkTdxExt,
+	local::{Error as NetworkTdxError, NetworkTdxExt},
 	measure::*,
 	tdx_quote::Quote,
-	ticket::{TdxTicket, TicketError},
+	ticket::{TdxTicket, TdxTicketError},
 	validator::TdxValidator,
 };
 

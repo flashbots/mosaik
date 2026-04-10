@@ -21,7 +21,7 @@ pub enum Error {
 	QuoteParseError(#[from] tdx_quote::QuoteParseError),
 
 	#[error("Invalid TDX ticket: {0}")]
-	TicketError(#[from] super::ticket::TicketError),
+	TicketError(#[from] super::ticket::TdxTicketError),
 
 	#[error("TDX expiration time is in the past")]
 	ExpirationInThePast,
@@ -73,8 +73,10 @@ impl NetworkTdxOps<'_> {
 	/// to call `ticket()` once convert it to `TdxTicket` and extract the
 	/// measurements from there.
 	pub fn measurements(&self) -> Result<Measurements, Error> {
-		let ticket: TdxTicket = self.ticket()?.try_into()?;
-		Ok(Measurements::from_quote(ticket.quote()))
+		let _ = self;
+		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
+		let quote = tdx_quote::Quote::from_bytes(&quote)?;
+		Ok(Measurements::from_quote(&quote))
 	}
 
 	/// Returns the `MR_TD` measurement of the local machine's TDX environment.
@@ -84,7 +86,7 @@ impl NetworkTdxOps<'_> {
 	/// to call `measurements()` once and extract the individual measurements from
 	/// the returned `Measurements` struct.
 	pub fn mrtd(&self) -> Result<Measurement, Error> {
-		self.measurements().map(|m| m.mrtd)
+		self.measurements().map(|m| m.mrtd())
 	}
 
 	/// Returns the `RTMR[0]` measurement of the local machine's TDX environment.
@@ -94,7 +96,7 @@ impl NetworkTdxOps<'_> {
 	/// to call `measurements()` once and extract the individual measurements from
 	/// the returned `Measurements` struct.
 	pub fn rtmr0(&self) -> Result<Measurement, Error> {
-		self.measurements().map(|m| m.rtmr[0])
+		self.measurements().map(|m| m.rtmr0())
 	}
 
 	/// Returns the `RTMR[1]` measurement of the local machine's TDX environment.
@@ -104,7 +106,7 @@ impl NetworkTdxOps<'_> {
 	/// to call `measurements()` once and extract the individual measurements from
 	/// the returned `Measurements` struct.
 	pub fn rtmr1(&self) -> Result<Measurement, Error> {
-		self.measurements().map(|m| m.rtmr[1])
+		self.measurements().map(|m| m.rtmr1())
 	}
 
 	/// Returns the `RTMR[2]` measurement of the local machine's TDX environment.
@@ -114,7 +116,7 @@ impl NetworkTdxOps<'_> {
 	/// to call `measurements()` once and extract the individual measurements from
 	/// the returned `Measurements` struct.
 	pub fn rtmr2(&self) -> Result<Measurement, Error> {
-		self.measurements().map(|m| m.rtmr[2])
+		self.measurements().map(|m| m.rtmr2())
 	}
 
 	/// Returns the `RTMR[3]` measurement of the local machine's TDX environment.
@@ -124,7 +126,7 @@ impl NetworkTdxOps<'_> {
 	/// to call `measurements()` once and extract the individual measurements from
 	/// the returned `Measurements` struct.
 	pub fn rtmr3(&self) -> Result<Measurement, Error> {
-		self.measurements().map(|m| m.rtmr[3])
+		self.measurements().map(|m| m.rtmr3())
 	}
 }
 

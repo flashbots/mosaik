@@ -49,7 +49,7 @@ async fn stream_consumer() -> anyhow::Result<()> {
 	let mut c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.with_ticket_validator(validator)
+		.require_ticket(validator)
 		.build();
 
 	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;

@@ -39,7 +39,7 @@ async fn stream_consumer() -> anyhow::Result<()> {
 	let mut c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.with_ticket_validator(
+		.require_ticket(
 			JwtTicketValidator::with_key(jwt_issuer.key())
 				.allow_issuer(jwt_issuer.issuer()),
 		)
@@ -80,7 +80,7 @@ async fn stream_consumer_ticket_expiry() -> anyhow::Result<()> {
 	let mut c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.with_ticket_validator(
+		.require_ticket(
 			JwtTicketValidator::with_key(jwt_issuer.key())
 				.allow_issuer(jwt_issuer.issuer()),
 		)
@@ -136,7 +136,7 @@ async fn stream_producer() -> anyhow::Result<()> {
 	let mut p0 = n0
 		.streams()
 		.producer::<Data1>()
-		.with_ticket_validator(
+		.require_ticket(
 			JwtTicketValidator::with_key(jwt_issuer.key())
 				.allow_issuer(jwt_issuer.issuer()),
 		)
@@ -204,11 +204,11 @@ async fn stream_consumer_multiple_validators() -> anyhow::Result<()> {
 	let mut c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.with_ticket_validator(
+		.require_ticket(
 			JwtTicketValidator::with_key(issuer_a.key())
 				.allow_issuer(issuer_a.issuer()),
 		)
-		.with_ticket_validator(
+		.require_ticket(
 			JwtTicketValidator::with_key(issuer_b.key())
 				.allow_issuer(issuer_b.issuer()),
 		)
@@ -266,11 +266,11 @@ async fn stream_producer_multiple_validators() -> anyhow::Result<()> {
 	let mut p0 = n0
 		.streams()
 		.producer::<Data1>()
-		.with_ticket_validator(
+		.require_ticket(
 			JwtTicketValidator::with_key(issuer_a.key())
 				.allow_issuer(issuer_a.issuer()),
 		)
-		.with_ticket_validator(
+		.require_ticket(
 			JwtTicketValidator::with_key(issuer_b.key())
 				.allow_issuer(issuer_b.issuer()),
 		)
@@ -283,8 +283,7 @@ async fn stream_producer_multiple_validators() -> anyhow::Result<()> {
 	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
 	sleep_s(5).await;
 
-	let subscribers =
-		p0.consumers().map(|s| *s.peer().id()).collect::<Vec<_>>();
+	let subscribers = p0.consumers().map(|s| *s.peer().id()).collect::<Vec<_>>();
 	assert_eq!(subscribers.len(), 1, "only n1 satisfies both validators");
 	assert!(subscribers.contains(&n1.local().id()));
 
@@ -319,7 +318,7 @@ async fn stream_producer_ticket_expiry() -> anyhow::Result<()> {
 	let mut p0 = n0
 		.streams()
 		.producer::<Data1>()
-		.with_ticket_validator(
+		.require_ticket(
 			JwtTicketValidator::with_key(jwt_issuer.key())
 				.allow_issuer(jwt_issuer.issuer()),
 		)

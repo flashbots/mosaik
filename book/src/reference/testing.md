@@ -11,7 +11,7 @@ Add these to your `[dev-dependencies]`:
 
 ```toml
 [dev-dependencies]
-mosaik = { version = "0.2" }
+mosaik = { version = "0.3" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -220,7 +220,7 @@ impl StreamInput {
 			let call = match key_str.as_str() {
 				"require" => quote::quote! { .require(#value) },
 				"require_ticket" => {
-					quote::quote! { .with_ticket_validator(#value) }
+					quote::quote! { .require_ticket(#value) }
 				}
 				"online_when" => {
 					quote::quote! { .online_when(#value) }

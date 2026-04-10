@@ -77,10 +77,7 @@ impl<D: Datum> Builder<'_, D> {
 	/// disconnect from the producer when the earliest ticket expires.
 	/// Can be called multiple times to require multiple types of tickets.
 	#[must_use]
-	pub fn with_ticket_validator(
-		mut self,
-		validator: impl TicketValidator,
-	) -> Self {
+	pub fn require_ticket(mut self, validator: impl TicketValidator) -> Self {
 		self.config.ticket_validators.push(Arc::new(validator));
 		self
 	}
