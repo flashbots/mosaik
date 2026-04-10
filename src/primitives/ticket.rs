@@ -1,9 +1,14 @@
 use {
-	crate::{UniqueId, discovery::PeerEntry},
+	crate::{
+		UniqueId,
+		discovery::PeerEntry,
+		primitives::{Abbreviated, Short},
+	},
 	bytes::Bytes,
 	chrono::{DateTime, Utc},
 	core::{cmp::Ordering, time::Duration},
 	derive_more::Display,
+	humansize::{DECIMAL, format_size},
 	serde::{Deserialize, Serialize},
 	std::sync::Arc,
 };
@@ -34,6 +39,11 @@ impl Ticket {
 	/// A unique identifier for this ticket, derived from its class and data.
 	pub fn id(&self) -> UniqueId {
 		self.class.derive(&self.data)
+	}
+
+	/// Returns the raw data of the ticket.
+	pub fn data(&self) -> &[u8] {
+		&self.data
 	}
 }
 
@@ -89,6 +99,23 @@ impl core::fmt::Debug for Ticket {
 		f.debug_struct("Ticket")
 			.field("class", &self.class)
 			.field("data", &hex::encode(&self.data))
+			.field("len", &self.data.len())
+			.finish()
+	}
+}
+
+impl core::fmt::Debug for Short<&Ticket> {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		f.debug_struct("Ticket")
+			.field("class", &Short(&self.0.class))
+			.field("data", &Abbreviated::<8, _>(&self.0.data))
+			.field(
+				"size",
+				&format_args!(
+					"{}",
+					format_size(self.0.data.len() + self.0.class.len(), DECIMAL)
+				),
+			)
 			.finish()
 	}
 }
@@ -97,9 +124,9 @@ impl core::fmt::Display for Ticket {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
 		write!(
 			f,
-			"Ticket(class={}, data={})",
+			"Ticket({},{})",
 			self.class,
-			humansize::format_size(self.data.len(), humansize::DECIMAL)
+			format_size(self.data.len() + self.class.len(), DECIMAL)
 		)
 	}
 }

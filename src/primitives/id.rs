@@ -166,6 +166,12 @@ impl Digest {
 		self.0.as_bytes()
 	}
 
+	/// Returns the length of the unique id in bytes (always 32).
+	#[expect(clippy::len_without_is_empty)]
+	pub const fn len(&self) -> usize {
+		32
+	}
+
 	/// Creates a unique id from the given blake3 hasher by finalizing it.
 	pub fn from_hasher(hasher: &blake3::Hasher) -> Self {
 		Self(hasher.finalize())

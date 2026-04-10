@@ -36,6 +36,12 @@ impl<T: AsRef<[u8]>> fmt::Display for Short<T> {
 	}
 }
 
+impl<T: AsRef<[u8]>> fmt::Debug for Short<T> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		<Self as fmt::Display>::fmt(self, f)
+	}
+}
+
 impl<T> FmtWrapper<T> for Short<T> {
 	fn wrap(value: T) -> Self {
 		Self(value)
@@ -67,6 +73,12 @@ impl<const LEN: usize, T: AsRef<[u8]>> fmt::Display for Abbreviated<LEN, T> {
 	}
 }
 
+impl<const LEN: usize, T: AsRef<[u8]>> fmt::Debug for Abbreviated<LEN, T> {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		<Self as fmt::Display>::fmt(self, f)
+	}
+}
+
 impl<T, const LEN: usize> FmtWrapper<T> for Abbreviated<LEN, T> {
 	fn wrap(value: T) -> Self {
 		Self(value)
@@ -83,7 +95,7 @@ impl<T> fmt::Display for Redacted<T> {
 
 impl<T> fmt::Debug for Redacted<T> {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "<redacted>")
+		<Self as fmt::Display>::fmt(self, f)
 	}
 }
 

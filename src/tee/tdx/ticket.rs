@@ -4,7 +4,7 @@ use {
 		PeerId,
 		Ticket,
 		UniqueId,
-		primitives::{Expiration, encoding},
+		primitives::{Expiration, Pretty, encoding},
 		tee::tdx::Measurements,
 		unique_id,
 	},
@@ -269,6 +269,39 @@ impl TryFrom<Ticket> for TdxTicket {
 			return Err(TdxTicketError::InvalidTicketType);
 		}
 		Self::try_from(ticket.data.as_ref())
+	}
+}
+
+impl core::fmt::Debug for Pretty<'_, TdxTicket> {
+	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+		let ticket = &self.0;
+		let measurements = ticket.measurements();
+		let aux_hash = &ticket.quote().report_input_data()[..32];
+
+		let mut d = f.debug_struct("TdxTicket");
+
+		d.field("peer_id", &format_args!("{}", ticket.peer_id()))
+			.field("network_id", &ticket.network_id())
+			.field("mrtd", &format_args!("{}", measurements.mrtd()))
+			.field("rtmr0", &format_args!("{}", measurements.rtmr0()))
+			.field("rtmr1", &format_args!("{}", measurements.rtmr1()))
+			.field("rtmr2", &format_args!("{}", measurements.rtmr2()))
+			.field("aux_hash", &format_args!("{}", hex::encode(aux_hash)))
+			.field("started_at", &ticket.started_at())
+			.field("quoted_at", &ticket.quoted_at())
+			.field("expiration", &ticket.expiration())
+			.field("tdx_version", &match ticket.quote().body.tdx_version {
+				tdx_quote::TDXVersion::One => 1.0,
+				tdx_quote::TDXVersion::OnePointFive => 1.5,
+			})
+			.field("quote_version", &ticket.quote().header.version)
+			.field("tee_type", &ticket.quote().header.tee_type);
+
+		if ticket.quote().body.mrowner != [0u8; 48] {
+			d.field("mrowner", &hex::encode(ticket.quote().body.mrowner));
+		}
+
+		d.finish()
 	}
 }
 

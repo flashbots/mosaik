@@ -12,9 +12,8 @@ pub mod encoding;
 pub mod ticket;
 
 /// Public API re-exported byte types.
-pub use bytes::{Bytes, BytesMut};
-#[doc(hidden)]
-pub use fmt::*;
+pub use bytes::{self, Bytes, BytesMut};
+pub use hex;
 /// Internal primitives.
 pub(crate) use {
 	channel::UnboundedChannel,
@@ -27,6 +26,7 @@ pub(crate) use {
 /// Public API re-exported primitives.
 pub use {
 	datum::{Datum, Encoded},
+	fmt::*,
 	id::{Digest, Tag, UniqueId},
 	ticket::{Expiration, InvalidTicket, Ticket, TicketValidator},
 };

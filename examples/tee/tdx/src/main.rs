@@ -1,20 +1,26 @@
-use mosaik::{tdx::TdxTicket, *};
+use mosaik::{
+	primitives::{Pretty, Short},
+	tdx::TdxTicket,
+	*,
+};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 	let network_id = NetworkId::from("tdx-example2");
 	let network = Network::new(network_id).await?;
 
-	println!("Network {network_id} created.");
+	println!("Network {network_id} created...");
 
 	println!("Generating TDX ticket...");
 	let ticket = network.tdx().ticket()?;
-	println!("TDX ticket generated: {ticket:?}");
+	println!("Generic ticket generated: {:?}", Short(&ticket));
 
 	let tdx_ticket: TdxTicket = ticket.try_into()?;
+	println!("TDX ticket: {:#?}", Pretty(&tdx_ticket));
+
 	println!(
-		"tdx ticket contents: {tdx_ticket:?}, quote signer: {}",
-		hex_encode(&tdx_ticket.quote().verify()?.to_sec1_bytes())
+		"TDX ticket quote signatures verified: {}",
+		tdx_ticket.quote().verify().is_ok()
 	);
 
 	let mrtd = network.tdx().mrtd().unwrap();
@@ -26,7 +32,7 @@ async fn main() -> anyhow::Result<()> {
 	let rtmr0 = network.tdx().rtmr0().unwrap();
 	println!("RTMR0 measurement: {rtmr0}");
 
-	let rtmr1 = tdx_ticket.measurements().rtmr[1];
+	let rtmr1 = tdx_ticket.measurements().rtmr1();
 	println!("RTMR1 measurement: {rtmr1}");
 
 	let rtmr2 = tdx_ticket.measurements().rtmr2();
@@ -39,12 +45,4 @@ async fn main() -> anyhow::Result<()> {
 
 	println!("All done!");
 	Ok(())
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-	use std::fmt::Write;
-	bytes.iter().fold(String::new(), |mut output, b| {
-		let _ = write!(output, "{b:02x}");
-		output
-	})
 }
