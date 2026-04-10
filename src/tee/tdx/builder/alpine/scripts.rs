@@ -30,8 +30,7 @@ pub(super) fn generate_init_script(
 
 pub(super) fn generate_launch_script(
 	crate_name: &str,
-	profile: &str,
-	target_dir: &Path,
+	artifacts_dir: &Path,
 	cpus: u32,
 	memory: &str,
 	ssh_forward: Option<(u16, u16)>,
@@ -43,9 +42,8 @@ pub(super) fn generate_launch_script(
 		.replace("{{MEMORY}}", memory)
 		.replace("{{SSH_FWD}}", &ssh_fwd);
 
-	let launch_script_path = target_dir
-		.join(profile)
-		.join(format!("{crate_name}-launch-tdx.sh"));
+	let launch_script_path =
+		artifacts_dir.join(format!("{crate_name}-launch-tdx.sh"));
 	fs::write(&launch_script_path, &launch_script).unwrap();
 
 	#[cfg(unix)]
@@ -65,8 +63,7 @@ pub(super) fn generate_launch_script(
 #[expect(clippy::too_many_arguments)]
 pub(super) fn generate_self_extracting_script(
 	crate_name: &str,
-	profile: &str,
-	target_dir: &Path,
+	artifacts_dir: &Path,
 	out_dir: &Path,
 	kernel_output: &Path,
 	final_path: &Path,
@@ -75,9 +72,8 @@ pub(super) fn generate_self_extracting_script(
 	memory: &str,
 	ssh_forward: Option<(u16, u16)>,
 ) {
-	let run_qemu_path = target_dir
-		.join(profile)
-		.join(format!("{crate_name}-run-qemu.sh"));
+	let run_qemu_path =
+		artifacts_dir.join(format!("{crate_name}-run-qemu.sh"));
 
 	if !kernel_output.exists() || !final_path.exists() {
 		eprintln!("==> Skipping run-qemu.sh (kernel or initramfs not available)");

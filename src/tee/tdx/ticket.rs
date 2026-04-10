@@ -49,14 +49,14 @@ pub enum TicketError {
 /// includes additional mosaik-specific data such as the peer's identity and
 /// network.
 #[derive(PartialEq, Eq)]
-pub struct TdxTicketData {
+pub struct TdxTicket {
 	quote_bytes: Vec<u8>,
 	extra: ExtraData,
 	quote: OnceCell<Quote>,
 }
 
 // Public API
-impl TdxTicketData {
+impl TdxTicket {
 	/// Returns the raw bytes of the TDX Quote contained in this ticket as emitted
 	/// by the TDX hardware.
 	pub const fn quote_bytes(&self) -> &[u8] {
@@ -67,8 +67,8 @@ impl TdxTicketData {
 	/// the raw bytes.
 	///
 	/// # Panics
-	/// Should never panic because there is not way to construct a `TdxTicketData`
-	/// with invalid quote bytes, and all code paths that create a `TdxTicketData`
+	/// Should never panic because there is not way to construct a `TdxTicket`
+	/// with invalid quote bytes, and all code paths that create a `TdxTicket`
 	/// set the `quote` field after verifying the quote bytes. If this panics, it
 	/// indicates a bug in the code.
 	pub fn quote(&self) -> &Quote {
@@ -122,9 +122,9 @@ impl TdxTicketData {
 	}
 }
 
-impl core::fmt::Debug for TdxTicketData {
+impl core::fmt::Debug for TdxTicket {
 	fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-		f.debug_struct("TdxTicketData")
+		f.debug_struct("TdxTicket")
 			.field("quote", self.quote())
 			.field("extra", &self.extra)
 			.finish_non_exhaustive()
@@ -167,7 +167,7 @@ impl ExtraData {
 	}
 }
 
-impl TdxTicketData {
+impl TdxTicket {
 	pub(super) fn new(
 		quote_bytes: Vec<u8>,
 		extra: ExtraData,
@@ -203,17 +203,17 @@ impl TdxTicketData {
 	}
 }
 
-impl Serialize for TdxTicketData {
+impl Serialize for TdxTicket {
 	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
 		self.verify_quote().map_err(serde::ser::Error::custom)?;
-		let mut state = serializer.serialize_struct("TdxTicketData", 2)?;
+		let mut state = serializer.serialize_struct("TdxTicket", 2)?;
 		state.serialize_field("quote_bytes", &self.quote_bytes)?;
 		state.serialize_field("extra", &self.extra)?;
 		state.end()
 	}
 }
 
-impl<'de> Deserialize<'de> for TdxTicketData {
+impl<'de> Deserialize<'de> for TdxTicket {
 	fn deserialize<D: Deserializer<'de>>(
 		deserializer: D,
 	) -> Result<Self, D::Error> {
@@ -235,13 +235,13 @@ impl<'de> Deserialize<'de> for TdxTicketData {
 	}
 }
 
-/// Converts a `TdxTicketData` into a generic mosaik `Ticket` by serializing the
-/// `TdxTicketData` and using the serialized bytes as the `data` field of the
+/// Converts a `TdxTicket` into a generic mosaik `Ticket` by serializing the
+/// `TdxTicket` and using the serialized bytes as the `data` field of the
 /// `Ticket` and setting its class to the TDX ticket class constant.
-impl TryFrom<TdxTicketData> for Ticket {
+impl TryFrom<TdxTicket> for Ticket {
 	type Error = TicketError;
 
-	fn try_from(value: TdxTicketData) -> Result<Self, Self::Error> {
+	fn try_from(value: TdxTicket) -> Result<Self, Self::Error> {
 		let serialized = encoding::try_serialize(&value)
 			.map_err(|_| TicketError::QuoteVerificationFailed)?;
 		let compressed =
@@ -251,7 +251,7 @@ impl TryFrom<TdxTicketData> for Ticket {
 	}
 }
 
-impl TryFrom<&[u8]> for TdxTicketData {
+impl TryFrom<&[u8]> for TdxTicket {
 	type Error = TicketError;
 
 	fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
@@ -261,7 +261,7 @@ impl TryFrom<&[u8]> for TdxTicketData {
 	}
 }
 
-impl TryFrom<Ticket> for TdxTicketData {
+impl TryFrom<Ticket> for TdxTicket {
 	type Error = TicketError;
 
 	fn try_from(ticket: Ticket) -> Result<Self, Self::Error> {

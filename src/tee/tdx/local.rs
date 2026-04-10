@@ -4,7 +4,7 @@ use {
 		Network,
 		Ticket,
 		primitives::{Expiration, sealed::Sealed},
-		tee::tdx::ticket::TdxTicketData,
+		tee::tdx::ticket::TdxTicket,
 	},
 	chrono::Utc,
 };
@@ -62,7 +62,7 @@ impl NetworkTdxOps<'_> {
 		};
 
 		let quote_bytes = configfs_tsm::create_tdx_quote(report_data)?;
-		Ok(TdxTicketData::new(quote_bytes, extra_data)?.try_into()?)
+		Ok(TdxTicket::new(quote_bytes, extra_data)?.try_into()?)
 	}
 
 	/// Returns all measurements (`MR_TD` and `RTMR`s) of the local machine's TDX
@@ -70,10 +70,10 @@ impl NetworkTdxOps<'_> {
 	///
 	/// Note: This requires generating a TDX quote and parsing it, so it may be
 	/// slow. If you're going to request several measurements, it's more efficient
-	/// to call `ticket()` once convert it to `TdxTicketData` and extract the
+	/// to call `ticket()` once convert it to `TdxTicket` and extract the
 	/// measurements from there.
 	pub fn measurements(&self) -> Result<Measurements, Error> {
-		let ticket: TdxTicketData = self.ticket()?.try_into()?;
+		let ticket: TdxTicket = self.ticket()?.try_into()?;
 		Ok(Measurements::from_quote(ticket.quote()))
 	}
 

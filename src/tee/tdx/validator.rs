@@ -4,7 +4,7 @@ use crate::{
 	discovery::PeerEntry,
 	id,
 	primitives::{Expiration, InvalidTicket},
-	tee::tdx::{MeasurementsCriteria, ticket::TdxTicketData},
+	tee::tdx::{MeasurementsCriteria, ticket::TdxTicket},
 };
 
 /// A TDX-based ticket validator.
@@ -25,7 +25,7 @@ pub struct TdxValidator {
 	/// peers must satisfy, while the `any` field allows for specifying
 	/// additional acceptable profiles that can be satisfied as alternatives to
 	/// the baseline.
-	all: MeasurementsCriteria,
+	baseline: MeasurementsCriteria,
 
 	/// A list of `MeasurementsCriteria`, at least one of which must be satisfied
 	/// by a peer for their ticket to be considered valid. This allows for
@@ -39,9 +39,9 @@ impl TdxValidator {
 	pub const CLASS: UniqueId = id!("mosaik.tee.tdx.ticket-validator.v1");
 
 	#[must_use]
-	pub const fn new(baseline: MeasurementsCriteria) -> Self {
+	pub const fn baseline(baseline: MeasurementsCriteria) -> Self {
 		Self {
-			all: baseline,
+			baseline,
 			any: Vec::new(),
 		}
 	}
@@ -50,13 +50,29 @@ impl TdxValidator {
 	/// valid TDX signatures in their TDX Quote.
 	#[must_use]
 	pub const fn empty() -> Self {
-		Self::new(MeasurementsCriteria::new())
+		Self::baseline(MeasurementsCriteria::new())
+	}
+
+	/// Creates a new `TdxValidator` that allows any ticket as long as it carries
+	/// valid TDX signatures in their TDX Quote.
+	#[must_use]
+	pub const fn new() -> Self {
+		Self::empty()
+	}
+
+	/// Returns a new `TdxValidator` that allows tickets that satisfy the given
+	/// `MeasurementsCriteria` in addition to the baseline criteria and other
+	/// existing variants.
+	#[must_use]
+	pub fn allow_variant(mut self, criteria: MeasurementsCriteria) -> Self {
+		self.any.push(criteria);
+		self
 	}
 }
 
 impl Default for TdxValidator {
 	fn default() -> Self {
-		Self::new(MeasurementsCriteria::new())
+		Self::baseline(MeasurementsCriteria::new())
 	}
 }
 
@@ -69,7 +85,7 @@ impl TicketValidator for TdxValidator {
 		self
 			.any
 			.iter()
-			.fold(self.class().derive(self.all.signature()), |s, c| {
+			.fold(self.class().derive(self.baseline.signature()), |s, c| {
 				s.derive(c.signature())
 			})
 	}
@@ -79,13 +95,13 @@ impl TicketValidator for TdxValidator {
 		bytes: &[u8],
 		peer: &PeerEntry,
 	) -> Result<Expiration, InvalidTicket> {
-		let Ok(ticket) = TdxTicketData::try_from(bytes) else {
+		let Ok(ticket) = TdxTicket::try_from(bytes) else {
 			return Err(InvalidTicket);
 		};
 
 		let measurements = ticket.measurements();
 
-		if !self.all.matches(&measurements) {
+		if !self.baseline.matches(&measurements) {
 			return Err(InvalidTicket);
 		}
 

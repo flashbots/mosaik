@@ -1,4 +1,4 @@
-use mosaik::*;
+use mosaik::{tdx::TdxTicket, *};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -11,7 +11,7 @@ async fn main() -> anyhow::Result<()> {
 	let ticket = network.tdx().ticket()?;
 	println!("TDX ticket generated: {ticket:?}");
 
-	let tdx_ticket: TdxTicketData = ticket.try_into()?;
+	let tdx_ticket: TdxTicket = ticket.try_into()?;
 	println!(
 		"tdx ticket contents: {tdx_ticket:?}, quote signer: {}",
 		hex_encode(&tdx_ticket.quote().verify()?.to_sec1_bytes())

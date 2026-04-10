@@ -30,7 +30,7 @@ async fn stream_consumer() -> anyhow::Result<()> {
 	let n2_ticket = n2.tdx().ticket()?;
 
 	let validator =
-		TdxValidator::new(
+		TdxValidator::with_baseline(
 			MeasurementsCriteria::default()
 				.require_mrtd(
 					Measurement::hex("91eb2b44d141d4ece09f0c75c2c53d247a3c68edd7fafe8a3520c942a604a407de03ae6dc5f87f27428b2538873118b7"))

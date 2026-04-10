@@ -52,6 +52,7 @@ pub struct AlpineBuilder {
 	pub(super) kernel_version: Option<String>,
 	pub(super) kernel_abi: Option<String>,
 	pub(super) ovmf_version: Option<String>,
+	pub(super) artifacts_output_path: Option<PathBuf>,
 }
 
 impl AlpineBuilder {
@@ -217,6 +218,21 @@ impl AlpineBuilder {
 		self
 	}
 
+	/// Set a custom path for build artifacts.
+	///
+	/// If `path` is absolute it is used as-is. If it is relative it is
+	/// resolved against the Cargo target directory.
+	///
+	/// Defaults to `<target_dir>/tdx-artifacts/alpine`.
+	#[must_use]
+	pub fn with_artifacts_output_path(
+		mut self,
+		path: impl Into<PathBuf>,
+	) -> Self {
+		self.artifacts_output_path = Some(path.into());
+		self
+	}
+
 	/// Build the TDX guest image.
 	///
 	/// # Panics
@@ -249,6 +265,18 @@ impl AlpineBuilder {
 		let profile = detect_profile();
 		let target_dir = find_target_dir();
 
+		// Resolve artifacts output directory
+		let artifacts_dir = match self.artifacts_output_path {
+			Some(ref p) if p.is_absolute() => p.clone(),
+			Some(ref p) => target_dir.join(p),
+			None => target_dir
+				.join(profile)
+				.join("tdx-artifacts")
+				.join(&crate_name)
+				.join("alpine"),
+		};
+		fs::create_dir_all(&artifacts_dir).unwrap();
+
 		// Resolve Alpine version: builder field > env var > default
 		let alpine_ver = self
 			.alpine_major
@@ -258,7 +286,7 @@ impl AlpineBuilder {
 			.unwrap_or_else(|| env_or("TDX_IMAGE_ALPINE_MINOR", "0"));
 
 		let output_filename = format!("{crate_name}-initramfs.cpio.gz");
-		let final_path = target_dir.join(profile).join(&output_filename);
+		let final_path = artifacts_dir.join(&output_filename);
 
 		eprintln!("==> TDX initramfs: profile={profile}, crate={crate_name}");
 		eprintln!("    output = {}", final_path.display());
@@ -554,7 +582,6 @@ impl AlpineBuilder {
 
 		assert!(status.success(), "gzip compression failed");
 
-		fs::create_dir_all(final_path.parent().unwrap()).unwrap();
 		fs::copy(&gz_path, &final_path).unwrap();
 
 		// ---------------------------------------------------------------
@@ -580,9 +607,8 @@ impl AlpineBuilder {
 		// ---------------------------------------------------------------
 		// 8. Copy kernel to output directory
 		// ---------------------------------------------------------------
-		let kernel_output = target_dir
-			.join(profile)
-			.join(format!("{crate_name}-vmlinuz"));
+		let kernel_output =
+			artifacts_dir.join(format!("{crate_name}-vmlinuz"));
 
 		if let Some(ref vmlinuz) = kernel_vmlinuz {
 			if vmlinuz.exists() {
@@ -610,8 +636,7 @@ impl AlpineBuilder {
 		// ---------------------------------------------------------------
 		generate_launch_script(
 			&crate_name,
-			profile,
-			&target_dir,
+			&artifacts_dir,
 			self.default_cpus,
 			&self.default_memory,
 			self.ssh_forward,
@@ -620,9 +645,8 @@ impl AlpineBuilder {
 		// ---------------------------------------------------------------
 		// 10. Obtain ovmf.fd and precompute MRTD
 		// ---------------------------------------------------------------
-		let ovmf_output = target_dir
-			.join(profile)
-			.join(format!("{crate_name}-ovmf.fd"));
+		let ovmf_output =
+			artifacts_dir.join(format!("{crate_name}-ovmf.fd"));
 
 		let ovmf_data = obtain_ovmf(
 			&self.custom_ovmf,
@@ -650,9 +674,8 @@ impl AlpineBuilder {
 					println!("cargo:warning=MRTD: {hex}");
 					println!("cargo:rustc-env=TDX_EXPECTED_MRTD={hex}");
 
-					let mrtd_path = target_dir
-						.join(profile)
-						.join(format!("{crate_name}-mrtd.hex"));
+					let mrtd_path =
+						artifacts_dir.join(format!("{crate_name}-mrtd.hex"));
 					fs::write(&mrtd_path, &hex).unwrap();
 					println!("cargo:warning=MRTD written to: {}", mrtd_path.display());
 				}
@@ -675,9 +698,8 @@ impl AlpineBuilder {
 			println!("cargo:warning=RTMR[1]: {hex}");
 			println!("cargo:rustc-env=TDX_EXPECTED_RTMR1={hex}");
 
-			let rtmr1_path = target_dir
-				.join(profile)
-				.join(format!("{crate_name}-rtmr1.hex"));
+			let rtmr1_path =
+				artifacts_dir.join(format!("{crate_name}-rtmr1.hex"));
 			fs::write(&rtmr1_path, &hex).unwrap();
 			println!("cargo:warning=RTMR[1] written to: {}", rtmr1_path.display(),);
 		}
@@ -694,9 +716,8 @@ impl AlpineBuilder {
 			println!("cargo:warning=RTMR[2]: {hex}");
 			println!("cargo:rustc-env=TDX_EXPECTED_RTMR2={hex}");
 
-			let rtmr2_path = target_dir
-				.join(profile)
-				.join(format!("{crate_name}-rtmr2.hex"));
+			let rtmr2_path =
+				artifacts_dir.join(format!("{crate_name}-rtmr2.hex"));
 			fs::write(&rtmr2_path, &hex).unwrap();
 			println!("cargo:warning=RTMR[2] written to: {}", rtmr2_path.display());
 		}
@@ -706,8 +727,7 @@ impl AlpineBuilder {
 		// ---------------------------------------------------------------
 		generate_self_extracting_script(
 			&crate_name,
-			profile,
-			&target_dir,
+			&artifacts_dir,
 			&out_dir,
 			&kernel_output,
 			&final_path,
@@ -717,9 +737,8 @@ impl AlpineBuilder {
 			self.ssh_forward,
 		);
 
-		let bundle_path = target_dir
-			.join(profile)
-			.join(format!("{crate_name}-run-qemu.sh"));
+		let bundle_path =
+			artifacts_dir.join(format!("{crate_name}-run-qemu.sh"));
 
 		Some(AlpineBuilderOutput {
 			initramfs_path: final_path,
@@ -752,6 +771,7 @@ impl Default for AlpineBuilder {
 			kernel_version: None,
 			kernel_abi: None,
 			ovmf_version: None,
+			artifacts_output_path: None,
 		}
 	}
 }

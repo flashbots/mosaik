@@ -10,7 +10,7 @@ pub use {
 	local::NetworkTdxExt,
 	measure::*,
 	tdx_quote::Quote,
-	ticket::{TdxTicketData, TicketError},
+	ticket::{TdxTicket, TicketError},
 	validator::TdxValidator,
 };
 
