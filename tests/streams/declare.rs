@@ -2,7 +2,7 @@ use {
 	super::*,
 	crate::utils::{
 		JwtIssuer,
-		JwtTicketValidator,
+		Jwt,
 		discover_all,
 		sleep_s,
 		timeout_s,
@@ -80,7 +80,7 @@ declare::stream!(
 declare::stream!(
 	pub(crate) TicketAuthStream = Data1,
 		"ticket.auth.stream",
-		require_ticket: JwtTicketValidator::with_key(
+		require_ticket: Jwt::with_key(
 				JwtIssuer::default().key()
 			),
 );
@@ -91,7 +91,7 @@ declare::stream!(
 		"producer.ticket.stream",
 		require_ticket: {
 			let issuer = JwtIssuer::default();
-			JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer())
+			Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer())
 		},
 );
 
@@ -99,17 +99,17 @@ declare::stream!(
 declare::stream!(
 	pub(crate) consumer ConsumerTicketStream = Data1,
 		"consumer.ticket.stream",
-		require_ticket: JwtTicketValidator::with_key(JwtIssuer::default().key()),
+		require_ticket: Jwt::with_key(JwtIssuer::default().key()),
 );
 
 // Both sides require two independent JWT validators (different issuers).
 declare::stream!(
 	pub(crate) MultiTicketStream = Data1,
 		"multi.ticket.stream",
-		require_ticket: JwtTicketValidator::with_key(
+		require_ticket: Jwt::with_key(
 				Hmac::<sha2::Sha256>::new_from_slice(b"secret-alpha").unwrap()
 			).allow_issuer("issuer-alpha"),
-		require_ticket: JwtTicketValidator::with_key(
+		require_ticket: Jwt::with_key(
 				Hmac::<sha2::Sha256>::new_from_slice(b"secret-beta").unwrap()
 			).allow_issuer("issuer-beta"),
 );

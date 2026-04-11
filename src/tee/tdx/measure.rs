@@ -7,7 +7,7 @@ use {
 /// A 48-byte TDX measurement register value (MRTD, RTMR0–3).
 ///
 /// Used to express an expected measurement when configuring a
-/// [`TdxValidator`].
+/// [`Tdx`].
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Measurement([u8; 48]);
 

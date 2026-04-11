@@ -128,12 +128,12 @@ The `collection!` macro supports `require_ticket` directly:
 
 ```rust,ignore
 use mosaik::*;
-use mosaik::tdx::TdxValidator;
+use mosaik::tdx::Tdx;
 
 declare::collection!(
     pub SecureMap = mosaik::collections::Map<String, String>,
     "secure.store",
-    require_ticket: TdxValidator::new().require_mrtd("..."),
+    require_ticket: Tdx::new().require_mrtd("..."),
 );
 ```
 

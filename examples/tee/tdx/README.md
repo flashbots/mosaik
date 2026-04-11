@@ -14,8 +14,8 @@ The mode is selected automatically based on whether TDX hardware is detected at 
 ## Features Demonstrated
 
 - **TDX attestation tickets** — generating and installing hardware-signed attestation via `network.tdx().install_own_ticket()`
-- **TDX measurement validation** — using `TdxValidator::new().require_mrtd(...)` to enforce that consumers run the expected firmware
-- **Local measurement matching** — using `TdxValidator::new().require_own_mrtd()` and `.require_own_rtmr2()` to require peers to have the same measurements as the local machine, without hardcoding measurement values
+- **TDX measurement validation** — using `Tdx::new().require_mrtd(...)` to enforce that consumers run the expected firmware
+- **Local measurement matching** — using `Tdx::new().require_own_mrtd()` and `.require_own_rtmr2()` to require peers to have the same measurements as the local machine, without hardcoding measurement values
 - **`declare::stream!` macro with `require_ticket`** — compile-time stream declaration with baked-in TDX validation
 - **`declare::collection!` macro with `require_ticket`** — compile-time collection declaration with TDX validation derived from local measurements
 - **Build-time image creation** — the `build.rs` uses `mosaik::tdx::build::alpine()` to cross-compile the binary for TDX and package it with an Alpine Linux guest image
@@ -101,7 +101,7 @@ The guest binary detects TDX hardware, generates an attestation ticket, and subs
 declare::stream!(
     pub SecureConsumer = String,
     "mosaik.examples.tee.tdx.SecureConsumer",
-      consumer require_ticket: TdxValidator::new()
+      consumer require_ticket: Tdx::new()
           .require_mrtd("91eb2b44..."),
 );
 ```
@@ -117,7 +117,7 @@ This declares a stream where:
 declare::collection!(
     pub SecureObservers = mosaik::collections::Map<PeerId, String>,
     "mosaik.examples.tee.tdx.SecureObservers",
-      require_ticket: TdxValidator::new()
+      require_ticket: Tdx::new()
         .require_own_mrtd().expect("TDX support")
         .require_own_rtmr2().expect("TDX support")
 );

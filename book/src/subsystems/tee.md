@@ -75,7 +75,7 @@ rides on the same infrastructure as JWT tokens and custom credentials.
 
 ### 3. Peer validation
 
-Other nodes configure a TEE validator (e.g., `TdxValidator`) on their streams,
+Other nodes configure a TEE validator (e.g., `Tdx`) on their streams,
 groups, or collections. When a new peer is discovered, the validator:
 
 1. Deserializes the attestation ticket from the peer's discovery entry
@@ -113,11 +113,11 @@ firmware measurement:
 
 ```rust,ignore
 use mosaik::*;
-use mosaik::tdx::TdxValidator;
+use mosaik::tdx::Tdx;
 
 declare::stream!(
     pub SecureStream = MyDatum, "secure.data",
-    consumer require_ticket: TdxValidator::new()
+    consumer require_ticket: Tdx::new()
         .require_mrtd("abcd...96hex..."),
 );
 
@@ -134,12 +134,12 @@ the local machine — no hardcoded hex strings needed:
 
 ```rust,ignore
 use mosaik::*;
-use mosaik::tdx::TdxValidator;
+use mosaik::tdx::Tdx;
 
 declare::collection!(
     pub SecureMap = mosaik::collections::Map<String, String>,
     "secure.map",
-    require_ticket: TdxValidator::new()
+    require_ticket: Tdx::new()
         .require_own_mrtd()
         .expect("TDX must be available")
         .require_own_rtmr2()

@@ -2,7 +2,7 @@ use {
 	super::*,
 	crate::utils::{
 		JwtIssuer,
-		JwtTicketValidator,
+		Jwt,
 		discover_all,
 		sleep_s,
 		timeout_s,
@@ -28,7 +28,7 @@ async fn jwt_authorized_peers_can_bond() -> anyhow::Result<()> {
 	)?;
 
 	let jwt_issuer = JwtIssuer::default();
-	let jwt_validator = JwtTicketValidator::with_key(jwt_issuer.key())
+	let jwt_validator = Jwt::with_key(jwt_issuer.key())
 		.allow_issuer(jwt_issuer.issuer());
 
 	let n0_ticket = jwt_issuer.make_valid_ticket(&n0.local().id());
@@ -111,7 +111,7 @@ async fn bond_terminated_on_jwt_ticket_revocation() -> anyhow::Result<()> {
 		tokio::try_join!(Network::new(network_id), Network::new(network_id))?;
 
 	let jwt_issuer = JwtIssuer::default();
-	let jwt_validator = JwtTicketValidator::with_key(jwt_issuer.key())
+	let jwt_validator = Jwt::with_key(jwt_issuer.key())
 		.allow_issuer(jwt_issuer.issuer());
 
 	let n0_ticket = jwt_issuer.make_valid_ticket(&n0.local().id());
@@ -175,7 +175,7 @@ async fn group_key_derived_from_jwt_validator() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 	let issuer = JwtIssuer::default();
 	let jwt_validator =
-		JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer());
+		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	// Both nodes derive their GroupKey from the same validator — no manual
 	// secret involved. The derived key must be identical on both sides.
@@ -238,7 +238,7 @@ async fn mismatched_jwt_auth_config_prevents_bonding() -> anyhow::Result<()> {
 
 	let issuer = JwtIssuer::default();
 	let jwt_validator =
-		JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer());
+		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	// n0 uses the JWT auth validator
 	let g0 = n0
@@ -285,9 +285,9 @@ async fn multiple_ticket_validators() -> anyhow::Result<()> {
 	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
 	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
 
-	let validator_a = JwtTicketValidator::with_key(issuer_a.key())
+	let validator_a = Jwt::with_key(issuer_a.key())
 		.allow_issuer(issuer_a.issuer());
-	let validator_b = JwtTicketValidator::with_key(issuer_b.key())
+	let validator_b = Jwt::with_key(issuer_b.key())
 		.allow_issuer(issuer_b.issuer());
 
 	// n0 and n1 carry tickets from BOTH issuers → should bond.

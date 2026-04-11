@@ -1,5 +1,5 @@
 use {
-	crate::utils::JwtTicketValidator,
+	crate::utils::Jwt,
 	core::time::Duration,
 	hmac::{Hmac, digest::KeyInit},
 	jwt::{RegisteredClaims, SignWithKey, VerifyWithKey},
@@ -53,7 +53,7 @@ impl JwtIssuer {
 		expiration: Expiration,
 	) -> Ticket {
 		Ticket::new(
-			JwtTicketValidator::CLASS,
+			Jwt::CLASS,
 			jwt::Claims::new(RegisteredClaims {
 				issuer: Some(self.issuer.to_string()),
 				subject: Some(peer_id.to_string().to_lowercase()),

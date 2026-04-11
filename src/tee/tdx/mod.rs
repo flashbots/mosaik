@@ -11,7 +11,7 @@ pub use {
 	measure::*,
 	tdx_quote::Quote,
 	ticket::{TdxTicket, TdxTicketError},
-	validator::TdxValidator,
+	validator::Tdx,
 };
 
 #[cfg(feature = "tdx-builder")]

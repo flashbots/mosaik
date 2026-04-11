@@ -106,7 +106,7 @@ A complete example demonstrating mosaik's first-class TEE support. A single bina
 
 Features demonstrated:
 - **TEE attestation** — generating and installing hardware-signed TDX tickets via `network.tdx().install_own_ticket()`
-- **TDX validation** — using `TdxValidator` with `require_mrtd()` to enforce firmware measurements
+- **TDX validation** — using `Tdx` with `require_mrtd()` to enforce firmware measurements
 - **Local measurement matching** — using `require_own_mrtd()` and `require_own_rtmr2()` to require peers to have the same TDX measurements as the local machine
 - **`stream!` macro with `require_ticket`** — compile-time stream declaration with baked-in TDX validation
 - **`collection!` macro with `require_ticket`** — compile-time collection declaration with TDX validation derived from local measurements

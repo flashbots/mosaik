@@ -1,7 +1,7 @@
 use {
 	crate::utils::{
 		JwtIssuer,
-		JwtTicketValidator,
+		Jwt,
 		discover_all,
 		sleep_s,
 		timeout_s,
@@ -35,7 +35,7 @@ async fn map_auth_tickets() -> anyhow::Result<()> {
 
 	let issuer = JwtIssuer::default();
 	let validator =
-		JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer());
+		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	// n0 and n1 get valid tickets; n2 gets none
 	n0.discovery()
@@ -90,7 +90,7 @@ async fn vec_auth_tickets() -> anyhow::Result<()> {
 
 	let issuer = JwtIssuer::default();
 	let validator =
-		JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer());
+		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	n0.discovery()
 		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
@@ -136,7 +136,7 @@ async fn set_auth_tickets() -> anyhow::Result<()> {
 
 	let issuer = JwtIssuer::default();
 	let validator =
-		JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer());
+		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	n0.discovery()
 		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
@@ -182,7 +182,7 @@ async fn cell_auth_tickets() -> anyhow::Result<()> {
 
 	let issuer = JwtIssuer::default();
 	let validator =
-		JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer());
+		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	n0.discovery()
 		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
@@ -228,7 +228,7 @@ async fn once_auth_tickets() -> anyhow::Result<()> {
 
 	let issuer = JwtIssuer::default();
 	let validator =
-		JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer());
+		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	n0.discovery()
 		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
@@ -274,7 +274,7 @@ async fn priority_queue_auth_tickets() -> anyhow::Result<()> {
 
 	let issuer = JwtIssuer::default();
 	let validator =
-		JwtTicketValidator::with_key(issuer.key()).allow_issuer(issuer.issuer());
+		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	n0.discovery()
 		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
@@ -331,9 +331,9 @@ async fn different_auths_produce_different_group_ids() -> anyhow::Result<()> {
 	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
 	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
 
-	let validator_a = JwtTicketValidator::with_key(issuer_a.key())
+	let validator_a = Jwt::with_key(issuer_a.key())
 		.allow_issuer(issuer_a.issuer());
-	let validator_b = JwtTicketValidator::with_key(issuer_b.key())
+	let validator_b = Jwt::with_key(issuer_b.key())
 		.allow_issuer(issuer_b.issuer());
 
 	let w_a = collections::Map::<u64, u64>::new_with_config(
@@ -374,7 +374,7 @@ async fn collection_macro_with_require_ticket() -> anyhow::Result<()> {
 	mosaik::collection!(
 		AuthMap = mosaik::collections::Map<String, String>,
 		"test.auth.macro.map",
-		require_ticket: JwtTicketValidator::with_key(
+		require_ticket: Jwt::with_key(
 			JwtIssuer::default().key()
 		).allow_issuer(JwtIssuer::default().issuer()),
 	);
@@ -422,10 +422,10 @@ async fn collection_macro_with_multiple_tickets() -> anyhow::Result<()> {
 	mosaik::collection!(
 		MultiAuthMap = mosaik::collections::Map<String, String>,
 		"test.multi.auth.macro.map",
-		require_ticket: JwtTicketValidator::with_key(
+		require_ticket: Jwt::with_key(
 			Hmac::<sha2::Sha256>::new_from_slice(b"secret-alpha").unwrap()
 		).allow_issuer("issuer-alpha"),
-		require_ticket: JwtTicketValidator::with_key(
+		require_ticket: Jwt::with_key(
 			Hmac::<sha2::Sha256>::new_from_slice(b"secret-beta").unwrap()
 		).allow_issuer("issuer-beta"),
 	);
@@ -484,7 +484,7 @@ async fn macros_different_validators_group_ids() -> anyhow::Result<()> {
 	mosaik::collection!(
 		AuthMapA = mosaik::collections::Map<String, String>,
 		"test.auth.macro.map.a",
-		require_ticket: JwtTicketValidator::with_key(
+		require_ticket: Jwt::with_key(
 			JwtIssuer::new("issuer-a", "secret-a").key()
 		).allow_issuer("issuer-a"),
 	);
@@ -492,7 +492,7 @@ async fn macros_different_validators_group_ids() -> anyhow::Result<()> {
 	mosaik::collection!(
 		AuthMapB = mosaik::collections::Map<String, String>,
 		"test.auth.macro.map.b",
-		require_ticket: JwtTicketValidator::with_key(
+		require_ticket: Jwt::with_key(
 			JwtIssuer::new("issuer-b", "secret-b").key()
 		).allow_issuer("issuer-b"),
 	);

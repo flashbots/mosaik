@@ -127,26 +127,26 @@ println!("RTMR3: {}", local.rtmr3());
 This is also available through `network.tdx().measurements()`, which delegates
 to the same underlying call.
 
-## TdxValidator
+## Tdx
 
-`TdxValidator` implements the `TicketValidator` trait for TDX attestation. It
+`Tdx` implements the `TicketValidator` trait for TDX attestation. It
 validates that a peer's TDX Quote carries valid hardware signatures and that
 the measurements match specified criteria.
 
 ### Basic usage
 
 ```rust,ignore
-use mosaik::tdx::TdxValidator;
+use mosaik::tdx::Tdx;
 
 // Accept any valid TDX attestation (signatures must verify)
-let validator = TdxValidator::new();
+let validator = Tdx::new();
 
 // Require a specific MR_TD value
-let validator = TdxValidator::new()
+let validator = Tdx::new()
     .require_mrtd("91eb2b44d141d4ece09f0c75c2c53d247a3c68edd7fafe8a3520c942a604a407de03ae6dc5f87f27428b2538873118b7");
 
 // Require specific RTMRs
-let validator = TdxValidator::new()
+let validator = Tdx::new()
     .require_mrtd("...")
     .require_rtmr0("...")
     .require_rtmr2("...");
@@ -177,7 +177,7 @@ chain.
 
 ### Validation checks
 
-When validating a peer's ticket, `TdxValidator` performs these checks in order:
+When validating a peer's ticket, `Tdx` performs these checks in order:
 
 1. Deserializes the ticket data into a `TdxTicket`
 2. Parses and verifies the TDX Quote's hardware signature
@@ -195,9 +195,9 @@ configurations. The baseline criteria must always be satisfied, and at least one
 variant must also match (if any are configured):
 
 ```rust,ignore
-use mosaik::tdx::{TdxValidator, MeasurementsCriteria};
+use mosaik::tdx::{Tdx, MeasurementsCriteria};
 
-let validator = TdxValidator::new()
+let validator = Tdx::new()
     // All nodes must have this MR_TD
     .require_mrtd("aabb...")
     // Accept nodes running firmware version A
@@ -219,19 +219,19 @@ time and become part of the validator's signature, so all nodes with the same
 measurements will derive the same group identity.
 
 ```rust,ignore
-use mosaik::tdx::TdxValidator;
+use mosaik::tdx::Tdx;
 
 // Require all measurements to match (MR_TD + all RTMRs)
-let validator = TdxValidator::from_local()?;
+let validator = Tdx::from_local()?;
 
 // Require only specific registers to match
-let validator = TdxValidator::new()
+let validator = Tdx::new()
     .require_own_mrtd()?
     .require_own_rtmr2()?;
 
 // Mix local and explicit measurements
 let local = Measurements::local()?;
-let validator = TdxValidator::new()
+let validator = Tdx::new()
     .require_mrtd(local.mrtd())
     .require_rtmr1("abcd...");
 ```
@@ -244,34 +244,34 @@ will derive matching signatures automatically.
 
 ```rust,ignore
 use mosaik::*;
-use mosaik::tdx::TdxValidator;
+use mosaik::tdx::Tdx;
 
 // Via the stream! macro
 declare::stream!(
     pub SecureFeed = PriceUpdate, "secure.prices",
-    consumer require_ticket: TdxValidator::new()
+    consumer require_ticket: Tdx::new()
         .require_mrtd("..."),
 );
 
 // Via the builder API
 let producer = network.streams()
     .producer::<PriceUpdate>()
-    .require_ticket(TdxValidator::new().require_mrtd("..."))
+    .require_ticket(Tdx::new().require_mrtd("..."))
     .build()?;
 
 let consumer = network.streams()
     .consumer::<PriceUpdate>()
-    .require_ticket(TdxValidator::new().require_mrtd("..."))
+    .require_ticket(Tdx::new().require_mrtd("..."))
     .build();
 ```
 
 ## Using TDX with Groups
 
 ```rust,ignore
-use mosaik::tdx::TdxValidator;
+use mosaik::tdx::Tdx;
 use mosaik::groups::GroupKey;
 
-let validator = TdxValidator::new().require_mrtd("...");
+let validator = Tdx::new().require_mrtd("...");
 
 let group = network.groups()
     .with_key(GroupKey::from(&validator))
@@ -284,20 +284,20 @@ let group = network.groups()
 
 ```rust,ignore
 use mosaik::*;
-use mosaik::tdx::TdxValidator;
+use mosaik::tdx::Tdx;
 
 // Via the collection! macro with a hardcoded measurement
 declare::collection!(
     pub SecureStore = mosaik::collections::Map<String, String>,
     "secure.store",
-    require_ticket: TdxValidator::new().require_mrtd("..."),
+    require_ticket: Tdx::new().require_mrtd("..."),
 );
 
 // Via the collection! macro with local measurement matching
 declare::collection!(
     pub SecureStore = mosaik::collections::Map<String, String>,
     "secure.store",
-    require_ticket: TdxValidator::new()
+    require_ticket: Tdx::new()
         .require_own_mrtd()
         .expect("TDX must be available")
         .require_own_rtmr2()
@@ -306,7 +306,7 @@ declare::collection!(
 
 // Via CollectionConfig
 let config = CollectionConfig::default()
-    .require_ticket(TdxValidator::from_local()?);
+    .require_ticket(Tdx::from_local()?);
 
 let writer = mosaik::collections::Map::<String, String>::writer_with_config(
     &network, store_id, config,
@@ -347,7 +347,7 @@ The builder:
 5. Pre-computes the `MR_TD` measurement for the resulting image
 6. Generates a self-extracting launch script
 
-The pre-computed `MR_TD` can be used directly in `TdxValidator::require_mrtd()`
+The pre-computed `MR_TD` can be used directly in `Tdx::require_mrtd()`
 for compile-time attestation binding — the binary that builds the image knows
 exactly what measurement to expect from the resulting TDX guest.
 

@@ -26,21 +26,21 @@ use {
 /// # Group identity
 ///
 /// [`TicketValidator::signature`] is derived from the validator
-/// configuration, so two [`JwtTicketValidator`] instances with
+/// configuration, so two [`Jwt`] instances with
 /// different settings will produce different signatures — and
 /// therefore different group ids.
 ///
-/// [`with_key`]: JwtTicketValidator::with_key
-/// [`add_key`]: JwtTicketValidator::add_key
-/// [`allow_issuer`]: JwtTicketValidator::allow_issuer
-/// [`allow_audience`]: JwtTicketValidator::allow_audience
-/// [`require_subject`]: JwtTicketValidator::require_subject
-/// [`require_claim`]: JwtTicketValidator::require_claim
-/// [`allow_non_expiring`]: JwtTicketValidator::allow_non_expiring
-/// [`max_lifetime`]: JwtTicketValidator::max_lifetime
-/// [`max_age`]: JwtTicketValidator::max_age
+/// [`with_key`]: Jwt::with_key
+/// [`add_key`]: Jwt::add_key
+/// [`allow_issuer`]: Jwt::allow_issuer
+/// [`allow_audience`]: Jwt::allow_audience
+/// [`require_subject`]: Jwt::require_subject
+/// [`require_claim`]: Jwt::require_claim
+/// [`allow_non_expiring`]: Jwt::allow_non_expiring
+/// [`max_lifetime`]: Jwt::max_lifetime
+/// [`max_age`]: Jwt::max_age
 #[derive(Clone)]
-pub struct JwtTicketValidator {
+pub struct Jwt {
 	/// The expected issuer `iss` claim in the JWT.
 	///
 	/// If this list is non-empty, then the JWT must contain an `iss` claim that
@@ -79,7 +79,7 @@ pub struct JwtTicketValidator {
 	keys: Vec<Arc<dyn ::jwt::VerifyingAlgorithm + Send + Sync + 'static>>,
 }
 
-impl JwtTicketValidator {
+impl Jwt {
 	pub const CLASS: UniqueId = id!("mosaik.tickets.jwt.v1");
 
 	/// Creates a new JWT ticket validator against the specified verifying key.
@@ -195,7 +195,7 @@ impl JwtTicketValidator {
 	}
 }
 
-impl TicketValidator for JwtTicketValidator {
+impl TicketValidator for Jwt {
 	fn class(&self) -> UniqueId {
 		Self::CLASS
 	}

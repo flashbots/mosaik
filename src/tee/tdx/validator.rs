@@ -24,7 +24,7 @@ use {
 ///
 /// Rejects any tickets with invalid TDX signatures in their TDX Quote.
 #[derive(Clone)]
-pub struct TdxValidator {
+pub struct Tdx {
 	/// The `MeasurementsCriteria` that must be satisfied by all peers for their
 	/// tickets to be considered valid.
 	///
@@ -42,7 +42,7 @@ pub struct TdxValidator {
 }
 
 // Public API
-impl TdxValidator {
+impl Tdx {
 	pub const CLASS: UniqueId = super::TICKET_CLASS;
 
 	#[must_use]
@@ -53,14 +53,14 @@ impl TdxValidator {
 		}
 	}
 
-	/// Creates a new `TdxValidator` that allows any ticket as long as it carries
+	/// Creates a new `Tdx` that allows any ticket as long as it carries
 	/// valid TDX signatures in their TDX Quote.
 	#[must_use]
 	pub const fn empty() -> Self {
 		Self::baseline(MeasurementsCriteria::new())
 	}
 
-	/// Creates a new `TdxValidator` that allows any ticket as long as it carries
+	/// Creates a new `Tdx` that allows any ticket as long as it carries
 	/// valid TDX signatures in their TDX Quote.
 	#[must_use]
 	pub const fn new() -> Self {
@@ -117,7 +117,7 @@ impl TdxValidator {
 		self
 	}
 
-	/// Creates a new `TdxValidator` that requires all peers to have the same
+	/// Creates a new `Tdx` that requires all peers to have the same
 	/// TDX measurements (`MR_TD` and all `RTMR`s) as the local machine.
 	///
 	/// This reads the local TDX measurements from hardware and uses them as
@@ -172,7 +172,7 @@ impl TdxValidator {
 		Ok(self.require_rtmr3(local.rtmr3()))
 	}
 
-	/// Returns a new `TdxValidator` that allows tickets that satisfy the given
+	/// Returns a new `Tdx` that allows tickets that satisfy the given
 	/// `MeasurementsCriteria` in addition to the baseline criteria and other
 	/// existing variants.
 	#[must_use]
@@ -182,15 +182,15 @@ impl TdxValidator {
 	}
 }
 
-impl Default for TdxValidator {
-	/// Creates a new `TdxValidator` that allows any ticket as long as it carries
+impl Default for Tdx {
+	/// Creates a new `Tdx` that allows any ticket as long as it carries
 	/// valid TDX signatures in their TDX Quote.
 	fn default() -> Self {
 		Self::new()
 	}
 }
 
-impl TicketValidator for TdxValidator {
+impl TicketValidator for Tdx {
 	fn class(&self) -> UniqueId {
 		Self::CLASS
 	}
