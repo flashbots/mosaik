@@ -300,17 +300,23 @@ async fn multiple_ticket_validators() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	n0.discovery().add_ticket(issuer_a.make_valid_ticket(&n0.local().id()));
-	n0.discovery().add_ticket(issuer_b.make_valid_ticket(&n0.local().id()));
+	n0.discovery()
+		.add_ticket(issuer_a.make_valid_ticket(&n0.local().id()));
+	n0.discovery()
+		.add_ticket(issuer_b.make_valid_ticket(&n0.local().id()));
 
-	n1.discovery().add_ticket(issuer_a.make_valid_ticket(&n1.local().id()));
-	n1.discovery().add_ticket(issuer_b.make_valid_ticket(&n1.local().id()));
+	n1.discovery()
+		.add_ticket(issuer_a.make_valid_ticket(&n1.local().id()));
+	n1.discovery()
+		.add_ticket(issuer_b.make_valid_ticket(&n1.local().id()));
 
-	n2.discovery().add_ticket(issuer_a.make_valid_ticket(&n2.local().id()));
+	n2.discovery()
+		.add_ticket(issuer_a.make_valid_ticket(&n2.local().id()));
 	// n2 missing issuer_b ticket
 
 	// n3 missing issuer_a ticket
-	n3.discovery().add_ticket(issuer_b.make_valid_ticket(&n3.local().id()));
+	n3.discovery()
+		.add_ticket(issuer_b.make_valid_ticket(&n3.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
 

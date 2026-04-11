@@ -6,6 +6,11 @@ enum CollectionMode {
 	WriterOnly,
 }
 
+struct CollectionConfigEntry {
+	key: syn::Ident,
+	value: syn::Expr,
+}
+
 pub struct CollectionInput {
 	krate: proc_macro2::TokenStream,
 	attrs: Vec<syn::Attribute>,
@@ -15,6 +20,7 @@ pub struct CollectionInput {
 	generics: syn::Generics,
 	collection_type: syn::Type,
 	store_id: StoreIdInput,
+	config: Vec<CollectionConfigEntry>,
 }
 
 enum StoreIdInput {
@@ -69,6 +75,25 @@ impl syn::parse::Parse for CollectionInput {
 			StoreIdInput::Expr(input.parse()?)
 		};
 
+		// Parse optional config entries: key: expr, ...
+		let mut config = Vec::new();
+		if input.peek(syn::Token![,]) {
+			input.parse::<syn::Token![,]>()?;
+
+			while input.peek(syn::Ident) {
+				let key: syn::Ident = input.parse()?;
+				input.parse::<syn::Token![:]>()?;
+				let value: syn::Expr = input.parse()?;
+
+				config.push(CollectionConfigEntry { key, value });
+
+				// Consume trailing comma if present.
+				if input.peek(syn::Token![,]) {
+					input.parse::<syn::Token![,]>()?;
+				}
+			}
+		}
+
 		Ok(Self {
 			krate,
 			attrs,
@@ -78,6 +103,7 @@ impl syn::parse::Parse for CollectionInput {
 			generics,
 			collection_type,
 			store_id,
+			config,
 		})
 	}
 }
@@ -94,6 +120,7 @@ impl CollectionInput {
 			generics,
 			collection_type,
 			store_id,
+			config,
 		} = &self;
 
 		let store_id_expr = match store_id {
@@ -113,6 +140,28 @@ impl CollectionInput {
 			}
 		};
 
+		// Build config calls from parsed entries.
+		let mut config_calls = Vec::new();
+		for entry in config {
+			let key_str = entry.key.to_string();
+			let value = &entry.value;
+
+			let call = match key_str.as_str() {
+				"require_ticket" => {
+					quote::quote! { .require_ticket(#value) }
+				}
+				_ => {
+					return syn::Error::new(
+						entry.key.span(),
+						format!("unknown collection config key `{key_str}`"),
+					)
+					.to_compile_error();
+				}
+			};
+
+			config_calls.push(call);
+		}
+
 		let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
 		// Build struct body: unit struct if no generics, tuple with
@@ -131,6 +180,45 @@ impl CollectionInput {
 			quote::quote! { (core::marker::PhantomData<#phantom>); }
 		};
 
+		// Generate reader/writer call expressions. When config entries
+		// are present we build a `CollectionConfig` and use the
+		// `_with_config` path; otherwise the simpler default path.
+		let (reader_call, writer_call) = if config_calls.is_empty() {
+			(
+				quote::quote! {
+					<#collection_type as #krate::collections::CollectionFromDef>::reader(
+						network,
+						#store_id_expr,
+					)
+				},
+				quote::quote! {
+					<#collection_type as #krate::collections::CollectionFromDef>::writer(
+						network,
+						#store_id_expr,
+					)
+				},
+			)
+		} else {
+			(
+				quote::quote! {
+					<#collection_type as #krate::collections::CollectionFromDef>::reader_with_config(
+						network,
+						#store_id_expr,
+						#krate::collections::CollectionConfig::default()
+							#(#config_calls)*,
+					)
+				},
+				quote::quote! {
+					<#collection_type as #krate::collections::CollectionFromDef>::writer_with_config(
+						network,
+						#store_id_expr,
+						#krate::collections::CollectionConfig::default()
+							#(#config_calls)*,
+					)
+				},
+			)
+		};
+
 		let reader_impl = if matches!(mode, CollectionMode::WriterOnly) {
 			// Writer-only mode: still generate reader access, but as
 			// inherent `pub(crate)` methods so they are only usable
@@ -144,10 +232,7 @@ impl CollectionInput {
 					pub(crate) fn reader(
 						network: &#krate::Network,
 					) -> <#collection_type as #krate::collections::CollectionFromDef>::Reader {
-						<#collection_type as #krate::collections::CollectionFromDef>::reader(
-							network,
-							#store_id_expr,
-						)
+						#reader_call
 					}
 
 					/// Creates a reader and waits for it to come online.
@@ -176,10 +261,7 @@ impl CollectionInput {
 						type Reader = <#collection_type as #krate::collections::CollectionFromDef>::Reader;
 
 						fn reader(network: &#krate::Network) -> Self::Reader {
-							<#collection_type as #krate::collections::CollectionFromDef>::reader(
-								network,
-								#store_id_expr,
-							)
+							#reader_call
 						}
 
 						fn online_reader(network: &#krate::Network) -> impl Future<Output = Self::Reader> + Send + Sync + 'static {
@@ -207,10 +289,7 @@ impl CollectionInput {
 					pub(crate) fn writer(
 						network: &#krate::Network,
 					) -> <#collection_type as #krate::collections::CollectionFromDef>::Writer {
-						<#collection_type as #krate::collections::CollectionFromDef>::writer(
-							network,
-							#store_id_expr,
-						)
+						#writer_call
 					}
 
 					/// Creates a writer and waits for it to come online.
@@ -239,10 +318,7 @@ impl CollectionInput {
 						type Writer = <#collection_type as #krate::collections::CollectionFromDef>::Writer;
 
 						fn writer(network: &#krate::Network) -> Self::Writer {
-							<#collection_type as #krate::collections::CollectionFromDef>::writer(
-								network,
-								#store_id_expr,
-							)
+							#writer_call
 						}
 
 						fn online_writer(

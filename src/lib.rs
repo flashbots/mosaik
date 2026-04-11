@@ -17,6 +17,7 @@ pub use mosaik_macros::{__collection_impl, __stream_impl, __unique_id_impl};
 pub use {
 	bytes::{Bytes, BytesMut},
 	collections::{
+		CollectionConfig,
 		CollectionReader,
 		CollectionWriter,
 		ReaderOf,

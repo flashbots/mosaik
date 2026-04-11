@@ -7,6 +7,7 @@
 #![allow(unreachable_code, unused)]
 
 mod cell;
+mod config;
 mod depq;
 mod map;
 mod once;
@@ -18,6 +19,7 @@ mod when;
 
 pub use {
 	cell::{Cell, CellReader, CellWriter},
+	config::CollectionConfig,
 	depq::{
 		BoundedPriorityQueue,
 		PriorityQueue,
@@ -116,6 +118,12 @@ pub type WriterOf<C> = <C as CollectionWriter>::Writer;
 ///     /// The primary user registry.
 ///     pub MyCollection = Map<String, User>, "my.store.id"
 /// );
+///
+/// // With ticket validator (affects the group id):
+/// collection!(
+///     pub MyCollection = Map<String, User>, "my.store.id",
+///     require_ticket: MyValidator::new(),
+/// );
 /// ```
 ///
 /// # Modes
@@ -168,8 +176,25 @@ pub trait CollectionFromDef {
 	type Reader;
 	type Writer;
 
-	fn reader(network: &crate::Network, store_id: StoreId) -> Self::Reader;
-	fn writer(network: &crate::Network, store_id: StoreId) -> Self::Writer;
+	fn reader(network: &crate::Network, store_id: StoreId) -> Self::Reader {
+		Self::reader_with_config(network, store_id, CollectionConfig::default())
+	}
+
+	fn writer(network: &crate::Network, store_id: StoreId) -> Self::Writer {
+		Self::writer_with_config(network, store_id, CollectionConfig::default())
+	}
+
+	fn reader_with_config(
+		network: &crate::Network,
+		store_id: StoreId,
+		config: CollectionConfig,
+	) -> Self::Reader;
+
+	fn writer_with_config(
+		network: &crate::Network,
+		store_id: StoreId,
+		config: CollectionConfig,
+	) -> Self::Writer;
 }
 
 /// A compile-time definition of a collection that can be used to create reader
@@ -216,8 +241,26 @@ impl<C: CollectionFromDef> CollectionDef<C> {
 	}
 
 	#[inline]
+	pub fn reader_with_config(
+		&self,
+		network: &crate::Network,
+		config: impl Into<CollectionConfig>,
+	) -> C::Reader {
+		C::reader_with_config(network, self.store_id, config.into())
+	}
+
+	#[inline]
 	pub fn writer(&self, network: &crate::Network) -> C::Writer {
 		C::writer(network, self.store_id)
+	}
+
+	#[inline]
+	pub fn writer_with_config(
+		&self,
+		network: &crate::Network,
+		config: impl Into<CollectionConfig>,
+	) -> C::Writer {
+		C::writer_with_config(network, self.store_id, config.into())
 	}
 }
 
@@ -244,6 +287,14 @@ impl<C: CollectionFromDef> ReaderDef<C> {
 	pub fn open(&self, network: &crate::Network) -> C::Reader {
 		C::reader(network, self.store_id)
 	}
+
+	pub fn open_with_config(
+		&self,
+		network: &crate::Network,
+		config: impl Into<CollectionConfig>,
+	) -> C::Reader {
+		C::reader_with_config(network, self.store_id, config.into())
+	}
 }
 
 /// A compile-time definition of a collection writer that can be used to create
@@ -263,5 +314,13 @@ impl<C: CollectionFromDef> WriterDef<C> {
 
 	pub fn open(&self, network: &crate::Network) -> C::Writer {
 		C::writer(network, self.store_id)
+	}
+
+	pub fn open_with_config(
+		&self,
+		network: &crate::Network,
+		config: impl Into<CollectionConfig>,
+	) -> C::Writer {
+		C::writer_with_config(network, self.store_id, config.into())
 	}
 }

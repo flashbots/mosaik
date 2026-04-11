@@ -1,5 +1,6 @@
 use {
 	super::{
+		CollectionConfig,
 		CollectionFromDef,
 		Error,
 		READER,
@@ -129,28 +130,16 @@ impl<T: Value> CellWriter<T> {
 	/// Note that different sync configurations will create different group ids
 	/// and the resulting cells will not be able to see each other.
 	pub fn writer(network: &Network, store_id: impl Into<StoreId>) -> Self {
-		Self::writer_with_config(network, store_id, SyncConfig::default())
+		Self::writer_with_config(network, store_id, CollectionConfig::default())
 	}
 
-	/// Create a new cell in writer mode.
-	///
-	/// The returned writer can be used to modify the cell, and it also
-	/// provides read access to the cell's contents. Writers can be used by
-	/// multiple nodes concurrently, and all changes made by any writer will be
-	/// replicated to all other writers and readers.
-	///
-	/// This creates a new cell with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `writer` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting cells will not be able to see each other.
+	/// Create a new cell in writer mode with the specified configuration.
 	pub fn writer_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		config: SyncConfig,
+		config: impl Into<CollectionConfig>,
 	) -> Self {
-		Self::create::<WRITER>(network, store_id, config)
+		Self::create::<WRITER>(network, store_id, config.into())
 	}
 
 	/// Create a new cell in writer mode.
@@ -160,14 +149,13 @@ impl<T: Value> CellWriter<T> {
 		Self::writer(network, store_id)
 	}
 
-	/// Create a new cell in writer mode with the specified sync
-	/// configuration.
+	/// Create a new cell in writer mode with the specified configuration.
 	///
 	/// This is an alias for the `writer_with_config` method.
 	pub fn new_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		config: SyncConfig,
+		config: impl Into<CollectionConfig>,
 	) -> Self {
 		Self::writer_with_config(network, store_id, config)
 	}
@@ -274,51 +262,42 @@ impl<T: Value, const IS_WRITER: bool> Cell<T, IS_WRITER> {
 		network: &Network,
 		store_id: impl Into<StoreId>,
 	) -> CellReader<T> {
-		Self::reader_with_config(network, store_id, SyncConfig::default())
+		Self::reader_with_config(network, store_id, CollectionConfig::default())
 	}
 
-	/// Create a new cell in reader mode.
-	///
-	/// The returned reader provides read-only access to the cell's contents.
-	/// Readers can be used by multiple nodes concurrently, and they will see all
-	/// changes made by any writer. However, readers cannot modify the cell,
-	/// and they will not be able to make any changes themselves. Readers have
-	/// longer election timeouts to reduce the likelihood of them being elected
-	/// as group leaders, which reduces latency for read operations.
-	///
-	/// This creates a new cell with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `reader` method
-	/// instead.
-	///
-	/// Note that different sync configurations will create different group ids
-	/// and the resulting cells will not be able to see each other.
+	/// Create a new cell in reader mode with the specified configuration.
 	pub fn reader_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		config: SyncConfig,
+		config: impl Into<CollectionConfig>,
 	) -> CellReader<T> {
-		Self::create::<READER>(network, store_id, config)
+		Self::create::<READER>(network, store_id, config.into())
 	}
 
 	fn create<const W: bool>(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		config: SyncConfig,
+		config: CollectionConfig,
 	) -> Cell<T, W> {
 		let store_id = store_id.into();
 		let machine = CellStateMachine::new(
 			store_id, //
 			W,
-			config,
+			config.sync,
 			network.local().id(),
 		);
 
 		let data = machine.data();
-		let group = network
+		let mut builder = network
 			.groups()
 			.with_key(store_id)
-			.with_state_machine(machine)
-			.join();
+			.with_state_machine(machine);
+
+		for validator in config.auth {
+			builder = builder.require_ticket(validator);
+		}
+
+		let group = builder.join();
 		let when = When::new(group.when().clone());
 
 		Cell::<T, W> { when, group, data }
@@ -329,12 +308,20 @@ impl<T: Value, const WRITER: bool> CollectionFromDef for Cell<T, WRITER> {
 	type Reader = CellReader<T>;
 	type Writer = CellWriter<T>;
 
-	fn reader(network: &Network, store_id: StoreId) -> Self::Reader {
-		Self::Reader::reader(network, store_id)
+	fn reader_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: CollectionConfig,
+	) -> Self::Reader {
+		Self::Reader::reader_with_config(network, store_id, config)
 	}
 
-	fn writer(network: &Network, store_id: StoreId) -> Self::Writer {
-		Self::Writer::writer(network, store_id)
+	fn writer_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: CollectionConfig,
+	) -> Self::Writer {
+		Self::Writer::writer_with_config(network, store_id, config)
 	}
 }
 

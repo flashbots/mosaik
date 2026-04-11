@@ -1,5 +1,6 @@
 use {
 	super::{
+		CollectionConfig,
 		CollectionFromDef,
 		Error,
 		READER,
@@ -69,9 +70,9 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	pub fn reader_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		sync_config: SyncConfig,
+		config: impl Into<CollectionConfig>,
 	) -> Self {
-		Vec::<T, READER>::create(network, store_id, sync_config)
+		Vec::<T, READER>::create(network, store_id, config.into())
 	}
 
 	/// Create a new vector in reader mode.
@@ -87,7 +88,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	/// to specify a custom sync configuration, use the `reader_with_config`
 	/// method instead.
 	pub fn reader(network: &Network, store_id: impl Into<StoreId>) -> Self {
-		Self::reader_with_config(network, store_id, SyncConfig::default())
+		Self::reader_with_config(network, store_id, CollectionConfig::default())
 	}
 
 	/// Get the length of a vector.
@@ -213,7 +214,7 @@ impl<T: Value> VecWriter<T> {
 	/// Note that different sync configurations will create different groups ids
 	/// and the resulting vectors will not be able to see each other.
 	pub fn writer(network: &Network, store_id: impl Into<StoreId>) -> Self {
-		Self::writer_with_config(network, store_id, SyncConfig::default())
+		Self::writer_with_config(network, store_id, CollectionConfig::default())
 	}
 
 	/// Create a new vector in writer mode.
@@ -223,18 +224,18 @@ impl<T: Value> VecWriter<T> {
 	/// nodes concurrently, and all changes made by any writer will be replicated
 	/// to all other writers and readers.
 	///
-	/// This create a new vector with the specified sync configuration. If you
-	/// want to use the default sync configuration, use the `writer` method
+	/// This create a new vector with the specified configuration. If you
+	/// want to use the default configuration, use the `writer` method
 	/// instead.
 	///
-	/// Note that different sync configurations will create different groups ids
+	/// Note that different configurations will create different groups ids
 	/// and the resulting vectors will not be able to see each other.
 	pub fn writer_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		sync_config: SyncConfig,
+		config: impl Into<CollectionConfig>,
 	) -> Self {
-		Self::create::<WRITER>(network, store_id, sync_config)
+		Self::create::<WRITER>(network, store_id, config.into())
 	}
 
 	/// Create a new vector in writer mode.
@@ -244,15 +245,15 @@ impl<T: Value> VecWriter<T> {
 		Self::writer(network, store_id)
 	}
 
-	/// Create a new vector in writer mode with the specified sync configuration.
+	/// Create a new vector in writer mode with the specified configuration.
 	///
 	/// This is an alias for the `writer_with_config` method.
 	pub fn new_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		sync_config: SyncConfig,
+		config: impl Into<CollectionConfig>,
 	) -> Self {
-		Self::writer_with_config(network, store_id, sync_config)
+		Self::writer_with_config(network, store_id, config)
 	}
 
 	/// Discard all elements from the vector.
@@ -461,22 +462,27 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	fn create<const W: bool>(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		sync_config: SyncConfig,
+		config: CollectionConfig,
 	) -> Vec<T, W> {
 		let store_id = store_id.into();
 		let machine = VecStateMachine::new(
 			store_id, //
 			W,
-			sync_config,
+			config.sync,
 			network.local().id(),
 		);
 
 		let data = machine.data();
-		let group = network
+		let mut builder = network
 			.groups()
 			.with_key(store_id)
-			.with_state_machine(machine)
-			.join();
+			.with_state_machine(machine);
+
+		for validator in config.auth {
+			builder = builder.require_ticket(validator);
+		}
+
+		let group = builder.join();
 		let when = When::new(group.when().clone());
 
 		Vec::<T, W> { when, group, data }
@@ -487,12 +493,20 @@ impl<T: Value, const WRITER: bool> CollectionFromDef for Vec<T, WRITER> {
 	type Reader = VecReader<T>;
 	type Writer = VecWriter<T>;
 
-	fn reader(network: &Network, store_id: StoreId) -> Self::Reader {
-		Self::Reader::reader(network, store_id)
+	fn reader_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: CollectionConfig,
+	) -> Self::Reader {
+		Self::Reader::reader_with_config(network, store_id, config)
 	}
 
-	fn writer(network: &Network, store_id: StoreId) -> Self::Writer {
-		Self::Writer::writer(network, store_id)
+	fn writer_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: CollectionConfig,
+	) -> Self::Writer {
+		Self::Writer::writer_with_config(network, store_id, config)
 	}
 }
 

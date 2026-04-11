@@ -149,10 +149,13 @@ async fn multiple_readers() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 	let store_id = StoreId::random();
 
-	let n_w = Network::new(network_id).await?;
-	let n_r1 = Network::new(network_id).await?;
-	let n_r2 = Network::new(network_id).await?;
-	let n_r3 = Network::new(network_id).await?;
+	let (n_w, n_r1, n_r2, n_r3) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id)
+	)?;
+
 	timeout_s(10, discover_all([&n_w, &n_r1, &n_r2, &n_r3])).await??;
 
 	let w = mosaik::collections::Map::<u64, u64>::writer(&n_w, store_id);

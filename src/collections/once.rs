@@ -1,5 +1,6 @@
 use {
 	super::{
+		CollectionConfig,
 		CollectionFromDef,
 		Error,
 		READER,
@@ -136,17 +137,17 @@ impl<T: Value> OnceWriter<T> {
 	/// If you want to customize the synchronization behavior, use
 	/// `writer_with_config` instead.
 	pub fn writer(network: &Network, store_id: impl Into<StoreId>) -> Self {
-		Self::writer_with_config(network, store_id, SyncConfig::default())
+		Self::writer_with_config(network, store_id, CollectionConfig::default())
 	}
 
-	/// Create a new write-once cell in writer mode with the specified sync
+	/// Create a new write-once cell in writer mode with the specified
 	/// configuration.
 	pub fn writer_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		config: SyncConfig,
+		config: impl Into<CollectionConfig>,
 	) -> Self {
-		Self::create::<WRITER>(network, store_id, config)
+		Self::create::<WRITER>(network, store_id, config.into())
 	}
 
 	/// Create a new write-once cell in writer mode.
@@ -156,14 +157,14 @@ impl<T: Value> OnceWriter<T> {
 		Self::writer(network, store_id)
 	}
 
-	/// Create a new write-once cell in writer mode with the specified sync
+	/// Create a new write-once cell in writer mode with the specified
 	/// configuration.
 	///
 	/// This is an alias for the `writer_with_config` method.
 	pub fn new_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		config: SyncConfig,
+		config: impl Into<CollectionConfig>,
 	) -> Self {
 		Self::writer_with_config(network, store_id, config)
 	}
@@ -220,38 +221,43 @@ impl<T: Value, const IS_WRITER: bool> Once<T, IS_WRITER> {
 		network: &Network,
 		store_id: impl Into<StoreId>,
 	) -> OnceReader<T> {
-		Self::reader_with_config(network, store_id, SyncConfig::default())
+		Self::reader_with_config(network, store_id, CollectionConfig::default())
 	}
 
-	/// Create a new write-once cell in reader mode with the specified sync
+	/// Create a new write-once cell in reader mode with the specified
 	/// configuration.
 	pub fn reader_with_config(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		config: SyncConfig,
+		config: impl Into<CollectionConfig>,
 	) -> OnceReader<T> {
-		Self::create::<READER>(network, store_id, config)
+		Self::create::<READER>(network, store_id, config.into())
 	}
 
 	fn create<const W: bool>(
 		network: &Network,
 		store_id: impl Into<StoreId>,
-		config: SyncConfig,
+		config: CollectionConfig,
 	) -> Once<T, W> {
 		let store_id = store_id.into();
 		let machine = OnceStateMachine::new(
 			store_id, //
 			W,
-			config,
+			config.sync,
 			network.local().id(),
 		);
 
 		let data = machine.data();
-		let group = network
+		let mut builder = network
 			.groups()
 			.with_key(store_id)
-			.with_state_machine(machine)
-			.join();
+			.with_state_machine(machine);
+
+		for validator in config.auth {
+			builder = builder.require_ticket(validator);
+		}
+
+		let group = builder.join();
 		let when = When::new(group.when().clone());
 
 		Once::<T, W> { when, group, data }
@@ -262,12 +268,20 @@ impl<T: Value, const WRITER: bool> CollectionFromDef for Once<T, WRITER> {
 	type Reader = OnceReader<T>;
 	type Writer = OnceWriter<T>;
 
-	fn reader(network: &Network, store_id: StoreId) -> Self::Reader {
-		Self::Reader::reader(network, store_id)
+	fn reader_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: CollectionConfig,
+	) -> Self::Reader {
+		Self::Reader::reader_with_config(network, store_id, config)
 	}
 
-	fn writer(network: &Network, store_id: StoreId) -> Self::Writer {
-		Self::Writer::writer(network, store_id)
+	fn writer_with_config(
+		network: &Network,
+		store_id: StoreId,
+		config: CollectionConfig,
+	) -> Self::Writer {
+		Self::Writer::writer_with_config(network, store_id, config)
 	}
 }
 
