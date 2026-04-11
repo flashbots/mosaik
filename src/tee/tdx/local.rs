@@ -27,6 +27,21 @@ pub enum Error {
 	ExpirationInThePast,
 }
 
+impl Measurements {
+	/// Reads the local machine's TDX measurements (`MR_TD` and `RTMR`s) from
+	/// the TDX hardware.
+	///
+	/// This is a standalone function that does not require a `Network` instance.
+	/// It generates a TDX quote and extracts the measurements from it.
+	///
+	/// Returns an error if TDX is not available on this platform.
+	pub fn local() -> Result<Self, Error> {
+		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
+		let quote = tdx_quote::Quote::from_bytes(&quote)?;
+		Ok(Self::from_quote(&quote))
+	}
+}
+
 /// Provides TDX-specific operations for a `Network`, such as creating TDX
 /// tickets and retrieving TDX measurements.
 pub struct NetworkTdxOps<'a>(&'a Network);
@@ -93,11 +108,9 @@ impl NetworkTdxOps<'_> {
 	/// slow. If you're going to request several measurements, it's more efficient
 	/// to call `ticket()` once convert it to `TdxTicket` and extract the
 	/// measurements from there.
+	#[allow(clippy::unused_self)]
 	pub fn measurements(&self) -> Result<Measurements, Error> {
-		let _ = self;
-		let quote = configfs_tsm::create_tdx_quote([0u8; 64])?;
-		let quote = tdx_quote::Quote::from_bytes(&quote)?;
-		Ok(Measurements::from_quote(&quote))
+		Measurements::local()
 	}
 
 	/// Returns the `MR_TD` measurement of the local machine's TDX environment.

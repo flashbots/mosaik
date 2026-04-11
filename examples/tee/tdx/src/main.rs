@@ -12,6 +12,16 @@ declare::stream!(
 		.require_mrtd("91eb2b44d141d4ece09f0c75c2c53d247a3c68edd7fafe8a3520c942a604a407de03ae6dc5f87f27428b2538873118b7")
 );
 
+declare::collection!(
+	pub SecureObservers = mosaik::collections::Map<PeerId, String>,
+	"mosaik.examples.tee.tdx.SecureObservers",
+	require_ticket: TdxValidator::new()
+		.require_own_mrtd()
+		.expect("TDX must be available for SecureObservers")
+		.require_own_rtmr2()
+		.expect("TDX must be available for SecureObservers")
+);
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 	configure_tracing();
@@ -58,14 +68,35 @@ async fn consumer_flow(network: Network) -> anyhow::Result<()> {
 	// specified validator criteria for receiving data on this stream.
 	let mut consumer = SecureConsumer::consumer(&network);
 
+	// Create a replicated map that is only accessible by peers running in TDX
+	// VMs with the same MRTD and RTMR2 measurements as us.
+	let observers = SecureObservers::writer(&network);
+
 	println!("Waiting for stream to come online...");
 	consumer.when().online().await;
 
-	while let Some(item) = consumer.next().await {
-		println!("Received stream item: {item}");
-	}
+	println!("Waiting for SecureObservers map to come online...");
+	observers.when().online().await;
 
-	Ok(())
+	let my_peer_id = network.local().id();
+
+	loop {
+		tokio::select! {
+			Some(item) = consumer.next() => {
+				println!("Received stream item: {item}");
+				let _ = observers.insert(my_peer_id, item).await;
+			}
+
+			// When the observers collection is updated, print its current contents.
+			() = observers.when().updated() => {
+				println!("SecureObservers collection changed:");
+				for (peer_id, value) in observers.iter() {
+					println!("  {peer_id}: {value}");
+				}
+				println!();
+			}
+		}
+	}
 }
 
 async fn producer_flow(network: Network) -> anyhow::Result<()> {
@@ -123,19 +154,13 @@ fn configure_tracing() {
 		"noq",
 	];
 
-	// disable disabling noisy modules tracing
-	let unmute = std::env::var("TEST_TRACE_UNMUTE")
-		.map(|val| val == "1" || val == "on" || val == "yes")
-		.unwrap_or(false);
-
 	let _ = tracing_subscriber::registry()
 		.with(tracing_subscriber::fmt::layer())
 		.with(filter_fn(move |metadata| {
 			metadata.level() <= &level
-				&& (unmute
-					|| !muted
-						.iter()
-						.any(|prefix| metadata.target().starts_with(prefix)))
+				&& !muted
+					.iter()
+					.any(|prefix| metadata.target().starts_with(prefix))
 		}))
 		.try_init();
 

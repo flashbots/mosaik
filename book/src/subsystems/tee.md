@@ -129,6 +129,24 @@ network.tdx().install_own_ticket()?;
 let mut consumer = SecureStream::consumer(&network);
 ```
 
+A collection that is only accessible by peers with the same TDX measurements as
+the local machine — no hardcoded hex strings needed:
+
+```rust,ignore
+use mosaik::*;
+use mosaik::tdx::TdxValidator;
+
+declare::collection!(
+    pub SecureMap = mosaik::collections::Map<String, String>,
+    "secure.map",
+    require_ticket: TdxValidator::new()
+        .require_own_mrtd()
+        .expect("TDX must be available")
+        .require_own_rtmr2()
+        .expect("TDX must be available"),
+);
+```
+
 See the [TDX](tee/tdx.md) page for the full API reference and the
 [TDX example](https://github.com/flashbots/mosaik/tree/main/examples/tee/tdx)
 for a complete working application.

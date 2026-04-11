@@ -1,5 +1,11 @@
 use {
-	super::{IntoMeasurement, MeasurementsCriteria, ticket::TdxTicket},
+	super::{
+		IntoMeasurement,
+		Measurements,
+		MeasurementsCriteria,
+		local::Error,
+		ticket::TdxTicket,
+	},
 	crate::{
 		TicketValidator,
 		UniqueId,
@@ -109,6 +115,61 @@ impl TdxValidator {
 	pub fn require_rtmr3(mut self, rtmr3: impl IntoMeasurement) -> Self {
 		self.baseline = self.baseline.require_rtmr3(rtmr3.into_measurement());
 		self
+	}
+
+	/// Creates a new `TdxValidator` that requires all peers to have the same
+	/// TDX measurements (`MR_TD` and all `RTMR`s) as the local machine.
+	///
+	/// This reads the local TDX measurements from hardware and uses them as
+	/// the baseline criteria. Returns an error if TDX is not available.
+	pub fn from_local() -> Result<Self, Error> {
+		let local = Measurements::local()?;
+		Ok(Self::baseline(MeasurementsCriteria::from(&local)))
+	}
+
+	/// Requires that all tickets have the same `MR_TD` measurement as the
+	/// local machine. Reads the local measurement from TDX hardware.
+	///
+	/// Returns an error if TDX is not available on this platform.
+	pub fn require_own_mrtd(self) -> Result<Self, Error> {
+		let local = Measurements::local()?;
+		Ok(self.require_mrtd(local.mrtd()))
+	}
+
+	/// Requires that all tickets have the same `RTMR0` measurement as the
+	/// local machine. Reads the local measurement from TDX hardware.
+	///
+	/// Returns an error if TDX is not available on this platform.
+	pub fn require_own_rtmr0(self) -> Result<Self, Error> {
+		let local = Measurements::local()?;
+		Ok(self.require_rtmr0(local.rtmr0()))
+	}
+
+	/// Requires that all tickets have the same `RTMR1` measurement as the
+	/// local machine. Reads the local measurement from TDX hardware.
+	///
+	/// Returns an error if TDX is not available on this platform.
+	pub fn require_own_rtmr1(self) -> Result<Self, Error> {
+		let local = Measurements::local()?;
+		Ok(self.require_rtmr1(local.rtmr1()))
+	}
+
+	/// Requires that all tickets have the same `RTMR2` measurement as the
+	/// local machine. Reads the local measurement from TDX hardware.
+	///
+	/// Returns an error if TDX is not available on this platform.
+	pub fn require_own_rtmr2(self) -> Result<Self, Error> {
+		let local = Measurements::local()?;
+		Ok(self.require_rtmr2(local.rtmr2()))
+	}
+
+	/// Requires that all tickets have the same `RTMR3` measurement as the
+	/// local machine. Reads the local measurement from TDX hardware.
+	///
+	/// Returns an error if TDX is not available on this platform.
+	pub fn require_own_rtmr3(self) -> Result<Self, Error> {
+		let local = Measurements::local()?;
+		Ok(self.require_rtmr3(local.rtmr3()))
 	}
 
 	/// Returns a new `TdxValidator` that allows tickets that satisfy the given

@@ -108,6 +108,25 @@ let m = Measurement::new([0u8; 48]);
 let m: Measurement = "91eb2b44...".parse()?;
 ```
 
+### Reading local measurements
+
+When running inside a TDX guest, you can read the local machine's measurements
+directly without needing a `Network` instance:
+
+```rust,ignore
+use mosaik::tdx::Measurements;
+
+let local = Measurements::local()?;
+println!("MR_TD: {}", local.mrtd());
+println!("RTMR0: {}", local.rtmr0());
+println!("RTMR1: {}", local.rtmr1());
+println!("RTMR2: {}", local.rtmr2());
+println!("RTMR3: {}", local.rtmr3());
+```
+
+This is also available through `network.tdx().measurements()`, which delegates
+to the same underlying call.
+
 ## TdxValidator
 
 `TdxValidator` implements the `TicketValidator` trait for TDX attestation. It
@@ -135,16 +154,26 @@ let validator = TdxValidator::new()
 
 ### Builder methods
 
-| Method                       | Description                                      |
-| ---------------------------- | ------------------------------------------------ |
-| `new()` / `empty()`          | Accept any valid TDX attestation                 |
-| `baseline(criteria)`         | Start from a `MeasurementsCriteria` baseline     |
-| `require_mrtd(measurement)`  | Require a specific MR_TD value                   |
-| `require_rtmr0(measurement)` | Require a specific RTMR0 value                   |
-| `require_rtmr1(measurement)` | Require a specific RTMR1 value                   |
-| `require_rtmr2(measurement)` | Require a specific RTMR2 value                   |
-| `require_rtmr3(measurement)` | Require a specific RTMR3 value                   |
-| `allow_variant(criteria)`    | Allow an alternative set of measurement criteria |
+| Method                       | Description                                              |
+| ---------------------------- | -------------------------------------------------------- |
+| `new()` / `empty()`          | Accept any valid TDX attestation                         |
+| `baseline(criteria)`         | Start from a `MeasurementsCriteria` baseline             |
+| `from_local()`               | Require all measurements to match the local machine      |
+| `require_mrtd(measurement)`  | Require a specific MR_TD value                           |
+| `require_rtmr0(measurement)` | Require a specific RTMR0 value                           |
+| `require_rtmr1(measurement)` | Require a specific RTMR1 value                           |
+| `require_rtmr2(measurement)` | Require a specific RTMR2 value                           |
+| `require_rtmr3(measurement)` | Require a specific RTMR3 value                           |
+| `require_own_mrtd()`         | Require the same MR_TD as the local machine              |
+| `require_own_rtmr0()`        | Require the same RTMR0 as the local machine              |
+| `require_own_rtmr1()`        | Require the same RTMR1 as the local machine              |
+| `require_own_rtmr2()`        | Require the same RTMR2 as the local machine              |
+| `require_own_rtmr3()`        | Require the same RTMR3 as the local machine              |
+| `allow_variant(criteria)`    | Allow an alternative set of measurement criteria         |
+
+The `from_local()` and `require_own_*` methods read measurements from TDX
+hardware and return `Result`, so they require `?` or `.expect()` in the builder
+chain.
 
 ### Validation checks
 
@@ -180,6 +209,36 @@ let validator = TdxValidator::new()
         MeasurementsCriteria::new().require_rtmr0("2222...")
     );
 ```
+
+### Matching local measurements
+
+When every node in a group runs the same binary on the same TDX image, you can
+require peers to present measurements identical to the local machine's — without
+hardcoding hex strings. The values are read from TDX hardware at construction
+time and become part of the validator's signature, so all nodes with the same
+measurements will derive the same group identity.
+
+```rust,ignore
+use mosaik::tdx::TdxValidator;
+
+// Require all measurements to match (MR_TD + all RTMRs)
+let validator = TdxValidator::from_local()?;
+
+// Require only specific registers to match
+let validator = TdxValidator::new()
+    .require_own_mrtd()?
+    .require_own_rtmr2()?;
+
+// Mix local and explicit measurements
+let local = Measurements::local()?;
+let validator = TdxValidator::new()
+    .require_mrtd(local.mrtd())
+    .require_rtmr1("abcd...");
+```
+
+This is particularly useful for collections and groups where the validator's
+signature is part of the group identity — every peer with the same TDX image
+will derive matching signatures automatically.
 
 ## Using TDX with Streams
 
@@ -227,16 +286,27 @@ let group = network.groups()
 use mosaik::*;
 use mosaik::tdx::TdxValidator;
 
-// Via the collection! macro
+// Via the collection! macro with a hardcoded measurement
 declare::collection!(
     pub SecureStore = mosaik::collections::Map<String, String>,
     "secure.store",
     require_ticket: TdxValidator::new().require_mrtd("..."),
 );
 
+// Via the collection! macro with local measurement matching
+declare::collection!(
+    pub SecureStore = mosaik::collections::Map<String, String>,
+    "secure.store",
+    require_ticket: TdxValidator::new()
+        .require_own_mrtd()
+        .expect("TDX must be available")
+        .require_own_rtmr2()
+        .expect("TDX must be available"),
+);
+
 // Via CollectionConfig
 let config = CollectionConfig::default()
-    .require_ticket(TdxValidator::new().require_mrtd("..."));
+    .require_ticket(TdxValidator::from_local()?);
 
 let writer = mosaik::collections::Map::<String, String>::writer_with_config(
     &network, store_id, config,
