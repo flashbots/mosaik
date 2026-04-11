@@ -91,7 +91,7 @@ inside a Trust Domain:
 | `RTMR0`  | Runtime measurement register 0                              |
 | `RTMR1`  | Runtime measurement register 1                              |
 | `RTMR2`  | Runtime measurement register 2                              |
-| `RTMR3`  | Runtime measurement register 3 (typically application)      |
+| `RTMR3`  | Runtime measurement register 3                              |
 
 ### Creating measurements
 
