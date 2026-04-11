@@ -29,7 +29,7 @@ let mut consumer = network.streams()
 | Method                             | Default                  | Description                                  |
 | ---------------------------------- | ------------------------ | -------------------------------------------- |
 | `require(predicate)`               | Accept all               | Peer eligibility predicate (AND-composed)    |
-| `with_ticket_validator(validator)` | None                     | Expiration-aware ticket validation           |
+| `require_ticket(validator)`        | None                     | Expiration-aware ticket validation (stackable) |
 | `with_criteria(criteria)`          | `Criteria::default()`    | Data selection criteria sent to producers    |
 | `with_stream_id(id)`               | `D::derived_stream_id()` | Custom stream identity                       |
 | `with_backoff(policy)`             | From `Streams` config    | Backoff policy for reconnection retries      |
@@ -94,20 +94,21 @@ The predicate receives a `&PeerEntry` and is evaluated each time a new producer 
 
 ### Ticket-Based Authentication
 
-Use `with_ticket_validator` to only subscribe to producers that carry a
-valid ticket. When a producer's ticket expires, the consumer
-**automatically disconnects**:
+Use `require_ticket` to only subscribe to producers that carry a valid
+ticket. Call it multiple times to require multiple types of tickets —
+producers must satisfy all configured validators. When the earliest
+ticket expires, the consumer **automatically disconnects**:
 
 ```rust,ignore
 let consumer = network.streams()
     .consumer::<PriceUpdate>()
-    .with_ticket_validator(MyJwtValidator::new())
+    .require_ticket(MyJwtValidator::new())
     .build();
 ```
 
 The consumer validates each discovered producer's tickets before
-attempting a connection. Producers without a valid ticket (or with an
-expired ticket) are skipped entirely. If a connected producer's ticket
+attempting a connection. Producers without valid tickets (or with
+expired tickets) are skipped entirely. If a connected producer's ticket
 expires mid-session, the consumer terminates the subscription.
 
 See [Producers > Ticket-Based Authentication](producers.md#ticket-based-authentication)

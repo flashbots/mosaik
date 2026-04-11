@@ -12,6 +12,7 @@ Mosaik is a Rust runtime for building self-organizing, leaderless distributed sy
 | **Replicated collections** | Distributed `Map`, `Vec`, `Set`, `Cell`, `Once`, and `PriorityQueue` with strong consistency  |
 | **QUIC transport**         | Built on [iroh](https://github.com/n0-computer/iroh) for modern, encrypted P2P networking         |
 | **Relay support**          | Nodes behind NAT can communicate via relay servers with automatic hole-punching                   |
+| **TEE support**            | First-class Intel TDX support for hardware-attested identity and access control                   |
 
 ## Module Map
 
@@ -49,6 +50,10 @@ Availability groups coordinated by a modified Raft consensus protocol. Nodes sha
 ### Collections
 
 Higher-level replicated data structures built on Groups. Each collection (`Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue`) creates its own Raft group with a specialized state machine.
+
+### TEE
+
+Provides first-class support for Trusted Execution Environments. Nodes running inside a TEE (currently Intel TDX) can generate hardware-signed attestation tickets that prove their software identity. Other nodes validate these attestations before accepting connections — enabling cryptographic access control without out-of-band coordination.
 
 ## Design Decisions
 

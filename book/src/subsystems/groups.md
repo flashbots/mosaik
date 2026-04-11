@@ -51,7 +51,7 @@ A `GroupId` is derived from up to four components:
 1. **Group key** — the shared secret (`GroupKey`)
 2. **Consensus configuration** — election timeouts, heartbeat intervals, etc.
 3. **State machine signature** — the state machine's `signature()` + state sync `signature()`
-4. **Ticket validator signature** (optional) — the `TicketValidator`'s `signature()`, if `.require_ticket()` is configured
+4. **Ticket validator signatures** (optional) — the `signature()` of each configured `TicketValidator`, if `.require_ticket()` is used
 
 Any divergence in these values across nodes produces a different `GroupId`, preventing misconfigured nodes from bonding.
 
@@ -61,7 +61,7 @@ let id = key.secret().hashed()
     .derive(consensus.digest())
     .derive(state_machine.signature())
     .derive(state_machine.state_sync().signature());
-// If require_ticket() is set:
+// For each require_ticket() validator:
 //   id = id.derive(validator.signature());
 ```
 

@@ -95,3 +95,25 @@ Key options:
 | `--nickname`, `-n` | Your display name (default: `anon`)                                          |
 | `--color`, `-c`    | ANSI color code for your messages (31–36, default: `32` = green)             |
 | `--room`, `-r`     | Room name — anyone with the same name joins the same chat (default: `lobby`) |
+
+---
+
+## TDX (Trusted Execution Environment)
+
+**[`tee/tdx/`](tee/tdx/)** — hardware-attested secure data streaming using Intel TDX.
+
+A complete example demonstrating mosaik's first-class TEE support. A single binary runs as either a producer (outside TEE) or consumer (inside a TDX enclave), selected automatically based on hardware detection. The producer only accepts consumers whose TDX attestation carries the expected measurement.
+
+Features demonstrated:
+- **TEE attestation** — generating and installing hardware-signed TDX tickets via `network.tdx().install_own_ticket()`
+- **TDX validation** — using `TdxValidator` with `require_mrtd()` to enforce firmware measurements
+- **`stream!` macro with `require_ticket`** — compile-time stream declaration with baked-in TDX validation
+- **Build-time image builder** — `build.rs` uses `mosaik::tdx::build::alpine()` to cross-compile and package a TDX guest image
+
+### Building
+
+```bash
+cargo build -p tdx-example --release
+```
+
+The build script cross-compiles for musl, downloads Alpine Linux and a TDX kernel, and produces a self-extracting launch script for the TDX guest.

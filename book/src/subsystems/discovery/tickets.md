@@ -150,9 +150,10 @@ when the consumer's updated `PeerEntry` arrives.
 
 ### 3. Validate tickets on streams
 
-Use `with_ticket_validator` on either the producer or consumer builder.
+Use `require_ticket` on either the producer or consumer builder.
 It validates at connection time **and** proactively disconnects peers
-when their ticket expires:
+when their ticket expires. Call it multiple times to require multiple
+types of tickets — peers must satisfy all configured validators:
 
 ```rust,ignore
 let validator = JwtTicketValidator::with_key(key.clone())
@@ -161,13 +162,13 @@ let validator = JwtTicketValidator::with_key(key.clone())
 // Producer side — validates incoming consumers
 let producer = network.streams()
     .producer::<MyDatum>()
-    .with_ticket_validator(validator.clone())
+    .require_ticket(validator.clone())
     .build()?;
 
 // Consumer side — validates discovered producers
 let consumer = network.streams()
     .consumer::<MyDatum>()
-    .with_ticket_validator(validator.clone())
+    .require_ticket(validator.clone())
     .build();
 ```
 
@@ -244,7 +245,7 @@ sign JWT + add_ticket() ─────► PeerEntry { tickets: [jwt] }
                                                          └─ invalid → reject
 ```
 
-When using `with_ticket_validator` or `require_ticket`, the runtime
+When using `require_ticket`, the runtime
 schedules a disconnect at the moment `exp` is reached — no reconnection
 round-trip required. For groups, expired tickets trigger proactive bond
 termination — see [Groups > Joining](../groups/joining.md).
@@ -349,7 +350,7 @@ Plug it in exactly like the built-in validator:
 ```rust,ignore
 let producer = network.streams()
     .producer::<MyDatum>()
-    .with_ticket_validator(MyValidator { /* ... */ })
+    .require_ticket(MyValidator { /* ... */ })
     .build()?;
 ```
 
@@ -378,6 +379,15 @@ let producer = network.streams()
   connections when tickets expire, rather than waiting for the next
   reconnection attempt.
 
+- **Multiple validators.** All subsystems (streams, groups, collections)
+  support multiple `require_ticket` calls. Peers must satisfy **all**
+  configured validators to be accepted. The runtime tracks the earliest
+  expiration across all validators for automatic disconnect scheduling.
+
 - **Multiple ticket classes.** A single peer can carry tickets of
   different classes simultaneously. Producers can check for any
   combination of classes in their `require` predicate.
+
+- **TDX attestation.** Mosaik provides a built-in `TdxValidator` for
+  Intel TDX hardware attestation. See
+  [TEE > TDX](../tee/tdx.md) for details.

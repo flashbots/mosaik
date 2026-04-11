@@ -23,19 +23,20 @@ From these minimal inputs, mosaik handles peer discovery, typed pub/sub data str
 - **Self-organizing.** No central coordinator, no manual topology configuration. Nodes find each other and form the right connections.
 - **Built on modern networking.** Uses [iroh](https://github.com/n0-computer/iroh) for QUIC-based peer-to-peer transport with relay support and hole-punching.
 - **Composable primitives.** Five subsystems (`Network`, `Discovery`, `Streams`, `Groups`, `Collections`) compose to support a wide range of distributed application patterns.
+- **First-class TEE support.** Hardware-attested identity via Intel TDX (with AMD SEV-SNP and ARM CCA planned), enabling secure access control based on cryptographic proof of the software running on each node.
 
 ## System Overview
 
 ```text
-┌─────────────────────────────────────────────────┐
-│                   Network                       │
-│  (QUIC endpoint, identity, protocol routing)    │
-├──────────┬──────────┬──────────┬────────────────┤
-│ Discovery│ Streams  │  Groups  │  Collections   │
-│  gossip, │  typed   │   Raft   │  Map/Vec/Set/  │
-│  catalog │ pub/sub  │ consensus│  Cell/Once     │
-│          │          │  groups  │  PriorityQueue │
-└──────────┴──────────┴──────────┴────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                      Network                         │
+│  (QUIC endpoint, identity, protocol routing)         │
+├──────────┬──────────┬──────────┬──────────┬──────────┤
+│ Discovery│ Streams  │  Groups  │Collection│   TEE    │
+│  gossip, │  typed   │   Raft   │ Map/Vec/ │  TDX /   │
+│  catalog │ pub/sub  │ consensus│ Set/Cell │  SNP /   │
+│          │          │  groups  │ Once/PQ  │  CCA     │
+└──────────┴──────────┴──────────┴──────────┴──────────┘
 ```
 
 - **Network** is the entry point. It manages the QUIC transport, node identity, and composes all subsystems.
@@ -43,6 +44,7 @@ From these minimal inputs, mosaik handles peer discovery, typed pub/sub data str
 - **Streams** provides typed, async pub/sub channels. Any serializable Rust type can be streamed between nodes.
 - **Groups** implements Raft consensus for clusters of nodes that need shared state and leader election.
 - **Collections** builds on Groups to offer replicated data structures (`Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue`) that stay synchronized across nodes.
+- **TEE** provides first-class support for Trusted Execution Environments (Intel TDX, with AMD SEV-SNP and ARM CCA planned), enabling hardware-attested identity and access control across the network.
 
 ## Who Should Read This Book
 

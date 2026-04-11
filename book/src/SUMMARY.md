@@ -46,6 +46,8 @@
   - [Once](./subsystems/collections/once.md)
   - [PriorityQueue](./subsystems/collections/priority-queue.md)
   - [Writer/Reader Pattern](./subsystems/collections/writer-reader.md)
+- [Trusted Execution Environments](./subsystems/tee.md)
+  - [Intel TDX](./subsystems/tee/tdx.md)
 
 # Architecture Deep Dives
 

@@ -101,6 +101,45 @@ parameters:
 These traits are automatically implemented for any type that satisfies their
 bounds — you never need to implement them manually.
 
+## Ticket-based authentication
+
+Collections support ticket-based peer authentication through `CollectionConfig`.
+This adds an authentication requirement to the underlying Raft group — only
+peers carrying valid tickets can join and replicate data.
+
+```rust,ignore
+use mosaik::CollectionConfig;
+use mosaik::collections::{Map, StoreId};
+
+let config = CollectionConfig::default()
+    .require_ticket(my_validator);
+
+let writer = Map::<String, u64>::writer_with_config(&network, store_id, config);
+```
+
+Call `require_ticket` multiple times to require multiple types of tickets.
+Peers must satisfy **all** configured validators to participate.
+
+> **Important:** Ticket validators affect the derived group ID. All members
+> of the collection must use the same validators in the same order, otherwise
+> they will derive different group IDs and will not see each other's changes.
+
+The `collection!` macro supports `require_ticket` directly:
+
+```rust,ignore
+use mosaik::*;
+use mosaik::tdx::TdxValidator;
+
+declare::collection!(
+    pub SecureMap = mosaik::collections::Map<String, String>,
+    "secure.store",
+    require_ticket: TdxValidator::new().require_mrtd("..."),
+);
+```
+
+See [Auth Tickets](discovery/tickets.md) for the `TicketValidator` trait and
+[TEE > TDX](tee/tdx.md) for TDX-specific validation.
+
 ## StoreId and group identity
 
 Each collection derives its Raft group identity from:
@@ -109,6 +148,7 @@ Each collection derives its Raft group identity from:
    `"mosaik_collections_once"`)
 2. **The `StoreId`** — a `UniqueId` you provide at construction time
 3. **The Rust type names** of the type parameters
+4. **Ticket validator signatures** (optional) — if `require_ticket` is configured
 
 This means `Map::<String, u64>::writer(&net, id)` and
 `Map::<u32, u64>::writer(&net, id)` will join **different** groups even with
@@ -210,12 +250,27 @@ compile time to produce the `StoreId`. If the string is exactly 64 hex
 characters, it is decoded directly instead of hashed. This matches the
 behavior of `unique_id!`.
 
+#### Baked-in configuration
+
+The `collection!` macro supports `require_ticket` for ticket-based
+authentication:
+
+```rust,ignore
+declare::collection!(
+    pub Prices = mosaik::collections::Map<String, f64>, "prices",
+    require_ticket: MyValidator::new(),
+);
+```
+
+Multiple `require_ticket` entries can be specified — peers must satisfy
+all of them.
+
 ### When to use the macro vs. direct constructors
 
 Use the `collection!` macro when:
 
 - Multiple modules or crates reference the same collection.
-- You want a single source of truth for the store ID.
+- You want a single source of truth for the store ID and auth config.
 - You want compile-time checked reader/writer type aliases via
   `ReaderOf<C>` / `WriterOf<C>`.
 

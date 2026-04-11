@@ -25,6 +25,8 @@ All resource identifiers (networks, streams, collections, groups) are **intent-a
 
 The core claim: when binaries are deployed on arbitrary machines, the network should self-organize, infer its own data-flow graph, and converge to a stable operational topology. This property is foundational for scaling the system, adding new capabilities, and reducing operational complexity.
 
+Mosaik has first-class support for **Trusted Execution Environments (TEEs)** — nodes running inside Intel TDX enclaves can generate hardware-attested identity tickets, and other nodes can require valid attestation before accepting connections. This enables cryptographic proof of what software each peer is running, without out-of-band coordination.
+
 Mosaik initially targets trusted, permissioned networks such as L2 chains controlled by a single organization. All members are assumed honest; the system is not yet Byzantine fault tolerant.
 
 > [!TIP]
@@ -419,25 +421,25 @@ Key features:
 Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based peer-to-peer networking with relay support.
 
 ```text
-┌────────────────────────────────────────────────┐
-│                    Network                     │
-│                                                │
-│  ┌────────────┐  ┌───────────┐  ┌───────────┐  │
-│  │ Discovery  │  │ Streams   │  │  Groups   │  │
-│  │            │  │           │  │           │  │
-│  │ Announce   │  │ Producer  │  │  Bonds    │  │
-│  │ Catalog    │  │ Consumer  │  │  Raft     │  │
-│  │ Sync       │  │ Status    │  │  RSM      │  │
-│  └────────────┘  └───────────┘  └───────────┘  │
-│                                                │
-│  ┌─────────────────┐  ┌─────────────────────┐  │
-│  │   Collections   │  │   Transport (iroh)  │  │
-│  │                 │  │                     │  │
-│  │ Map · Vec · Set │  │ QUIC · Relay · mDNS │  │
-│  │   Cell · Once   │  │        pkarr        │  │
-│  │  PriorityQueue  │  │                     │  │
-│  └─────────────────┘  └─────────────────────┘  │
-└────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│                        Network                         │
+│                                                        │
+│  ┌────────────┐  ┌───────────┐  ┌───────────┐          │
+│  │ Discovery  │  │ Streams   │  │  Groups   │          │
+│  │            │  │           │  │           │          │
+│  │ Announce   │  │ Producer  │  │  Bonds    │          │
+│  │ Catalog    │  │ Consumer  │  │  Raft     │          │
+│  │ Sync       │  │ Status    │  │  RSM      │          │
+│  └────────────┘  └───────────┘  └───────────┘          │
+│                                                        │
+│  ┌─────────────────┐  ┌──────────┐  ┌───────────────┐  │
+│  │   Collections   │  │   TEE    │  │Transport      │  │
+│  │                 │  │          │  │               │  │
+│  │ Map · Vec · Set │  │ TDX      │  │ QUIC · Relay  │  │
+│  │   Cell · Once   │  │          │  │ mDNS · pkarr  │  │
+│  │  PriorityQueue  │  │          │  │               │  │
+│  └─────────────────┘  └──────────┘  └───────────────┘  │
+└────────────────────────────────────────────────────────┘
 ```
 
 # Repository Layout
@@ -451,6 +453,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 | `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue` |
 | `src/network/`     | Transport layer, connection management, typed links                              |
 | `src/primitives/`  | Identifiers, formatting helpers, async work queues, etc.                         |
+| `src/tee/`         | TEE support: Intel TDX attestation, validation, and image building               |
 | `tests/`           | Integration tests organized by subsystem                                         |
 
 # Getting Started
@@ -504,6 +507,7 @@ Core primitives for building self-organized distributed systems in trusted, perm
 - [x] **Streams** — producers, consumers, predicates, limits, online conditions, stats
 - [x] **Groups** — membership, shared state, failover, load balancing
 - [x] **Collections** - Replicated, eventually consistent data structures
+- [x] **TEE** — First-class Intel TDX support for hardware-attested identity and access control
 - [ ] **Preferences** — ranking producers by latency, geo-proximity
 - [ ] **Diagnostics** — network inspection, automatic metrics, developer debug tools
 

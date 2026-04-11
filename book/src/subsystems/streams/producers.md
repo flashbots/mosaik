@@ -31,7 +31,7 @@ let producer = network.streams()
 | Method                              | Default                  | Description                                              |
 | ----------------------------------- | ------------------------ | -------------------------------------------------------- |
 | `require(predicate)`                | Accept all               | Adds a consumer eligibility requirement (AND-composed)   |
-| `with_ticket_validator(validator)`  | None                     | Expiration-aware ticket validation (see below)           |
+| `require_ticket(validator)`         | None                     | Expiration-aware ticket validation (stackable; see below) |
 | `online_when(conditions)`           | `minimum_of(1)`          | Conditions under which the producer is online            |
 | `disconnect_lagging(bool)`          | `true`                   | Disconnect consumers that fall behind `buffer_size`      |
 | `with_buffer_size(n)`               | `1024`                   | Internal channel buffer size                             |
@@ -71,19 +71,21 @@ All error variants return the unsent datum so you can retry or inspect it.
 
 ## Ticket-Based Authentication
 
-### Using `with_ticket_validator` (recommended)
+### Using `require_ticket` (recommended)
 
-The `with_ticket_validator` method accepts a `TicketValidator`
-implementation that validates consumer tickets and returns their
-expiration. When a ticket expires, the producer **proactively
-disconnects** the consumer — no reconnection attempt is needed:
+The `require_ticket` method accepts a `TicketValidator` implementation
+that validates consumer tickets and returns their expiration. Call it
+multiple times to require multiple types of tickets — peers must satisfy
+all configured validators. When the earliest ticket expires, the producer
+**proactively disconnects** the consumer — no reconnection attempt is
+needed:
 
 ```rust,ignore
 use mosaik::primitives::{TicketValidator, Expiration, InvalidTicket};
 
 let producer = network.streams()
     .producer::<MyDatum>()
-    .with_ticket_validator(MyJwtValidator::new())
+    .require_ticket(MyJwtValidator::new())
     .build()?;
 ```
 

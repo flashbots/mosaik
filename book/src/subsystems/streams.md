@@ -198,7 +198,7 @@ declare::stream!(pub PriceFeed = PriceUpdate, "oracle.price",
 | Key              | Description                                                |
 | ---------------- | ---------------------------------------------------------- |
 | `require`        | Conditions for accepting a consumer or producer connection |
-| `require_ticket` | Expiration-aware ticket validator (see below)              |
+| `require_ticket` | Expiration-aware ticket validator (stackable; see below)   |
 | `online_when`    | Conditions for the stream to be considered online          |
 
 Without a prefix, ambiguous keys apply to **both** sides. Use
@@ -214,9 +214,10 @@ stream!(pub PriceFeed = PriceUpdate,
 #### Ticket validator
 
 The `require_ticket` key accepts an expression that implements
-`TicketValidator`. It maps to `.with_ticket_validator(expr)` on the
-underlying builder. When the ticket expires, the connection is
-automatically terminated:
+`TicketValidator`. It maps to `.require_ticket(expr)` on the
+underlying builder. Multiple `require_ticket` entries can be specified
+(peers must satisfy all of them). When the earliest ticket expires, the
+connection is automatically terminated:
 
 ```rust,ignore
 use mosaik::*;

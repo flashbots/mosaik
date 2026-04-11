@@ -169,9 +169,9 @@ let group = network.groups()
 
 ### Key points
 
-- **Affects `GroupId` derivation.** The validator's `signature()` is mixed
-  into the group ID. All members must use the same validator configuration,
-  or they will derive different group IDs and never bond.
+- **Affects `GroupId` derivation.** Each validator's `signature()` is mixed
+  into the group ID. All members must use the same validators in the same
+  order, or they will derive different group IDs and never bond.
 - **Peers must attach tickets via discovery.** Each peer calls
   `network.discovery().add_ticket(ticket)` with a `Ticket` whose `class`
   matches the validator's `class()`. See
