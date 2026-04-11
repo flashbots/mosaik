@@ -499,7 +499,7 @@ TIME_FACTOR=3 TEST_TRACE=on cargo test --test basic groups::leader::is_elected
 
 # Roadmap
 
-## Stage 1: Primitives *(current)*
+## Stage 1: Primitives
 
 Core primitives for building self-organized distributed systems in trusted, permissioned networks.
 
@@ -513,7 +513,9 @@ Core primitives for building self-organized distributed systems in trusted, perm
 
 ### Stage 2: Trust & Privacy
 
-Advanced stream subscription authorization, attested sandbox runtimes, trust corridors, etc.
+- [x] **TEE-based authorization** — gate access to streams, groups, and collections to hardware-attested peers using Intel TDX tickets and measurement validation
+- [ ] **Privacy Corridors** — end-to-end data isolation across chains of nodes and services; data that enters a corridor cannot be read or exfiltrated outside of it
+- [ ] **Trust zones** — network partitions that enforce privacy guarantees for all data and computation within them, backed by TEE hardware attestation
 
 ### Stage 3: Decentralization & Permissionlessness
 
