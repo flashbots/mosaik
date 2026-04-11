@@ -79,24 +79,16 @@ async fn consumer_flow(network: Network) -> anyhow::Result<()> {
 	let my_peer_id = network.local().id();
 
 	loop {
-		tokio::select! { biased;
+		tokio::select! {
 			// When the observers collection is updated, print its current contents.
 			() = observers.when().updated() => {
-				println!("SecureObservers collection changed:");
-				for (peer_id, value) in observers.iter() {
-					println!("  {} observed: {value}", Short(peer_id));
-				}
-				println!();
+				print_observers(&observers);
 			}
 
 			Some(item) = consumer.next() => {
 				println!("Received stream item: {item}");
 				let _ = observers.insert(my_peer_id, item).await;
-				println!("SecureObservers collection changed:");
-				for (peer_id, value) in observers.iter() {
-					println!("  {} observed: {value}", Short(peer_id));
-				}
-				println!();
+				print_observers(&observers);
 			}
 		}
 	}
@@ -130,6 +122,14 @@ async fn producer_flow(network: Network) -> anyhow::Result<()> {
 
 		tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	}
+}
+
+fn print_observers(observers: &WriterOf<SecureObservers>) {
+	println!("SecureObservers collection:");
+	for (peer_id, value) in observers.iter() {
+		println!("  {} observed: {value}", Short(peer_id));
+	}
+	println!();
 }
 
 fn configure_tracing() {
