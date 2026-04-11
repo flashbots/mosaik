@@ -32,13 +32,20 @@ pub enum Error {
 pub struct NetworkTdxOps<'a>(&'a Network);
 
 impl NetworkTdxOps<'_> {
-	/// Creates a TDX attestation ticket for the given network and measurement
-	/// that never expires.
+	/// Checks if TDX is supported and available for generating tickets and
+	/// retrieving measurements on the local machine.
+	pub fn available(&self) -> bool {
+		self.ticket().is_ok()
+	}
+
+	/// Creates a TDX attestation ticket for the current network instance and
+	/// measurement that never expires.
 	pub fn ticket(&self) -> Result<Ticket, Error> {
 		self.ticket_with_expiration(Expiration::Never)
 	}
 
-	/// Creates a TDX ticket for the given network with the specified expiration.
+	/// Creates a TDX ticket for the current network instance with the specified
+	/// expiration.
 	pub fn ticket_with_expiration(
 		&self,
 		expiration: Expiration,
@@ -63,6 +70,20 @@ impl NetworkTdxOps<'_> {
 
 		let quote_bytes = configfs_tsm::create_tdx_quote(report_data)?;
 		Ok(TdxTicket::new(quote_bytes, extra_data)?.try_into()?)
+	}
+
+	/// Generates a TDX ticket for the local machine and adds it to the network's
+	/// discovery info, making it available for other peers to see and verify.
+	///
+	/// This is a convenience method that combines `ticket()` and
+	/// `discovery().add_ticket()`. Removes any existing tickets of the same class
+	/// before adding the new one to ensure that only the latest TDX ticket is
+	/// present in the discovery info.
+	pub fn install_own_ticket(&self) -> Result<(), Error> {
+		let ticket = self.ticket()?;
+		self.0.discovery().remove_tickets_of(ticket.class);
+		self.0.discovery().add_ticket(ticket);
+		Ok(())
 	}
 
 	/// Returns all measurements (`MR_TD` and `RTMR`s) of the local machine's TDX

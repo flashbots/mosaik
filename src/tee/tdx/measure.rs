@@ -88,6 +88,28 @@ impl core::fmt::Display for Measurement {
 	}
 }
 
+pub trait IntoMeasurement {
+	fn into_measurement(self) -> Measurement;
+}
+
+impl IntoMeasurement for [u8; 48] {
+	fn into_measurement(self) -> Measurement {
+		Measurement::new(self)
+	}
+}
+
+impl IntoMeasurement for &str {
+	fn into_measurement(self) -> Measurement {
+		Measurement::hex(self)
+	}
+}
+
+impl IntoMeasurement for Measurement {
+	fn into_measurement(self) -> Measurement {
+		self
+	}
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Measurements {
 	mrtd: Measurement,

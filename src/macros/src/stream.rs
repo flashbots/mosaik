@@ -250,7 +250,23 @@ impl StreamInput {
 			};
 
 			// Route based on explicit side or infer from key.
+			//
+			// For `require` and `require_ticket`, the side prefix
+			// describes **who must satisfy** the requirement, not
+			// who performs the check.  `consumer require_ticket: V`
+			// means consumers need a valid ticket, so the
+			// **producer** runs the validator — route to the
+			// opposite side.
+			let is_requirement =
+				matches!(key_str.as_str(), "require" | "require_ticket");
+
 			match &entry.side {
+				ConfigSide::Producer if is_requirement => {
+					consumer_calls.push(call);
+				}
+				ConfigSide::Consumer if is_requirement => {
+					producer_calls.push(call);
+				}
 				ConfigSide::Producer => {
 					producer_calls.push(call);
 				}

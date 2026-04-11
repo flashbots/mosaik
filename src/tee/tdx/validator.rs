@@ -1,10 +1,11 @@
-use crate::{
-	TicketValidator,
-	UniqueId,
-	discovery::PeerEntry,
-	id,
-	primitives::{Expiration, InvalidTicket},
-	tee::tdx::{MeasurementsCriteria, ticket::TdxTicket},
+use {
+	super::{IntoMeasurement, MeasurementsCriteria, ticket::TdxTicket},
+	crate::{
+		TicketValidator,
+		UniqueId,
+		discovery::PeerEntry,
+		primitives::{Expiration, InvalidTicket},
+	},
 };
 
 /// A TDX-based ticket validator.
@@ -36,7 +37,7 @@ pub struct TdxValidator {
 
 // Public API
 impl TdxValidator {
-	pub const CLASS: UniqueId = id!("mosaik.tee.tdx.ticket-validator.v1");
+	pub const CLASS: UniqueId = super::TICKET_CLASS;
 
 	#[must_use]
 	pub const fn baseline(baseline: MeasurementsCriteria) -> Self {
@@ -58,6 +59,56 @@ impl TdxValidator {
 	#[must_use]
 	pub const fn new() -> Self {
 		Self::empty()
+	}
+
+	/// Requires that all tickets satisfy the given `Measurement` for `MR_TD` in
+	/// addition to the baseline criteria and other existing variants. This is a
+	/// convenience method for adding a common requirement on the `MR_TD` TDX
+	/// measurement.
+	#[must_use]
+	pub fn require_mrtd(mut self, mrtd: impl IntoMeasurement) -> Self {
+		self.baseline = self.baseline.require_mrtd(mrtd.into_measurement());
+		self
+	}
+
+	/// Requires that all tickets satisfy the given `Measurement` for `RTMR0` in
+	/// addition to the baseline criteria and other existing variants. This is a
+	/// convenience method for adding a common requirement on the `RTMR0` TDX
+	/// measurement.
+	#[must_use]
+	pub fn require_rtmr0(mut self, rtmr0: impl IntoMeasurement) -> Self {
+		self.baseline = self.baseline.require_rtmr0(rtmr0.into_measurement());
+		self
+	}
+
+	/// Requires that all tickets satisfy the given `Measurement` for `RTMR1` in
+	/// addition to the baseline criteria and other existing variants. This is a
+	/// convenience method for adding a common requirement on the `RTMR1` TDX
+	/// measurement.
+	#[must_use]
+	pub fn require_rtmr1(mut self, rtmr1: impl IntoMeasurement) -> Self {
+		self.baseline = self.baseline.require_rtmr1(rtmr1.into_measurement());
+		self
+	}
+
+	/// Requires that all tickets satisfy the given `Measurement` for `RTMR2` in
+	/// addition to the baseline criteria and other existing variants. This is a
+	/// convenience method for adding a common requirement on the `RTMR2` TDX
+	/// measurement.
+	#[must_use]
+	pub fn require_rtmr2(mut self, rtmr2: impl IntoMeasurement) -> Self {
+		self.baseline = self.baseline.require_rtmr2(rtmr2.into_measurement());
+		self
+	}
+
+	/// Requires that all tickets satisfy the given `Measurement` for `RTMR3` in
+	/// addition to the baseline criteria and other existing variants. This is a
+	/// convenience method for adding a common requirement on the `RTMR3` TDX
+	/// measurement.
+	#[must_use]
+	pub fn require_rtmr3(mut self, rtmr3: impl IntoMeasurement) -> Self {
+		self.baseline = self.baseline.require_rtmr3(rtmr3.into_measurement());
+		self
 	}
 
 	/// Returns a new `TdxValidator` that allows tickets that satisfy the given
