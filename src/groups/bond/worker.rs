@@ -120,7 +120,7 @@ impl<M: StateMachine> BondWorker<M> {
 	) -> (Bond<M>, BondEvents<M>) {
 		let mut link = link;
 		let ticket_expiry = Self::sleep_until_expiry(
-			group.config.validate_peer(&peer).ok().flatten(),
+			group.config.authorize_peer(&peer).ok().flatten(),
 		);
 
 		let (peer, peer_rx) = watch::channel(peer);
@@ -344,7 +344,7 @@ impl<M: StateMachine> BondWorker<M> {
 	/// Received an update about a change to a group member's peer entry.
 	fn on_peer_entry_update(&mut self, entry: SignedPeerEntry) {
 		if !self.group.config.auth().is_empty() {
-			match self.group.config.validate_peer(&entry) {
+			match self.group.config.authorize_peer(&entry) {
 				Err(_) => {
 					tracing::debug!(
 						peer_id = %Short(entry.id()),
@@ -427,7 +427,7 @@ impl<M: StateMachine> BondWorker<M> {
 		}
 
 		let entry = self.peer.borrow().clone();
-		match self.group.config.validate_peer(&entry) {
+		match self.group.config.authorize_peer(&entry) {
 			Err(_) => {
 				tracing::debug!(
 					peer = %Short(self.link.remote_id()),

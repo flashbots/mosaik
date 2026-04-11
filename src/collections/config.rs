@@ -20,7 +20,7 @@ use {super::SyncConfig, crate::primitives::TicketValidator, std::sync::Arc};
 ///     .with_sync(SyncConfig::default().with_fetch_batch_size(5000))
 ///     .require_ticket(my_validator);
 /// ```
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct CollectionConfig {
 	pub(crate) sync: SyncConfig,
 	pub(crate) auth: Vec<Arc<dyn TicketValidator>>,

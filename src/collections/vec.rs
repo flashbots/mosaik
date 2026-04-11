@@ -172,6 +172,12 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	pub fn version(&self) -> Version {
 		Version(self.group.committed())
 	}
+
+	/// The group id of the underlying consensus group for this collection
+	/// instance.
+	pub fn group_id(&self) -> &GroupId {
+		self.group.id()
+	}
 }
 
 impl<T: Value + PartialEq, const IS_WRITER: bool> Vec<T, IS_WRITER> {

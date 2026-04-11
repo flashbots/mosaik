@@ -198,10 +198,15 @@ pub trait CollectionFromDef {
 }
 
 /// A compile-time definition of a collection that can be used to create reader
-/// and writer instances for that collection with a predefined `StoreId`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// and writer instances for that collection with a predefined `StoreId` and
+/// optional [`CollectionConfig`].
+///
+/// The config factory is a `fn() -> CollectionConfig` so that the definition
+/// remains `Copy` and usable in `const` contexts.
+#[derive(Clone, Copy)]
 pub struct CollectionDef<C: CollectionFromDef> {
 	pub store_id: StoreId,
+	config: Option<fn() -> CollectionConfig>,
 	_marker: core::marker::PhantomData<fn(&C)>,
 }
 
@@ -209,13 +214,24 @@ impl<C: CollectionFromDef> CollectionDef<C> {
 	pub const fn new(store_id: StoreId) -> Self {
 		Self {
 			store_id,
+			config: None,
 			_marker: core::marker::PhantomData,
 		}
+	}
+
+	/// Sets a factory function that produces the [`CollectionConfig`] for
+	/// this definition. The factory is called each time a reader or writer
+	/// is created.
+	#[must_use]
+	pub const fn with_config(mut self, config: fn() -> CollectionConfig) -> Self {
+		self.config = Some(config);
+		self
 	}
 
 	pub const fn from_reader(reader_def: &ReaderDef<C>) -> Self {
 		Self {
 			store_id: reader_def.store_id,
+			config: reader_def.config,
 			_marker: core::marker::PhantomData,
 		}
 	}
@@ -223,56 +239,55 @@ impl<C: CollectionFromDef> CollectionDef<C> {
 	pub const fn from_writer(writer_def: &WriterDef<C>) -> Self {
 		Self {
 			store_id: writer_def.store_id,
+			config: writer_def.config,
 			_marker: core::marker::PhantomData,
 		}
 	}
 
 	pub const fn as_reader(&self) -> ReaderDef<C> {
-		ReaderDef::new(self.store_id)
+		ReaderDef {
+			store_id: self.store_id,
+			config: self.config,
+			_marker: core::marker::PhantomData,
+		}
 	}
 
 	pub const fn as_writer(&self) -> WriterDef<C> {
-		WriterDef::new(self.store_id)
+		WriterDef {
+			store_id: self.store_id,
+			config: self.config,
+			_marker: core::marker::PhantomData,
+		}
 	}
 
 	#[inline]
 	pub fn reader(&self, network: &crate::Network) -> C::Reader {
-		C::reader(network, self.store_id)
-	}
-
-	#[inline]
-	pub fn reader_with_config(
-		&self,
-		network: &crate::Network,
-		config: impl Into<CollectionConfig>,
-	) -> C::Reader {
-		C::reader_with_config(network, self.store_id, config.into())
+		self.config.map_or_else(
+			|| C::reader(network, self.store_id),
+			|f| C::reader_with_config(network, self.store_id, f()),
+		)
 	}
 
 	#[inline]
 	pub fn writer(&self, network: &crate::Network) -> C::Writer {
-		C::writer(network, self.store_id)
-	}
-
-	#[inline]
-	pub fn writer_with_config(
-		&self,
-		network: &crate::Network,
-		config: impl Into<CollectionConfig>,
-	) -> C::Writer {
-		C::writer_with_config(network, self.store_id, config.into())
+		self.config.map_or_else(
+			|| C::writer(network, self.store_id),
+			|f| C::writer_with_config(network, self.store_id, f()),
+		)
 	}
 }
 
 /// A compile-time definition of a collection reader that can be used to create
-/// reader instances for a collection with a predefined `StoreId`.
+/// reader instances for a collection with a predefined `StoreId` and optional
+/// [`CollectionConfig`].
 ///
 /// This is most often exported by libraries that own the writer side of a
 /// collection, to allow users to create readers that connect to the writer's
 /// collection instance without needing to know the `StoreId`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy)]
 pub struct ReaderDef<C: CollectionFromDef> {
 	pub store_id: StoreId,
+	config: Option<fn() -> CollectionConfig>,
 	_marker: core::marker::PhantomData<fn(&C)>,
 }
 
@@ -280,27 +295,34 @@ impl<C: CollectionFromDef> ReaderDef<C> {
 	pub const fn new(store_id: StoreId) -> Self {
 		Self {
 			store_id,
+			config: None,
 			_marker: core::marker::PhantomData,
 		}
 	}
 
-	pub fn open(&self, network: &crate::Network) -> C::Reader {
-		C::reader(network, self.store_id)
+	/// Sets a factory function that produces the [`CollectionConfig`] for
+	/// this definition.
+	#[must_use]
+	pub const fn with_config(mut self, config: fn() -> CollectionConfig) -> Self {
+		self.config = Some(config);
+		self
 	}
 
-	pub fn open_with_config(
-		&self,
-		network: &crate::Network,
-		config: impl Into<CollectionConfig>,
-	) -> C::Reader {
-		C::reader_with_config(network, self.store_id, config.into())
+	pub fn open(&self, network: &crate::Network) -> C::Reader {
+		self.config.map_or_else(
+			|| C::reader(network, self.store_id),
+			|f| C::reader_with_config(network, self.store_id, f()),
+		)
 	}
 }
 
 /// A compile-time definition of a collection writer that can be used to create
-/// writer instances for a collection with a predefined `StoreId`.
+/// writer instances for a collection with a predefined `StoreId` and optional
+/// [`CollectionConfig`].
+#[derive(Clone, Copy)]
 pub struct WriterDef<C: CollectionFromDef> {
 	pub store_id: StoreId,
+	config: Option<fn() -> CollectionConfig>,
 	_marker: core::marker::PhantomData<fn(&C)>,
 }
 
@@ -308,19 +330,23 @@ impl<C: CollectionFromDef> WriterDef<C> {
 	pub const fn new(store_id: StoreId) -> Self {
 		Self {
 			store_id,
+			config: None,
 			_marker: core::marker::PhantomData,
 		}
 	}
 
-	pub fn open(&self, network: &crate::Network) -> C::Writer {
-		C::writer(network, self.store_id)
+	/// Sets a factory function that produces the [`CollectionConfig`] for
+	/// this definition.
+	#[must_use]
+	pub const fn with_config(mut self, config: fn() -> CollectionConfig) -> Self {
+		self.config = Some(config);
+		self
 	}
 
-	pub fn open_with_config(
-		&self,
-		network: &crate::Network,
-		config: impl Into<CollectionConfig>,
-	) -> C::Writer {
-		C::writer_with_config(network, self.store_id, config.into())
+	pub fn open(&self, network: &crate::Network) -> C::Writer {
+		self.config.map_or_else(
+			|| C::writer(network, self.store_id),
+			|f| C::writer_with_config(network, self.store_id, f()),
+		)
 	}
 }

@@ -81,13 +81,13 @@ impl GroupConfig {
 		&self.auth
 	}
 
-	/// Validates a peer's tickets against all configured validators.
+	/// Authorizes a peer's tickets against all configured validators.
 	///
 	/// Returns `Ok(None)` if no validators are configured.
 	/// Returns `Ok(Some(expiration))` with the earliest expiration if all
 	/// validators accept the peer.
 	/// Returns `Err(InvalidTicket)` if any validator rejects the peer.
-	pub fn validate_peer(
+	pub fn authorize_peer(
 		&self,
 		peer: &SignedPeerEntry,
 	) -> Result<Option<Expiration>, InvalidTicket> {

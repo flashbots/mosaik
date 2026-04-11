@@ -19,8 +19,8 @@ pub enum Error {
 	#[error("Invalid group secret key proof provided")]
 	InvalidGroupKeyProof,
 
-	#[error("Authentication failed")]
-	AuthFailed,
+	#[error("Unauthorized")]
+	Unauthorized,
 
 	#[error("Link error: {0}")]
 	Link(#[from] LinkError),

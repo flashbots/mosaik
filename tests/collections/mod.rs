@@ -1,3 +1,4 @@
+mod auth;
 mod cell;
 mod depq;
 mod map;

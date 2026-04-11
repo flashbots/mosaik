@@ -223,7 +223,7 @@ where
 		// by this worker loop.
 		let new_peers_in_group = snapshot.signed_peers().filter(|peer| {
 			peer.groups().contains(self.state.group_id())
-				&& self.state.config.validate_peer(peer).is_ok()
+				&& self.state.config.authorize_peer(peer).is_ok()
 		});
 
 		for peer in new_peers_in_group {

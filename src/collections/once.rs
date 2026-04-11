@@ -11,6 +11,7 @@ use {
 	},
 	crate::{
 		Group,
+		GroupId,
 		Network,
 		PeerId,
 		UniqueId,
@@ -113,6 +114,12 @@ impl<T: Value, const IS_WRITER: bool> Once<T, IS_WRITER> {
 	/// the latest committed state.
 	pub fn version(&self) -> Version {
 		Version(self.group.committed())
+	}
+
+	/// The group id of the underlying consensus group for this collection
+	/// instance.
+	pub fn group_id(&self) -> &GroupId {
+		self.group.id()
 	}
 
 	/// Waits for the cell to be set and returns its value.

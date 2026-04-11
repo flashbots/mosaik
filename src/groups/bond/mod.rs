@@ -219,15 +219,15 @@ impl<M: StateMachine> Bond<M> {
 		group: Arc<WorkerState<M>>,
 		peer: SignedPeerEntry,
 	) -> Result<(Self, BondEvents<M>), Error> {
-		if group.config.validate_peer(&peer).is_err() {
+		if group.config.authorize_peer(&peer).is_err() {
 			tracing::debug!(
 				network = %group.network_id(),
 				peer = %Short(peer.id()),
 				group = %Short(group.group_id()),
-				"bonding failed: no valid auth ticket",
+				"bonding failed: unauthorized",
 			);
 
-			return Err(Error::AuthFailed);
+			return Err(Error::Unauthorized);
 		}
 
 		// attempt to establish a new wire link to the remote peer
@@ -296,7 +296,7 @@ impl<M: StateMachine> Bond<M> {
 						network = %group.network_id(),
 						peer = %Short(peer.id()),
 						group = %Short(group.group_id()),
-						"remote peer rejected: authentication failed",
+						"remote peer rejected: unauthorized",
 					);
 
 					link
@@ -357,12 +357,12 @@ impl<M: StateMachine> Bond<M> {
 	) -> Result<(Self, BondEvents<M>), Error> {
 		let mut link = link;
 
-		if group.config.validate_peer(&peer).is_err() {
+		if group.config.authorize_peer(&peer).is_err() {
 			tracing::debug!(
 				network = %group.network_id(),
 				peer = %Short(peer.id()),
 				group = %Short(group.group_id()),
-				"rejecting bond: no valid auth ticket",
+				"rejecting bond: unauthorized",
 			);
 
 			link
@@ -370,7 +370,7 @@ impl<M: StateMachine> Bond<M> {
 				.await
 				.map_err(|e| Error::Link(e.into()))?;
 
-			return Err(Error::AuthFailed);
+			return Err(Error::Unauthorized);
 		}
 
 		// verify the remote peer's proof of knowledge of the group secret

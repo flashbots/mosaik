@@ -11,6 +11,7 @@ use {
 	},
 	crate::{
 		Group,
+		GroupId,
 		Network,
 		PeerId,
 		UniqueId,
@@ -102,10 +103,16 @@ impl<T: Key, const IS_WRITER: bool> Set<T, IS_WRITER> {
 		&self.when
 	}
 
-	/// The current version of the vector's state, which is the version of the
+	/// The current version of the set's state, which is the version of the
 	/// latest committed state.
 	pub fn version(&self) -> Version {
 		Version(self.group.committed())
+	}
+
+	/// The group id of the underlying consensus group for this collection
+	/// instance.
+	pub fn group_id(&self) -> &GroupId {
+		self.group.id()
 	}
 }
 
