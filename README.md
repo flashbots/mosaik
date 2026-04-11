@@ -515,7 +515,7 @@ Core primitives for building self-organized distributed systems in trusted, perm
 
 - [x] **TEE-based authorization** — gate access to streams, groups, and collections to hardware-attested peers using Intel TDX tickets and measurement validation
 - [ ] **Privacy Corridors** — end-to-end data isolation across chains of nodes and services; data that enters a corridor cannot be read or exfiltrated outside of it
-- [ ] **Trust zones** — network partitions that enforce privacy guarantees for all data and computation within them, backed by TEE hardware attestation
+- [ ] **Trust zones** — network partitions that enforce integrity and privacy guarantees for all data and computation within them, backed by TEE hardware attestation
 
 ### Stage 3: Decentralization & Permissionlessness
 
