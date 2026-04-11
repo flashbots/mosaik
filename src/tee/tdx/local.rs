@@ -49,8 +49,9 @@ pub struct NetworkTdxOps<'a>(&'a Network);
 impl NetworkTdxOps<'_> {
 	/// Checks if TDX is supported and available for generating tickets and
 	/// retrieving measurements on the local machine.
+	#[allow(clippy::unused_self)]
 	pub fn available(&self) -> bool {
-		self.ticket().is_ok()
+		Measurements::local().is_ok()
 	}
 
 	/// Creates a TDX attestation ticket for the current network instance and

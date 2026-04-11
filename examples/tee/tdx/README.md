@@ -16,8 +16,8 @@ The mode is selected automatically based on whether TDX hardware is detected at 
 - **TDX attestation tickets** — generating and installing hardware-signed attestation via `network.tdx().install_own_ticket()`
 - **TDX measurement validation** — using `TdxValidator::new().require_mrtd(...)` to enforce that consumers run the expected firmware
 - **Local measurement matching** — using `TdxValidator::new().require_own_mrtd()` and `.require_own_rtmr2()` to require peers to have the same measurements as the local machine, without hardcoding measurement values
-- **`stream!` macro with `require_ticket`** — compile-time stream declaration with baked-in TDX validation
-- **`collection!` macro with `require_ticket`** — compile-time collection declaration with TDX validation derived from local measurements
+- **`declare::stream!` macro with `require_ticket`** — compile-time stream declaration with baked-in TDX validation
+- **`declare::collection!` macro with `require_ticket`** — compile-time collection declaration with TDX validation derived from local measurements
 - **Build-time image creation** — the `build.rs` uses `mosaik::tdx::build::alpine()` to cross-compile the binary for TDX and package it with an Alpine Linux guest image
 
 ## Architecture
@@ -55,7 +55,7 @@ The mode is selected automatically based on whether TDX hardware is detected at 
 ## Building
 
 ```bash
-cargo build -p tdx-example --release
+cargo clean && cargo build -p tdx-example --release
 ```
 
 The build script will:
@@ -69,7 +69,7 @@ The build script will:
 
 ## Running
 
-Ensure that you're running binaries produced by the same build, because the network id is generated randomly per build
+Ensure that you're running binaries produced by the same build, because the network id is generated randomly per build. All peers sharing the same network id will automatically discover each other through mosaik's built-in DHT discovery — no manual peer configuration or address exchange is needed.
 
 **Producer (on any non-tdx machine):**
 
@@ -93,7 +93,7 @@ Launch two instances of the the generated TDX guest image on a TDX-capable host.
 sudo ./tdx-example/tdx-example-run-qemu.sh
 ```
 
-The guest binary detects TDX hardware, generates an attestation ticket, and subscribes to the stream. The producer validates the consumer's `MR_TD` measurement before accepting the subscription.
+The guest binary detects TDX hardware, generates an attestation ticket, and subscribes to the stream. The producer validates the consumer's `MR_TD` measurement before accepting the subscription. Since all instances share the same network id, they self-discover automatically via DHT — the producer and consumers will find each other without any explicit peer addresses.
 
 ## How the Stream Declaration Works
 
@@ -101,8 +101,8 @@ The guest binary detects TDX hardware, generates an attestation ticket, and subs
 declare::stream!(
     pub SecureConsumer = String,
     "mosaik.examples.tee.tdx.SecureConsumer",
-    consumer require_ticket: TdxValidator::new()
-        .require_mrtd("91eb2b44..."),
+      consumer require_ticket: TdxValidator::new()
+          .require_mrtd("91eb2b44..."),
 );
 ```
 
@@ -117,11 +117,9 @@ This declares a stream where:
 declare::collection!(
     pub SecureObservers = mosaik::collections::Map<PeerId, String>,
     "mosaik.examples.tee.tdx.SecureObservers",
-    require_ticket: TdxValidator::new()
-        .require_own_mrtd()
-        .expect("TDX must be available for SecureObservers")
-        .require_own_rtmr2()
-        .expect("TDX must be available for SecureObservers")
+      require_ticket: TdxValidator::new()
+        .require_own_mrtd().expect("TDX support")
+        .require_own_rtmr2().expect("TDX support")
 );
 ```
 

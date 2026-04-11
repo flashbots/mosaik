@@ -491,7 +491,7 @@ impl fmt::Debug for Pretty<'_, PeerEntry> {
 		writeln!(f, "  network: {}", self.network_id())?;
 		writeln!(
 			f,
-			"  ips: {:#?}",
+			"  ips: {:?}",
 			&self.address.ip_addrs().collect::<Vec<_>>()
 		)?;
 

@@ -8,18 +8,16 @@ use mosaik::{
 declare::stream!(
 	pub SecureConsumer = String,
 	"mosaik.examples.tee.tdx.SecureConsumer",
-	consumer require_ticket: TdxValidator::new()
-		.require_mrtd("91eb2b44d141d4ece09f0c75c2c53d247a3c68edd7fafe8a3520c942a604a407de03ae6dc5f87f27428b2538873118b7")
+	  consumer require_ticket: TdxValidator::new()
+		  .require_mrtd("91eb2b44d141d4ece09f0c75c2c53d247a3c68edd7fafe8a3520c942a604a407de03ae6dc5f87f27428b2538873118b7")
 );
 
 declare::collection!(
 	pub SecureObservers = mosaik::collections::Map<PeerId, String>,
 	"mosaik.examples.tee.tdx.SecureObservers",
-	require_ticket: TdxValidator::new()
-		.require_own_mrtd()
-		.expect("TDX must be available for SecureObservers")
-		.require_own_rtmr2()
-		.expect("TDX must be available for SecureObservers")
+	  require_ticket: TdxValidator::new()
+		  .require_own_mrtd().expect("TDX support")
+		  .require_own_rtmr2().expect("TDX support")
 );
 
 #[tokio::main]
@@ -81,17 +79,22 @@ async fn consumer_flow(network: Network) -> anyhow::Result<()> {
 	let my_peer_id = network.local().id();
 
 	loop {
-		tokio::select! {
-			Some(item) = consumer.next() => {
-				println!("Received stream item: {item}");
-				let _ = observers.insert(my_peer_id, item).await;
-			}
-
+		tokio::select! { biased;
 			// When the observers collection is updated, print its current contents.
 			() = observers.when().updated() => {
 				println!("SecureObservers collection changed:");
 				for (peer_id, value) in observers.iter() {
-					println!("  {peer_id}: {value}");
+					println!("  {} observed: {value}", Short(peer_id));
+				}
+				println!();
+			}
+
+			Some(item) = consumer.next() => {
+				println!("Received stream item: {item}");
+				let _ = observers.insert(my_peer_id, item).await;
+				println!("SecureObservers collection changed:");
+				for (peer_id, value) in observers.iter() {
+					println!("  {} observed: {value}", Short(peer_id));
 				}
 				println!();
 			}
@@ -109,9 +112,9 @@ async fn producer_flow(network: Network) -> anyhow::Result<()> {
 	);
 
 	println!("Waiting for stream to come online...");
-	producer.when().online().await;
 
 	loop {
+		producer.when().online().await;
 		println!("Producing item on stream...");
 		let msg = format!(
 			"Hello at timestamp {} from {}",
@@ -120,7 +123,9 @@ async fn producer_flow(network: Network) -> anyhow::Result<()> {
 				.as_secs(),
 			Short(network.local().id())
 		);
-		producer.send(msg).await?;
+		if let Err(e) = producer.send(msg).await {
+			eprintln!("Failed to send message: {:?}", e);
+		}
 		tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 	}
 }
