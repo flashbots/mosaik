@@ -1,4 +1,35 @@
-//! Stream Consumers
+//! # Consumers
+//!
+//! A [`Consumer`] subscribes to a typed data stream produced by a
+//! remote [`Producer`](super::Producer). Discovery of matching
+//! producers, subscription management, and reconnection after
+//! failures are all handled automatically by a background worker
+//! task.
+//!
+//! Consumers implement [`futures::Stream`], so they can be used
+//! directly with async combinators, `select!`, and other stream
+//! adapters. A [`recv`](Consumer::recv) convenience method is also
+//! available for simple polling loops.
+//!
+//! # Online conditions
+//!
+//! Like producers, consumers have an online/offline state governed
+//! by configurable conditions (default: at least one connected
+//! producer):
+//!
+//! ```rust,ignore
+//! let consumer = network.streams().consumer::<SensorReading>()
+//!     .online_when(|c| c.minimum_of(1))
+//!     .build();
+//!
+//! consumer.when().online().await;
+//! ```
+//!
+//! # Multiple consumers
+//!
+//! Each [`Consumer`] instance has its own worker task and receives
+//! its own copy of the data. Multiple consumers for the same stream
+//! id operate independently.
 
 use {
 	crate::{

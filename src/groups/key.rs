@@ -34,8 +34,7 @@ pub type SecretProof = Digest;
 ///
 /// - During handshake, peers prove knowledge of the secret without revealing
 ///   the secret itself by generating a proof of knowledge derived from the
-///   secret and the shared random (see [`Link::shared_random`]) value for the
-///   link.
+///   secret and the shared random value for the link.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GroupKey {
 	/// The secret key used to derive the group id and authenticate peers during

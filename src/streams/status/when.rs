@@ -92,7 +92,7 @@ impl When {
 
 	/// Returns a future that resolves when the consumer or producer is subscribed
 	/// to at least one peer. This can be customized and combined with other
-	/// conditions using the methods on the returned [`SubscriptionCondition`].
+	/// conditions using the methods on the returned [`ChannelConditions`].
 	pub fn subscribed(&self) -> ChannelConditions {
 		let mut active = self.active.clone();
 		active.mark_changed();
@@ -112,7 +112,7 @@ impl When {
 	/// Returns a future that resolves when the consumer or producer does not have
 	/// any subscriptions. This can be customized and combined with
 	/// other conditions using the methods on the returned
-	/// [`SubscriptionCondition`].
+	/// [`ChannelConditions`].
 	///
 	/// This is equivalent to calling `subscribed().not()`.
 	pub fn unsubscribed(&self) -> ChannelConditions {

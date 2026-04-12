@@ -7,10 +7,9 @@ use {
 		ticket::TdxTicket,
 	},
 	crate::{
-		TicketValidator,
 		UniqueId,
 		discovery::PeerEntry,
-		primitives::{Expiration, InvalidTicket},
+		primitives::{Expiration, InvalidTicket, TicketValidator},
 	},
 };
 

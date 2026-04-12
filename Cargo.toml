@@ -6,12 +6,13 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.93"
-version = "0.3.8"
+version = "0.3.11"
 license = "MIT"
-homepage = "https://github.com/flashbots/mosaik"
+homepage = "https://docs.mosaik.world"
+documentation = "https://docs.rs/mosaik"
 repository = "https://github.com/flashbots/mosaik"
 authors = ["Flashbots <info@flashbots.net>", "Karim Agha <karim@flashbots.net>"]
-exclude = [".github/"]
+exclude = [".github/", ".local/", ".claude/"]
 publish = ["mosaik", "mosaik-macros"]
 
 [workspace.dependencies]
@@ -50,6 +51,7 @@ version.workspace = true
 license.workspace = true
 homepage.workspace = true
 repository.workspace = true
+documentation.workspace = true
 authors.workspace = true
 exclude.workspace = true
 edition.workspace = true
@@ -57,6 +59,10 @@ rust-version.workspace = true
 
 [lib]
 doctest = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [[bin]]
 name = "mosaik"
@@ -67,7 +73,7 @@ required-features = ["cli"]
 workspace = true
 
 [features]
-default = ["cli"]
+default = ["cli", "tdx"]
 cli = ["clap", "colored"]
 
 tee = []

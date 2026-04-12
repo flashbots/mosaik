@@ -1,4 +1,38 @@
-//! Stream Producers
+//! # Producers
+//!
+//! A [`Producer`] publishes typed data to the network. Remote
+//! [`Consumer`](super::Consumer)s discover producers automatically
+//! through the [`discovery`](crate::discovery) subsystem and subscribe
+//! over QUIC. Each connected consumer gets its own independent sender
+//! loop, so a slow consumer cannot stall the others.
+//!
+//! Producers implement [`futures::Sink`], so they integrate directly
+//! with the async ecosystem (combinators, `select!`, etc.).
+//!
+//! # Online conditions
+//!
+//! A producer is either **online** or **offline**. When offline,
+//! `Sink::send` will wait and
+//! [`Producer::try_send`] will return [`Error::Offline`]. The online
+//! condition is configured via the [`Builder`] (default: at least one
+//! active consumer) and re-evaluated whenever the subscriber set
+//! changes:
+//!
+//! ```rust,ignore
+//! let producer = network.streams().producer::<SensorReading>()
+//!     .online_when(|c| c.minimum_of(2))
+//!     .build()?;
+//!
+//! // Block until the condition is met
+//! producer.when().online().await;
+//! ```
+//!
+//! # Multiple producers
+//!
+//! Multiple [`Producer`] handles for the same stream id share the
+//! same underlying fanout sink (mpsc). If a producer for a given
+//! datum type already exists, [`Streams::produce`](super::Streams::produce)
+//! returns the existing handle.
 
 use {
 	crate::{
@@ -53,7 +87,7 @@ pub use {
 ///   of subscribers, required tags, or custom predicates on the current set of
 ///   subscribers. Online conditions are re-evaluated whenever there is a change
 ///   in the set of active subscribers. Online conditions can be configured via
-///   the [`network.streams().producer().online_when(..)`] API. By default,
+///   the `network.streams().producer().online_when(..)` API. By default,
 ///   producers are online when they have at least one active consumer.
 ///
 /// - Using `Sink::send` on a producer will first wait for the producer to be

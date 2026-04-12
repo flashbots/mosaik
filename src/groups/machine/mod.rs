@@ -49,7 +49,7 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 	/// process for followers that are not up to date with the committed group
 	/// state.
 	///
-	/// When writing your own state machine use [`LogReplaySync`] as the initial
+	/// When writing your own state machine use [`LogReplaySync`](super::LogReplaySync) as the initial
 	/// state sync implementation, which works with any state machine as a
 	/// starting point.
 	type StateSync: StateSync<Machine = Self>;
@@ -94,7 +94,7 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 	/// Returns a new instance of the state synchronization implementation that is
 	/// used to synchronize lagging followers with the current state of the group.
 	///
-	/// When writing your own state machine use [`LogReplaySync`] as the initial
+	/// When writing your own state machine use [`LogReplaySync`](super::LogReplaySync) as the initial
 	/// state sync implementation, which works with any state machine as a
 	/// starting point.
 	fn state_sync(&self) -> Self::StateSync;

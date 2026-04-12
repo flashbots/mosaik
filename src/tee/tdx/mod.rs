@@ -1,3 +1,63 @@
+//! # Intel TDX
+//!
+//! Intel Trust Domain Extensions (TDX) support for mosaik nodes
+//! running inside a TDX Trust Domain. This module provides everything
+//! needed to generate, carry, and verify hardware attestation quotes
+//! within a mosaik network.
+//!
+//! # Key types
+//!
+//! | Type | Role |
+//! |------|------|
+//! | `NetworkTdxExt` | Extension trait on [`Network`](crate::network::Network) for generating TDX tickets from within an enclave |
+//! | `TdxTicket` | A mosaik [`Ticket`](crate::primitives::Ticket) wrapping a TDX attestation quote |
+//! | `Tdx` | [`TicketValidator`](crate::primitives::TicketValidator) that verifies TDX quotes against expected measurements |
+//! | `Quote` | The raw TDX attestation quote (re-exported from `tdx_quote`) |
+//!
+//! # Usage
+//!
+//! On the **attesting** side (inside a TDX enclave), generate a ticket
+//! and publish it to the discovery catalog:
+//!
+//! ```rust,ignore
+//! use mosaik::*;
+//!
+//! // Generates a TDX quote binding the node's PeerId
+//! let ticket = network.tdx().ticket()?;
+//! network.discovery().add_ticket(ticket);
+//! ```
+//!
+//! alternatively, the `install_own_ticket` method can be used to generate and
+//! install the ticket in one step:
+//!
+//! ```rust,ignore
+//! if network.tdx().available() {
+//! 	network.tdx().install_own_ticket()?;
+//! }
+//! ```
+//!
+//! On the **verifying** side, require a valid TDX attestation when
+//! joining a group or subscribing to a stream:
+//!
+//! ```rust,ignore
+//! use mosaik::tee::tdx::Tdx;
+//!
+//! let group1 = network.groups()
+//!     .with_key(key)
+//!     .with_state_machine(my_machine)
+//!     .require_ticket(Tdx::new()
+//!         .with_expected_mrtd("91eb2b44d..38873118b7"))
+//!     .join();
+//!
+//! // require the joining node to have the same measurement as us
+//! let group2 = network.groups()
+//!     .with_key(key)
+//!     .with_state_machine(my_machine)
+//!     .require_ticket(Tdx::new().with_own_mrtd().expect("tdx support"))
+//!     .join();
+
+//! ```
+
 mod local;
 mod measure;
 mod ticket;

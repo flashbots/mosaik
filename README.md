@@ -19,7 +19,7 @@
 
 # Overview
 
-Mosaik provides primitives for automatic peer discovery, typed pub/sub data streams, availability groups with Raft consensus, and replicated data structures. Nodes deployed on plain VMs self-organize into a functioning topology using only a secret key, a gossip seed, and role tags — **no orchestration, configuration templates, or DevOps glue required.**
+Mosaik provides primitives for automatic peer discovery, typed pub/sub data streams, consensus groups with Raft, and replicated data structures. Nodes deployed on plain VMs self-organize into a functioning topology using only a secret key, a gossip seed, and role tags — **no orchestration, configuration templates, or DevOps glue required.**
 
 All resource identifiers (networks, streams, collections, groups) are **intent-addressed**: derived from human-readable strings via blake3 hashing. Two nodes that independently declare the same name converge on the same identifier without prior coordination — enabling forward references, independent deployment, and coordination-free bootstrapping.
 
@@ -27,7 +27,7 @@ The core claim: when binaries are deployed on arbitrary machines, the network sh
 
 Mosaik has first-class support for **Trusted Execution Environments (TEEs)** — nodes running inside Intel TDX enclaves can generate hardware-attested identity tickets, and other nodes can require valid attestation before accepting connections. This enables cryptographic proof of what software each peer is running, without out-of-band coordination.
 
-Mosaik initially targets trusted, permissioned networks such as L2 chains controlled by a single organization. All members are assumed honest; the system is not yet Byzantine fault tolerant.
+Mosaik initially targets trusted, permissioned networks such as L2 chains controlled by a single organization. All members are assumed honest; the system is not Byzantine fault tolerant. For stronger integrity guarantees, groups can optionally require hardware attestations (e.g. Intel TDX) to cryptographically prove that every member is running the expected software.
 
 > [!TIP]
 > To see mosaik in action, browse the integration tests in the [`tests`](tests/) directory or run one of the [examples](examples/):
@@ -449,7 +449,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 | `src/`             | Core library — all shared primitives, protocols, and APIs                        |
 | `src/discovery/`   | Peer discovery, announcement, and catalog synchronization                        |
 | `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria                 |
-| `src/groups/`      | Availability groups: bonds, Raft consensus, replicated state machines            |
+| `src/groups/`      | Consensus groups: bonds, Raft consensus, replicated state machines               |
 | `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue` |
 | `src/network/`     | Transport layer, connection management, typed links                              |
 | `src/primitives/`  | Identifiers, formatting helpers, async work queues, etc.                         |

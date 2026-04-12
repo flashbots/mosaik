@@ -1,186 +1,187 @@
 # State Synchronization
 
-When a new peer joins a group or falls too far behind the leader's log, it
-needs a **snapshot** of the current state rather than replaying potentially
-thousands of log entries. Mosaik implements a distributed state sync mechanism
-that spreads the load across all group members.
+When a new peer joins a group or falls too far behind the leader's log, it needs to catch up to the current committed state before it can participate as a voting member. Mosaik provides a pluggable state synchronization framework through the `StateSync` trait, with two built-in implementations.
 
-## Why not leader-only snapshots?
+## Overview
 
-In standard Raft, the leader ships snapshots to lagging followers. This has
-two problems:
-
-1. **Leader bottleneck** — the leader must serialize and transmit potentially
-   large state to each lagging follower.
-2. **Snapshot inconsistency** — the snapshot must be taken at a consistent
-   point, which may block the leader.
-
-Mosaik solves both by having **all peers** participate in snapshot creation and
-distribution.
-
-## The six-step process
+State sync is triggered when a follower receives an `AppendEntries` message whose preceding log position does not match the follower's local log — indicating a gap. At that point the group creates a **sync session** on the lagging follower and the session drives the catch-up process to completion.
 
 ```text
-1. Follower             2. Leader              3. All peers
-   detects lag              wraps request         create snapshot
-   ────────────             as log entry          at committed
-   sends                    ────────────          position
-   RequestSnapshot          replicates it         ──────────────
-
-4. Follower             5. Follower            6. Follower
-   discovers which          fetches batches       installs snapshot
-   peers have               from multiple         and resumes
-   snapshots                peers in parallel     normal operation
-   ──────────────           ─────────────────     ──────────────────
+Follower detects gap
+        │
+        ▼
+ ┌─────────────────┐
+ │  StateSync       │──creates──► Session (on the lagging follower)
+ │  implementation  │──creates──► Provider (on every peer, at group init)
+ └─────────────────┘
+        │
+        ▼
+ Session exchanges messages with Providers
+ on remote peers until fully caught up
+        │
+        ▼
+ Follower resumes normal operation
 ```
 
-### Step 1: Detect lag
+During catch-up, any new `AppendEntries` from the leader are **buffered** by the session and replayed once the gap is closed.
 
-A follower realizes it is behind when it receives an `AppendEntries` message
-referencing a log prefix it does not have. It sends a `StateSync` message
-to the leader requesting a snapshot.
+## The `StateSync` trait
 
-### Step 2: Replicate the request
+Every state sync implementation provides four things:
 
-The leader wraps the snapshot request as a special log entry and replicates
-it through the normal Raft consensus path. This ensures all peers see the
-request at the **same log position**.
+1. **`signature()`** — a unique identifier for the implementation and its configuration. This is part of the `GroupId` derivation, so all group members must use the same implementation with the same settings.
 
-### Step 3: Create snapshots
+2. **`Provider`** — a long-lived object created once per peer at group initialization. Providers serve state to remote sessions (e.g. by responding to fetch requests). They run on **all** peers, including the leader.
 
-When each peer commits the snapshot request entry, it creates a point-in-time
-snapshot of its state machine. Because all peers see the request at the same
-committed index, **all snapshots are consistent** — they represent the same
-logical state.
+3. **`Session`** — a short-lived object created on the lagging follower when a gap is detected. The session drives the catch-up process by exchanging messages with remote providers, and terminates once the follower is fully synchronized.
 
-The `im` crate's persistent data structures make snapshotting O(1) by
-sharing structure with the live state (copy-on-write).
+4. **`Message`** — the wire-level protocol messages exchanged between sessions and providers.
 
-### Step 4: Discover snapshot sources
+Both the provider and session are polled by the group's internal work scheduler and can send messages to any bonded peer via the `SyncContext`.
 
-The follower queries peers to find out which ones have a snapshot available
-for the requested position. Snapshots have a **TTL** (default 10 seconds),
-so they eventually expire if not fetched.
+## `LogReplaySync` — log entry replay
 
-### Step 5: Parallel fetching
+The built-in `LogReplaySync` is the simplest sync strategy. It recovers missing log entries by fetching them directly from peers that still have them in their log storage.
 
-The follower fetches snapshot data in **batches** from multiple peers
-simultaneously:
+### How it works
 
 ```text
-Follower ──batch request──► Peer A  (items 0..2000)
-           batch request──► Peer B  (items 2000..4000)
-           batch request──► Peer C  (items 4000..6000)
-                   ...
+1. Lagging follower            2. Peers respond with
+   broadcasts                     available ranges
+   AvailabilityRequest            AvailabilityResponse(range)
+   to all bonded peers
+
+3. Follower partitions         4. Follower applies
+   the needed range               fetched entries to
+   across responding peers         the state machine
+   and fetches in parallel         and resumes
+   (FetchEntriesRequest)
 ```
 
-Each batch contains up to `fetch_batch_size` (default 2000) items. By
-distributing fetches across peers, the load is balanced and the follower
-receives data faster.
+1. The lagging follower broadcasts an `AvailabilityRequest` to all bonded peers.
+2. Each peer responds with the range of log entries it has available.
+3. The follower partitions the missing range across responding peers for balanced load, sends `FetchEntriesRequest` messages, and receives `FetchEntriesResponse` batches in parallel. At most one request is in-flight per peer.
+4. Once all entries are fetched, they are applied to the state machine in order, buffered entries are replayed, and the follower resumes normal operation.
 
-### Step 6: Install and resume
+### Characteristics
 
-Once all batches are received, the follower:
+- **Works with any `StateMachine`** — no additional traits required.
+- **No snapshots** — relies entirely on the raw log being available.
+- **Leader deprioritized** — the follower prefers syncing from other followers to avoid overloading the leader.
+- **Does not support log pruning** — all entries must remain in storage for the lifetime of the group. For high-throughput groups, consider on-disk log storage.
 
-1. Installs the snapshot as its new state machine state.
-2. Updates its committed cursor to the snapshot position.
-3. Replays any log entries received **after** the snapshot position.
-4. Resumes normal follower operation (including voting).
+| Parameter       | Default | Description                                  |
+| --------------- | ------- | -------------------------------------------- |
+| `batch_size`    | 2000    | Maximum entries per fetch request            |
+| `fetch_timeout` | 25s     | Timeout for each fetch operation             |
 
-## Traits
+### When to use
 
-### `SnapshotStateMachine`
+`LogReplaySync` is a good starting point for custom state machines. It is best suited for:
 
-State machines that support sync must implement:
+- Groups with low to moderate command throughput
+- State machines where log replay is fast
+- Development and testing
+
+## `SnapshotSync` — snapshot transfer (collections)
+
+The built-in collections (`Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue`) use `SnapshotSync`, a more sophisticated strategy that transfers a point-in-time snapshot of the state machine instead of replaying log entries. This is more efficient for large state because the snapshot size is proportional to the current state, not the full history.
+
+### Why not leader-only snapshots?
+
+In standard Raft, the leader ships snapshots to lagging followers. This has two problems:
+
+1. **Leader bottleneck** — the leader must serialize and transmit potentially large state to each lagging follower.
+2. **Snapshot inconsistency** — taking a snapshot at a consistent point is tricky when the leader is also processing new commands.
+
+Mosaik solves both by having **all peers** participate in snapshot creation and distribution.
+
+### How it works
+
+```text
+1. Follower              2. Leader wraps        3. All peers create
+   detects lag              request as a           snapshot at the
+   ─────────────            log entry and          committed position
+   sends                    replicates it          of that entry
+   RequestSnapshot       ─────────────────      ─────────────────────
+
+4. Follower              5. Follower fetches    6. Follower installs
+   discovers which          batches from           snapshot and
+   peers have               multiple peers         resumes normal
+   snapshots ready          in parallel            operation
+─────────────────        ─────────────────      ─────────────────────
+```
+
+1. **Detect lag.** A follower receives an `AppendEntries` referencing a log prefix it does not have. It sends a `RequestSnapshot` message to the leader.
+
+2. **Replicate the request.** The leader wraps the snapshot request as a special command and replicates it through normal Raft consensus. This ensures all peers see the request at the **same log position**.
+
+3. **Create snapshots.** When each peer commits the snapshot command, it creates a snapshot of its state at that position. Because all peers see the request at the same committed index, **all snapshots are consistent**. The `im` crate's persistent data structures make snapshotting O(1) via structural sharing.
+
+4. **Discover snapshot sources.** The follower receives `SnapshotReady` messages from peers that have a snapshot available. Snapshots have a configurable **TTL** (default 10s) and are discarded after inactivity.
+
+5. **Parallel fetching.** The follower fetches snapshot data in batches from multiple peers simultaneously:
+
+   ```text
+   Follower ──FetchDataRequest──► Peer A  (items 0..2000)
+              FetchDataRequest──► Peer B  (items 2000..4000)
+              FetchDataRequest──► Peer C  (items 4000..6000)
+   ```
+
+   Each batch contains up to `fetch_batch_size` items. Distributing fetches across peers balances the load.
+
+6. **Install and resume.** The follower installs the snapshot as its new state, fast-forwards its committed cursor to the snapshot position, replays any buffered entries received during sync, and resumes as a voting member.
+
+### The `SnapshotStateMachine` trait
+
+State machines that support snapshot sync must implement:
 
 ```rust,ignore
 trait SnapshotStateMachine: StateMachine {
     type Snapshot: Snapshot;
 
-    fn snapshot(&self) -> Self::Snapshot;
-    fn install_snapshot(&mut self, items: Vec<SnapshotItem>);
+    fn create_snapshot(&self) -> Self::Snapshot;
+    fn install_snapshot(&mut self, snapshot: Self::Snapshot);
 }
 ```
 
-- `snapshot()` creates a serializable snapshot of the current state.
-- `install_snapshot()` replaces the state with data received from peers.
+- `create_snapshot()` creates a point-in-time snapshot (O(1) for `im`-backed collections).
+- `install_snapshot()` replaces the state machine's state with the fetched snapshot data.
 
-### `Snapshot`
-
-The snapshot itself is iterable:
+The `Snapshot` trait itself is iterable and appendable:
 
 ```rust,ignore
 trait Snapshot {
-    fn len(&self) -> usize;
-    fn into_items(self) -> impl Iterator<Item = SnapshotItem>;
+    type Item: SnapshotItem;
+
+    fn len(&self) -> u64;
+    fn iter_range(&self, range: Range<u64>) -> Option<impl Iterator<Item = Self::Item>>;
+    fn append(&mut self, items: impl IntoIterator<Item = Self::Item>);
 }
 ```
 
-Each collection type implements this — for example, `MapSnapshot` yields
-key-value pairs as serialized `SnapshotItem` bytes.
-
-### `SnapshotItem`
-
-```rust,ignore
-struct SnapshotItem {
-    key: Bytes,
-    value: Bytes,
-}
-```
-
-The generic key/value format allows any collection type to participate in the
-same sync protocol.
-
-## Configuration
-
-State sync behavior is controlled by `SyncConfig`:
+All built-in collection types implement these traits. For example, `Map` yields key-value pairs, `Vec` yields indexed entries, and `PriorityQueue` preserves both its `by_key` and `by_priority` indices across sync.
 
 | Parameter                  | Default | Description                                  |
 | -------------------------- | ------- | -------------------------------------------- |
 | `fetch_batch_size`         | 2000    | Maximum items per batch request              |
 | `snapshot_ttl`             | 10s     | How long a snapshot remains available        |
-| `snapshot_request_timeout` | 15s     | Timeout for requesting a snapshot from peers |
+| `snapshot_request_timeout` | 15s     | Timeout for the initial snapshot request     |
 | `fetch_timeout`            | 5s      | Timeout for each batch fetch operation       |
 
 ### Tuning tips
 
-- **Large state**: Increase `fetch_batch_size` to reduce round trips, but
-  watch memory usage.
+- **Large state**: Increase `fetch_batch_size` to reduce round trips, but watch memory usage.
 - **Slow networks**: Increase `fetch_timeout` and `snapshot_request_timeout`.
-- **Fast churn**: Increase `snapshot_ttl` if snapshots expire before followers
-  can fetch them.
+- **Fast churn**: Increase `snapshot_ttl` if snapshots expire before followers can fetch them.
 
-## Log replay sync
+## Writing a custom `StateSync`
 
-For groups that use `Storage` (log persistence) instead of in-memory state,
-a `LogReplaySync` alternative exists. Instead of shipping snapshots, the
-joining peer replays log entries from a **replay provider** — another peer
-that streams its stored log entries.
+For domain-specific needs, you can implement the `StateSync` trait directly. The framework gives you:
 
-This approach is simpler but only works when:
+- A `SyncContext` with access to the state machine, log storage, committed position, and a message-passing API to any bonded peer.
+- Full control over the wire protocol via your own `Message` type.
+- A `Provider` that runs on all peers for the group's lifetime.
+- A `Session` that runs only on the lagging follower for the duration of catch-up.
 
-- The log fits in available storage.
-- Replay is fast enough relative to new entries arriving.
-
-The `replay` module provides `ReplayProvider` and `ReplaySession` types for
-this path.
-
-## Collections and state sync
-
-All built-in collection types (`Map`, `Vec`, `Set`, `Cell`, `Once`,
-`PriorityQueue`) implement `SnapshotStateMachine`. Their internal state
-machines produce snapshots:
-
-```text
-MapStateMachine  ──snapshot()──► MapSnapshot (HashMap entries)
-VecStateMachine  ──snapshot()──► VecSnapshot (indexed entries)
-SetStateMachine  ──snapshot()──► SetSnapshot (set members)
-RegStateMachine  ──snapshot()──► CellSnapshot (optional value)
-OnceStateMachine ──snapshot()──► OnceSnapshot (optional value)
-DepqStateMachine ──snapshot()──► PriorityQueueSnapshot (by_key + by_priority)
-```
-
-The dual-index structure of `PriorityQueue` is preserved across sync — both
-the `by_key` and `by_priority` indices are transmitted and reconstructed.
-`Cell` and `Once` snapshots are trivial (at most one item), so sync
-completes in a single batch.
+This flexibility allows strategies like delta sync, merkle-tree-based reconciliation, or any other approach suited to your state machine's structure.

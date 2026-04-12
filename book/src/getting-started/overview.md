@@ -8,7 +8,7 @@ Mosaik is a Rust runtime for building self-organizing, leaderless distributed sy
 | -------------------------- | ------------------------------------------------------------------------------------------------- |
 | **Self-organizing**        | Nodes discover each other via gossip and form the correct topology automatically                  |
 | **Typed pub/sub**          | Stream any serializable Rust type between nodes with backpressure and filtering                   |
-| **Raft consensus**         | Form availability groups with leader election and replicated state machines                       |
+| **Raft consensus**         | Form consensus groups with leader election and replicated state machines                          |
 | **Replicated collections** | Distributed `Map`, `Vec`, `Set`, `Cell`, `Once`, and `PriorityQueue` with strong consistency  |
 | **QUIC transport**         | Built on [iroh](https://github.com/n0-computer/iroh) for modern, encrypted P2P networking         |
 | **Relay support**          | Nodes behind NAT can communicate via relay servers with automatic hole-punching                   |
@@ -45,7 +45,7 @@ Typed, async pub/sub data channels. Any Rust type implementing `Serialize + Dese
 
 ### Groups
 
-Availability groups coordinated by a modified Raft consensus protocol. Nodes sharing a group key form a cluster, elect a leader, and replicate commands through a shared log. Custom state machines define application logic that runs deterministically on all group members.
+Consensus groups coordinated by a modified Raft consensus protocol. Nodes sharing a group key form a cluster, elect a leader, and replicate commands through a shared log. Custom state machines define application logic that runs deterministically on all group members.
 
 ### Collections
 
@@ -64,6 +64,8 @@ Mosaik is **not** Byzantine fault tolerant. All nodes are assumed to be honest a
 - Simpler consensus (no need for 2/3 supermajority)
 - Higher throughput (fewer message rounds)
 - Simplified state sync (no fraud proofs needed)
+
+For stronger integrity guarantees, groups can optionally require hardware attestations via `TicketValidator`s. When combined with TEE enclaves such as Intel TDX, this provides cryptographic proof that every group member is running the expected software, hardening the trust model against compromised or tampered nodes.
 
 This makes mosaik ideal for infrastructure controlled by a single organization, such as L2 chains, internal microservices, or distributed compute clusters.
 

@@ -1,4 +1,42 @@
-//! Network management module
+//! # Network
+//!
+//! The primary entry point to mosaik. A [`Network`] wraps an
+//! [iroh](https://docs.rs/iroh) QUIC endpoint, bootstraps the transport
+//! layer, and composes the four subsystems —
+//! [`discovery`](crate::discovery), [`streams`](crate::streams),
+//! [`groups`](crate::groups), and [`collections`](crate::collections)
+//! — behind a single handle.
+//!
+//! # Node Identity
+//!
+//! Every node has a globally unique [`PeerId`] derived from its secret
+//! key. If no key is provided at construction time a random one is
+//! generated. Peers are addressed by their public key; the discovery
+//! subsystem resolves the corresponding transport addresses.
+//!
+//! # Network Identity
+//!
+//! Nodes are partitioned into logical networks identified by a
+//! [`NetworkId`] (a blake3 hash of a human-readable name). Only nodes
+//! sharing the same `NetworkId` discover and connect to each other.
+//!
+//! # Quick start
+//!
+//! ```rust
+//! // Minimal — random key, default discovery
+//! let net = Network::new(NetworkId::random()).await?;
+//!
+//! // Customized
+//! let net = Network::builder("my-app")
+//! 	.with_secret_key(key)
+//! 	.with_discovery(
+//! 		discovery::Config::builder()
+//! 			.with_tags(vec![tag!("api")])
+//! 			.with_bootstrap(vec![seed_peer]),
+//! 	)
+//! 	.build()
+//! 	.await?;
+//! ```
 
 use {
 	crate::{
@@ -86,13 +124,15 @@ pub type PeerId = iroh::EndpointId;
 /// Public construction API
 impl Network {
 	/// Creates a new network builder with a given network id.
-	pub fn builder(network_id: NetworkId) -> NetworkBuilder {
+	pub fn builder(network_id: impl Into<NetworkId>) -> NetworkBuilder {
 		NetworkBuilder::default().with_network_id(network_id)
 	}
 
 	/// Creates and returns a new [`Network`] instance with the given network ID
 	/// and default settings.
-	pub async fn new(network_id: NetworkId) -> Result<Self, NetworkError> {
+	pub async fn new(
+		network_id: impl Into<NetworkId>,
+	) -> Result<Self, NetworkError> {
 		NetworkBuilder::default()
 			.with_network_id(network_id)
 			.build()

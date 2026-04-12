@@ -1,4 +1,4 @@
-//! Bonds — persistent peer-to-peer connections within an availability group.
+//! Bonds — persistent peer-to-peer connections within a consensus group.
 //!
 //! A **bond** is a long-lived, bidirectional connection between the local node
 //! and a single remote peer that belongs to the same group. Every node in a

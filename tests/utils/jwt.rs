@@ -4,11 +4,10 @@ use {
 	itertools::Itertools,
 	jwt::{FromBase64, Header, ToBase64, VerifyingAlgorithm},
 	mosaik::{
-		TicketValidator,
 		UniqueId,
 		discovery::PeerEntry,
 		id,
-		primitives::{Expiration, InvalidTicket},
+		primitives::{Expiration, InvalidTicket, TicketValidator},
 	},
 	serde_json::Value,
 	std::{collections::BTreeMap, sync::Arc},

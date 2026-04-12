@@ -1,4 +1,36 @@
-//! Automatic topology discovery
+//! # Discovery
+//!
+//! Automatic, protocol-level peer discovery for mosaik networks. Nodes
+//! announce their presence, capabilities ([`Tag`]s), authentication
+//! [`Ticket`]s, published [`streams`](crate::streams), and joined
+//! [`groups`](crate::groups) through two complementary protocols:
+//!
+//! - **Gossip announcements** — real-time broadcast of signed presence
+//!   entries via iroh-gossip. Changes propagate within seconds.
+//! - **Catalog synchronization** — full bidirectional exchange of known
+//!   peer entries for catch-up after network partitions or late joins.
+//!
+//! A background DHT layer via [pkarr](https://pkarr.org) provides
+//! bootstrap connectivity so that the very first nodes on a network
+//! can find each other without any manual configuration beyond sharing
+//! a [`NetworkId`](crate::NetworkId).
+//!
+//! The local [`Catalog`] is the synchronized view of all known peers.
+//! Higher-level subsystems (streams, groups, collections) consume
+//! catalog updates to drive automatic connection management.
+//!
+//! # Quick start
+//!
+//! Discovery is started automatically when a [`Network`](crate::Network)
+//! is created. Access the live catalog and event stream through the
+//! [`Discovery`] handle:
+//!
+//! ```rust,ignore
+//! let catalog = network.discovery().catalog();
+//! for peer in catalog.peers() {
+//!     println!("{}: {:?}", peer.id(), peer.tags());
+//! }
+//! ```
 
 use {
 	crate::{

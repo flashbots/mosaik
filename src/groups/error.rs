@@ -40,7 +40,7 @@ pub enum CommandError<M: StateMachine> {
 	/// offline and cannot process the command. The error carries the unsent
 	/// commands, which can be retried later when the node is back online.
 	///
-	/// See [`When::is_online`] for more details on how the online/offline status
+	/// See [`When::online`](super::When::online) for more details on how the online/offline status
 	/// of the node is determined.
 	#[error("Group is temporarily offline and cannot process commands")]
 	Offline(Vec<M::Command>),
@@ -87,7 +87,7 @@ pub enum QueryError<M: StateMachine> {
 	/// offline and cannot process the query. The error carries the unsent query,
 	/// which can be retried later when the node is back online.
 	///
-	/// See [`When::is_online`] for more details on how the online/offline status
+	/// See [`When::online`](super::When::online) for more details on how the online/offline status
 	/// of the node is determined.
 	#[error("Group is temporarily offline and cannot process queries")]
 	Offline(M::Query),

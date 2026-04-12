@@ -1,4 +1,25 @@
-//! Traits, helpers and types used across the SDK
+#![allow(clippy::doc_markdown)]
+
+//! # Primitives
+//!
+//! Shared types and traits used across all mosaik subsystems.
+//!
+//! Key types:
+//!
+//! - [`Digest`] — a blake3 hash used as the basis for all identifiers
+//!   ([`NetworkId`](crate::NetworkId), [`StreamId`](crate::StreamId),
+//!   [`GroupId`](crate::GroupId), [`StoreId`](crate::StoreId)).
+//! - [`UniqueId`] — a compile-time-friendly identifier derived from a
+//!   human-readable string via the [`unique_id!`](crate::unique_id) (alias
+//!   [`id!`](crate::id)) macro.
+//! - [`Tag`] — a short label attached to a node's discovery entry for
+//!   role-based filtering.
+//! - [`Datum`] — the marker trait for any type that can be sent over streams or
+//!   stored in collections (`Serialize + DeserializeOwned + Clone + Send + Sync
+//!   + 'static`).
+//! - [`Ticket`] / [`TicketValidator`] — opaque credentials and their
+//!   validators, used to gate access to streams and collections (e.g. TEE
+//!   attestation quotes).
 
 mod channel;
 mod fmt;

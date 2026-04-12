@@ -1,16 +1,64 @@
-//! Streams Consumers and Producers
+//! # Streams
 //!
-//! Notes:
-//! - Streams are the primary dataflow primitive in Mosaik. They represent
-//!   typed, asynchronous data channels that connect producers and consumers
-//!   across a network.
+//! Typed, asynchronous pub/sub data channels. Streams are the primary
+//! dataflow primitive in mosaik — any Rust type that implements
+//! `Serialize + DeserializeOwned + Clone + Send + Sync` can be streamed
+//! between nodes.
 //!
-//! - Streams can be established between nodes that have discovered each other
-//!   via the [`discovery`](crate::discovery) subsystem and have each other's
-//!   entries in their local catalogs. Subscriptions from unknown consumers are
-//!   rejected with a `PeerUnknown` error. That consumer should re-sync its
-//!   local catalog with the producer and retry the subscription.
-
+//! A [`Producer`] publishes data to the network and any number of
+//! [`Consumer`]s can subscribe. Producers implement [`futures::Sink`]
+//! and consumers implement [`futures::Stream`], so they integrate
+//! directly with the async ecosystem.
+//!
+//! Connections are managed automatically: consumers discover producers
+//! through the [`discovery`](crate::discovery) subsystem and subscribe
+//! transparently. Subscriptions from peers not present in the local
+//! catalog are rejected until a catalog sync resolves the mismatch.
+//!
+//! # Reactive conditions
+//!
+//! Producers expose a `.when()` builder for waiting on topology
+//! conditions before sending data:
+//!
+//! ```rust,ignore
+//! producer.when().subscribed().minimum_of(2).await;
+//! ```
+//!
+//! # Compile-time declarations
+//!
+//! The [`stream!`](crate::stream) macro declares a named stream with baked-in
+//! configuration (stream id, access predicates, online conditions):
+//!
+//! ```rust,ignore
+//! mosaik::stream!(pub Telemetry = SensorReading,
+//!     online_when: subscribed().minimum_of(1),
+//! );
+//!
+//! let producer = Telemetry::producer(&network);
+//! ```
+//!
+//! # Custom serialization
+//!
+//! By default, all types implementing `Serialize + DeserializeOwned`
+//! are encoded with [postcard](https://docs.rs/postcard) via the
+//! blanket [`Datum`] implementation. To use a different wire format,
+//! implement `Datum` manually on your type, providing custom
+//! [`encode`](crate::primitives::Datum::encode)
+//! and [`decode`](crate::primitives::Datum::decode) methods:
+//!
+//! ```rust,ignore
+//! impl mosaik::primitives::Datum for MyType {
+//!     type EncodeError = MyError;
+//!     type DecodeError = MyError;
+//!
+//!     fn encode(&self) -> Result<Bytes, Self::EncodeError> {
+//!         // custom serialization
+//!     }
+//!     fn decode(bytes: &[u8]) -> Result<Self, Self::DecodeError> {
+//!         // custom deserialization
+//!     }
+//! }
+//! ```
 use {
 	crate::{
 		discovery::Discovery,
@@ -45,7 +93,7 @@ pub use {
 
 /// Trait for stream definitions that provide a producer constructor.
 ///
-/// Implemented automatically by the [`stream!`] macro. The generated
+/// Implemented automatically by the [`stream!`](crate::stream) macro. The generated
 /// implementation bakes in any `require`, `online_when`, or other
 /// producer configuration specified in the macro invocation.
 pub trait StreamProducer {
@@ -61,7 +109,7 @@ pub trait StreamProducer {
 
 /// Trait for stream definitions that provide a consumer constructor.
 ///
-/// Implemented automatically by the [`stream!`] macro. The generated
+/// Implemented automatically by the [`stream!`](crate::stream) macro. The generated
 /// implementation bakes in any `require` or other consumer
 /// configuration specified in the macro invocation.
 pub trait StreamConsumer {

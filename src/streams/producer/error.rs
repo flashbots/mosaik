@@ -15,7 +15,7 @@ pub enum Error<D> {
 	/// that meet its minimum subscription requirement.
 	///
 	/// Online conditions can be configured via the
-	/// [`network.streams().producer().online_when(..)`].
+	/// `network.streams().producer().online_when(..)`.
 	///
 	/// By default, producers are online when they have at least one active
 	/// consumer.

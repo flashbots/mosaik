@@ -118,7 +118,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// If the vector is empty, `None` is returned.
 	///
-	/// This is an alias for the [`back`][back] method.
+	/// This is an alias for the [`back`](Self::back) method.
 	///
 	/// Time: O(log n)
 	pub fn last(&self) -> Option<T> {
@@ -138,7 +138,7 @@ impl<T: Value, const IS_WRITER: bool> Vec<T, IS_WRITER> {
 	///
 	/// If the vector is empty, `None` is returned.
 	///
-	/// This is an alias for the [`front`][front] method.
+	/// This is an alias for the [`front`](Self::front) method.
 	///
 	/// Time: O(log n)
 	pub fn head(&self) -> Option<T> {

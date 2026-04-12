@@ -1,6 +1,6 @@
 # Groups
 
-Availability Groups are clusters of trusted nodes on the same mosaik network that coordinate with each other for load balancing and failover. Members of a group share a secret key, maintain a consistent replicated state through a modified Raft consensus protocol, and stay connected via an all-to-all mesh of persistent **bonds**.
+Consensus Groups are clusters of trusted nodes on the same mosaik network that coordinate with each other for load balancing and failover. Members of a group share a secret key, maintain a consistent replicated state through a modified Raft consensus protocol, and stay connected via an all-to-all mesh of persistent **bonds**.
 
 ## Overview
 
@@ -21,7 +21,9 @@ Every pair of group members maintains a persistent **bond** — an authenticated
 
 ## Trust Model
 
-Groups are **not** Byzantine fault tolerant. All members within a group are assumed to be honest and operated by the same entity. The `GroupKey` acts as the sole admission control — only nodes that know the key can join.
+Groups are **not** Byzantine fault tolerant. All members within a group are assumed to be honest and operated by the same entity. The `GroupKey` acts as the primary admission control — only nodes that know the key can join.
+
+For stronger integrity guarantees, groups can optionally require hardware attestations via `TicketValidator`s (see `GroupBuilder::require_ticket()`). When combined with TEE enclaves such as Intel TDX, this provides cryptographic proof that every group member is running the expected software, hardening the trust model against compromised or tampered nodes.
 
 ## Quick Start
 

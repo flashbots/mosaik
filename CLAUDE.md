@@ -55,7 +55,7 @@ Mosaik is a Rust library (`src/lib.rs`) providing a runtime for self-organizing,
   - `ProducerOf<S>` / `ConsumerOf<S>` — type aliases for the producer/consumer of a `stream!`-declared type
   - `status/` — reactive conditions (`when().subscribed().minimum_of(2)`, etc.); conditions are dynamically reevaluated as topology changes
 
-- **`src/groups/`** — Availability groups using a modified Raft consensus:
+- **`src/groups/`** — Consensus groups using a modified Raft consensus:
   - `bond/` — persistent bidirectional authenticated connections between all group member pairs
   - `raft/` — Raft roles (`leader.rs`, `follower.rs`, `candidate.rs`), protocol, shared state
   - `machine/` — `StateMachine` trait (implement `apply(cmd)` + `query(q)` + `state_sync()`)

@@ -1,6 +1,6 @@
-//! # Availability Groups
+//! # Consensus Groups
 //!
-//! Availability groups are clusters of trusted nodes on the same mosaik network
+//! Consensus groups are clusters of trusted nodes on the same mosaik network
 //! that coordinate with each other for load balancing and failover. Members of
 //! a group share a secret key that authenticates membership, and they maintain
 //! a consistent, replicated view of group state through a modified Raft
@@ -10,7 +10,15 @@
 //!
 //! Groups are **not** Byzantine fault tolerant. All members within a group are
 //! assumed to be honest and operated by the same entity. The group key acts as
-//! the sole admission control — only nodes that know the key can join.
+//! the primary admission control — only nodes that know the key can join.
+//!
+//! For stronger integrity guarantees, groups can optionally require
+//! hardware attestations via
+//! [`TicketValidator`](crate::primitives::TicketValidator)s (see
+//! [`GroupBuilder::require_ticket`]). When combined with TEE
+//! enclaves such as Intel TDX, this provides cryptographic proof that
+//! every group member is running the expected software, hardening the
+//! trust model against compromised or tampered nodes.
 //!
 //! ## Bonds
 //!
@@ -40,19 +48,25 @@
 //!   the quorum denominator for both elections and commit advancement, so
 //!   consensus can proceed while lagging nodes catch up.
 //!
-//! - **Distributed log catch-up.** A lagging follower recovers missing log
-//!   entries by broadcasting a `LogSyncDiscovery` to all bonded peers,
-//!   collecting availability responses, partitioning the needed range across
-//!   responders for balanced load, and pulling entries in parallel. Incoming
-//!   `AppendEntries` are buffered during catch-up and applied once the gap is
-//!   closed.
+//! - **Pluggable state sync.** When a follower falls behind, it synchronizes
+//!   through a [`StateSync`] implementation. The built-in
+//!   [`LogReplaySync`] recovers missing entries by
+//!   broadcasting a discovery request to all bonded peers, partitioning the
+//!   needed range for balanced load, and pulling entries in parallel. This is a
+//!   good starting point for custom state machines. For domain-specific needs,
+//!   custom [`StateSync`] implementations can use more efficient strategies
+//!   (e.g. snapshot transfer, as the [`collections`](crate::collections)
+//!   subsystem does). Incoming `AppendEntries` are buffered during catch-up and
+//!   applied once the gap is closed.
 //!
 //! ## Group Identity
 //!
 //! A [`GroupId`] is derived from the group key, the consensus-relevant
-//! configuration (election timeouts, heartbeat intervals, etc.), and the
-//! replicated state machine's identifier. Any divergence in these values
-//! produces a different group id, preventing misconfigured nodes from bonding.
+//! configuration (election timeouts, heartbeat intervals, etc.), the
+//! replicated state machine's identifier, and the signatures of any
+//! configured [`TicketValidator`](crate::primitives::TicketValidator)s. Any
+//! divergence in these values produces a different group id, preventing
+//! misconfigured nodes from bonding.
 //!
 //! ## Usage
 //!
@@ -60,8 +74,8 @@
 //! // join a group with a specific key and default configuration
 //! let group = network.groups().with_key(key).join();
 //!
-//! // Wait for a leader to be elected
-//! group.when().leader_elected().await;
+//! // Wait for the group to be ready (leader elected, initial sync complete, etc.)
+//! group.when().online().await;
 //! ```
 
 use {

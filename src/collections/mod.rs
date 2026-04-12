@@ -1,8 +1,52 @@
-//! Mosaik Replicated Collections
+//! # Replicated Collections
 //!
-//! Each collection instance creates its own mosaik group that runs a raft
-//! consensus algorithm. Each collection instance is independent and can be used
-//! with different sets of nodes in the cluster.
+//! Strongly-consistent, distributed data structures built on top of
+//! [`groups`](crate::groups). Each collection instance creates its own
+//! Raft consensus group, so different collections can span different
+//! sets of nodes independently.
+//!
+//! Available collection types:
+//!
+//! | Type | Description |
+//! |------|-------------|
+//! | [`Map<K,V>`](Map) | Key-value store |
+//! | [`Vec<T>`](Vec) | Ordered, append-friendly list |
+//! | [`Set<T>`](Set) | Unique-element set |
+//! | [`Cell<T>`](Cell) | Single replicated value |
+//! | [`Once<T>`](Once) | Write-once value |
+//! | [`PriorityQueue<P,K,V>`](PriorityQueue) | Min/max priority queue |
+//!
+//! # Writer / Reader split
+//!
+//! Every collection has two roles:
+//!
+//! - A **writer** participates in Raft consensus and can mutate the
+//!   collection. Mutations return a [`Version`] that can be used to
+//!   track replication progress.
+//! - A **reader** is a read-only replica that receives updates from
+//!   the consensus group without voting.
+//!
+//! ```rust,ignore
+//! let scores = collections::Map::<String, u64>::writer(
+//!     &network, "leaderboard",
+//! );
+//! scores.when().online().await;
+//!
+//! let ver = scores.insert("alice".into(), 42).await?;
+//! reader.when().reaches(ver).await;
+//! ```
+//!
+//! # Compile-time declarations
+//!
+//! The [`collection!`](crate::collection) macro declares a named collection with a
+//! baked-in [`StoreId`]:
+//!
+//! ```rust,ignore
+//! mosaik::collection!(pub Leaderboard =
+//!     collections::Map<String, u64>, "leaderboard");
+//!
+//! let writer = Leaderboard::writer(&network);
+//! ```
 
 #![allow(unreachable_code, unused)]
 
@@ -64,7 +108,7 @@ pub enum Error<T> {
 
 /// Trait for collection definitions that provide a reader constructor.
 ///
-/// Implemented automatically by the [`collection!`] macro.
+/// Implemented automatically by the [`collection!`](crate::collection) macro.
 pub trait CollectionReader {
 	type Reader;
 
@@ -78,7 +122,7 @@ pub trait CollectionReader {
 
 /// Trait for collection definitions that provide a writer constructor.
 ///
-/// Implemented automatically by the [`collection!`] macro.
+/// Implemented automatically by the [`collection!`](crate::collection) macro.
 pub trait CollectionWriter {
 	type Writer;
 
