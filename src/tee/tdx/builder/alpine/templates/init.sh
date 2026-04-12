@@ -85,5 +85,5 @@ fi
 {{SSH_BLOCK}}
 echo "=== TDX Guest Init ==="
 echo "Starting workload: {{CRATE_NAME}}"
-
-exec /usr/bin/{{CRATE_NAME}} "$@"
+{{ENV_BLOCK}}
+exec /usr/bin/{{CRATE_NAME}} {{ARGS}}

@@ -197,6 +197,35 @@ impl AlpineBuilder {
 		self
 	}
 
+	/// Append a command-line argument passed to the binary at
+	/// startup inside the guest.
+	///
+	/// Arguments are baked into the `/init` script in the order
+	/// they are added. When no arguments are configured the
+	/// kernel command-line pass-through (`"$@"`) is preserved.
+	#[must_use]
+	pub fn with_arg(mut self, arg: &str) -> Self {
+		self.common.args.push(arg.to_string());
+		self
+	}
+
+	/// Append multiple command-line arguments at once.
+	#[must_use]
+	pub fn with_args(mut self, args: &[&str]) -> Self {
+		self.common.args.extend(args.iter().map(|a| (*a).to_string()));
+		self
+	}
+
+	/// Set an environment variable that will be exported before
+	/// the binary is started inside the guest.
+	#[must_use]
+	pub fn with_env(mut self, key: &str, value: &str) -> Self {
+		self.common
+			.env_vars
+			.push((key.to_string(), value.to_string()));
+		self
+	}
+
 	/// Build the TDX guest image.
 	///
 	/// # Panics
@@ -276,7 +305,7 @@ impl AlpineBuilder {
 		// --- Generate /init ---
 		eprintln!("==> Generating /init...");
 		let init_script =
-			generate_init_script(&ctx.crate_name, &self.common.ssh_keys);
+			generate_init_script(&ctx.crate_name, &self.common);
 
 		// --- Kernel + modules ---
 		let kernel_cache_dir = ctx.cache_dir.join("kernel");
@@ -451,15 +480,20 @@ impl AlpineBuilder {
 
 const UDHCPC_SCRIPT: &str = include_str!("templates/udhcpc.sh");
 
-fn generate_init_script(crate_name: &str, ssh_keys: &[String]) -> String {
-	let ssh_block = if ssh_keys.is_empty() {
+fn generate_init_script(
+	crate_name: &str,
+	common: &CommonConfig,
+) -> String {
+	let ssh_block = if common.ssh_keys.is_empty() {
 		String::new()
 	} else {
 		include_str!("../templates/init-ssh.sh")
-			.replace("{{SSH_KEYS}}", &ssh_keys.join("\n"))
+			.replace("{{SSH_KEYS}}", &common.ssh_keys.join("\n"))
 	};
 
 	include_str!("templates/init.sh")
 		.replace("{{CRATE_NAME}}", crate_name)
 		.replace("{{SSH_BLOCK}}", &ssh_block)
+		.replace("{{ENV_BLOCK}}", &common.env_block())
+		.replace("{{ARGS}}", &common.args_string())
 }

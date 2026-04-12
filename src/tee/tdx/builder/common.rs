@@ -34,6 +34,8 @@ pub(super) struct CommonConfig {
 	pub kernel_abi: Option<String>,
 	pub ovmf_version: Option<String>,
 	pub artifacts_output_path: Option<PathBuf>,
+	pub args: Vec<String>,
+	pub env_vars: Vec<(String, String)>,
 }
 
 impl Default for CommonConfig {
@@ -53,6 +55,8 @@ impl Default for CommonConfig {
 			kernel_abi: None,
 			ovmf_version: None,
 			artifacts_output_path: None,
+			args: Vec::new(),
+			env_vars: Vec::new(),
 		}
 	}
 }
@@ -82,6 +86,37 @@ impl BuildContext {
 }
 
 impl CommonConfig {
+	/// Generate shell `export` lines for environment variables.
+	pub fn env_block(&self) -> String {
+		self.env_vars
+			.iter()
+			.map(|(k, v)| {
+				let escaped = v.replace('\'', "'\\''");
+				format!("export {k}='{escaped}'")
+			})
+			.collect::<Vec<_>>()
+			.join("\n")
+	}
+
+	/// Generate the shell arguments string for the binary.
+	///
+	/// Returns `"$@"` when no explicit args are configured, so the
+	/// kernel command-line pass-through is preserved.
+	pub fn args_string(&self) -> String {
+		if self.args.is_empty() {
+			"\"$@\"".to_string()
+		} else {
+			self.args
+				.iter()
+				.map(|a| {
+					let escaped = a.replace('\'', "'\\''");
+					format!("'{escaped}'")
+				})
+				.collect::<Vec<_>>()
+				.join(" ")
+		}
+	}
+
 	/// Resolve the artifacts output directory.
 	pub fn resolve_artifacts_dir(
 		&self,

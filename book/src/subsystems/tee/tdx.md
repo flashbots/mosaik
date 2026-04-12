@@ -421,6 +421,9 @@ Both `AlpineBuilder` and `UbuntuBuilder` share a common fluent API:
 | `with_kernel_abi(abi)`           | Set kernel ABI for download (e.g. `"57"`)           |
 | `with_ovmf_version(v)`           | Set OVMF version for download                       |
 | `with_artifacts_output_path(p)`  | Custom output directory for build artifacts         |
+| `with_arg(arg)`                  | Append a command-line argument to the guest binary  |
+| `with_args(args)`                | Append multiple command-line arguments at once      |
+| `with_env(key, value)`           | Set an environment variable for the guest binary    |
 
 **Alpine-specific:**
 
