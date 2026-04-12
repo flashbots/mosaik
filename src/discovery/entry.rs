@@ -3,10 +3,10 @@ use {
 	crate::{
 		NetworkId,
 		StreamId,
-		Ticket,
 		groups::GroupId,
 		network::PeerId,
 		primitives::*,
+		tickets::{Expiration, InvalidTicket, Ticket, TicketValidator},
 	},
 	chrono::{DateTime, Utc},
 	core::fmt,

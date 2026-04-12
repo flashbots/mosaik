@@ -2,10 +2,10 @@ use {
 	crate::{
 		NetworkId,
 		PeerId,
-		Ticket,
 		UniqueId,
-		primitives::{Expiration, Pretty, encoding},
+		primitives::{Pretty, encoding},
 		tee::tdx::Measurements,
+		tickets::{Expiration, Ticket},
 		unique_id,
 	},
 	chrono::{DateTime, Utc},

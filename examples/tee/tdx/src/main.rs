@@ -22,7 +22,12 @@ declare::collection!(
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-	configure_tracing();
+	tracing_subscriber::fmt()
+		.with_env_filter(
+			tracing_subscriber::EnvFilter::try_from_default_env()
+				.unwrap_or_else(|_| "info,mosaik=debug".parse().unwrap()),
+		)
+		.init();
 
 	// each build generates a unique network id
 	let network_id = format!("mosaik.examples.tee.tdx.{}", env!("BUILD_ID"));
@@ -130,52 +135,4 @@ fn print_observers(observers: &WriterOf<SecureObservers>) {
 		println!("  {} observed: {value}", Short(peer_id));
 	}
 	println!();
-}
-
-fn configure_tracing() {
-	use tracing_subscriber::{filter::filter_fn, prelude::*};
-
-	// Avoid re-initializing if a global default subscriber is already set
-	if tracing::dispatcher::has_been_set() {
-		return;
-	}
-
-	let level = tracing::Level::DEBUG;
-
-	// disable noisy modules from dependencies
-	let muted: &[&'static str] = &[
-		"iroh",
-		"rustls",
-		"igd_next",
-		"hickory_",
-		"hyper_util",
-		"portmapper",
-		"reqwest",
-		"events.net.relay.connected",
-		"netwatch",
-		"mio",
-		"acto",
-		"swarm_discovery",
-		"mainline",
-		"pkarr",
-		"noq",
-	];
-
-	let _ = tracing_subscriber::registry()
-		.with(tracing_subscriber::fmt::layer())
-		.with(filter_fn(move |metadata| {
-			metadata.level() <= &level
-				&& !muted
-					.iter()
-					.any(|prefix| metadata.target().starts_with(prefix))
-		}))
-		.try_init();
-
-	// Set a custom panic hook that prints and aborts
-	let default_hook = std::panic::take_hook();
-	std::panic::set_hook(Box::new(move |panic_info| {
-		default_hook(panic_info);
-		tracing::error!("panic: {panic_info}");
-		std::process::abort();
-	}));
 }

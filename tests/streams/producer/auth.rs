@@ -5,6 +5,7 @@ use {
 	hmac::{Hmac, digest::KeyInit},
 	jwt::{RegisteredClaims, SignWithKey, VerifyWithKey},
 	mosaik::*,
+	tickets::Ticket,
 };
 
 /// Verifies that calling `require` multiple times composes predicates with

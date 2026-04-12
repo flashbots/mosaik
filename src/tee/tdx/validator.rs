@@ -9,8 +9,10 @@ use {
 	crate::{
 		UniqueId,
 		discovery::PeerEntry,
-		primitives::{Expiration, InvalidTicket, TicketValidator},
+		tickets::{Expiration, InvalidTicket, TicketValidator},
 	},
+	chrono::{DateTime, Utc},
+	std::time::Duration,
 };
 
 /// A TDX-based ticket validator.
@@ -38,6 +40,24 @@ pub struct Tdx {
 	/// specifying multiple acceptable TDX measurement profiles, any of which can
 	/// be satisfied in addition to the baseline.
 	any: Vec<MeasurementsCriteria>,
+
+	/// The maximum age of a ticket's TDX Quote. A ticket whose `quoted_at`
+	/// timestamp is older than `now - max_age` will be rejected. This is based
+	/// on the peer's machine local clock and should be set with some tolerance
+	/// for clock skew.
+	max_age: Option<Duration>,
+
+	/// The earliest acceptable `quoted_at` timestamp. A ticket whose TDX Quote
+	/// was generated before this time will be rejected. Useful for invalidating
+	/// all tickets generated before a known-good point in time (e.g., after a
+	/// security patch or firmware update).
+	not_before: Option<DateTime<Utc>>,
+
+	/// The maximum allowed lifetime of a ticket, measured as the duration
+	/// between `quoted_at` and `expiration`. When set, tickets with
+	/// `Expiration::Never` are rejected (infinite lifetime exceeds any bound),
+	/// and tickets whose lifetime exceeds this duration are also rejected.
+	max_lifetime: Option<Duration>,
 }
 
 // Public API
@@ -49,6 +69,9 @@ impl Tdx {
 		Self {
 			baseline,
 			any: Vec::new(),
+			max_age: None,
+			not_before: None,
+			max_lifetime: None,
 		}
 	}
 
@@ -179,6 +202,37 @@ impl Tdx {
 		self.any.push(criteria);
 		self
 	}
+
+	/// Rejects tickets whose TDX Quote is older than the given duration.
+	/// A ticket is rejected if `now - quoted_at > max_age`.
+	///
+	/// This is based on the peer's machine local clock, so the duration
+	/// should include some tolerance for clock skew between peers.
+	#[must_use]
+	pub const fn max_age(mut self, max_age: Duration) -> Self {
+		self.max_age = Some(max_age);
+		self
+	}
+
+	/// Rejects tickets whose TDX Quote was generated before the given
+	/// timestamp. Useful for invalidating all tickets generated before a
+	/// known-good point in time, such as after a security patch or firmware
+	/// update.
+	#[must_use]
+	pub const fn not_before(mut self, not_before: DateTime<Utc>) -> Self {
+		self.not_before = Some(not_before);
+		self
+	}
+
+	/// Rejects tickets whose lifetime exceeds the given duration. The
+	/// lifetime is measured as the duration between `quoted_at` and
+	/// `expiration`. When set, non-expiring tickets (`Expiration::Never`)
+	/// are also rejected.
+	#[must_use]
+	pub const fn max_lifetime(mut self, max_lifetime: Duration) -> Self {
+		self.max_lifetime = Some(max_lifetime);
+		self
+	}
 }
 
 impl Default for Tdx {
@@ -195,12 +249,27 @@ impl TicketValidator for Tdx {
 	}
 
 	fn signature(&self) -> UniqueId {
-		self
+		let sig = self
 			.any
 			.iter()
 			.fold(self.class().derive(self.baseline.signature()), |s, c| {
 				s.derive(c.signature())
-			})
+			});
+
+		let sig = self.max_age.map_or_else(
+			|| sig.derive([0u8; 8]),
+			|d| sig.derive(d.as_secs().to_le_bytes()),
+		);
+
+		let sig = self.not_before.map_or_else(
+			|| sig.derive([0u8; 8]),
+			|dt| sig.derive(dt.timestamp().to_le_bytes()),
+		);
+
+		self.max_lifetime.map_or_else(
+			|| sig.derive([0u8; 8]),
+			|d| sig.derive(d.as_secs().to_le_bytes()),
+		)
 	}
 
 	fn validate(
@@ -230,6 +299,35 @@ impl TicketValidator for Tdx {
 
 		if ticket.network_id() != peer.network_id() {
 			return Err(InvalidTicket);
+		}
+
+		if let Some(max_age) = self.max_age {
+			let age = (Utc::now() - ticket.quoted_at())
+				.to_std()
+				.unwrap_or(Duration::MAX);
+			if age > max_age {
+				return Err(InvalidTicket);
+			}
+		}
+
+		if let Some(not_before) = self.not_before
+			&& *ticket.quoted_at() < not_before
+		{
+			return Err(InvalidTicket);
+		}
+
+		if let Some(max_lifetime) = self.max_lifetime {
+			match ticket.expiration() {
+				Expiration::Never => return Err(InvalidTicket),
+				Expiration::At(expires_at) => {
+					let lifetime = (*expires_at - *ticket.quoted_at())
+						.to_std()
+						.unwrap_or(Duration::MAX);
+					if lifetime > max_lifetime {
+						return Err(InvalidTicket);
+					}
+				}
+			}
 		}
 
 		if ticket.expiration().is_expired() {

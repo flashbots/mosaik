@@ -48,7 +48,7 @@
 //!
 //! ```rust
 //! // Open a producer for a stream of strings
-//! let producer = streams::Producer::<String>::open(&network);
+//! let mut producer = network.streams().produce::<String>();
 //!
 //! // Wait until at least one consumer subscribes
 //! producer.when().subscribed().await;
@@ -148,13 +148,14 @@ pub mod groups;
 pub mod network;
 pub mod primitives;
 pub mod streams;
+pub mod tickets;
 
 #[cfg(feature = "tee")]
 pub mod tee;
 
-#[doc(hidden)]
+#[cfg_attr(docsrs, doc(hidden))]
 pub use bytes::{Bytes, BytesMut};
-#[doc(hidden)]
+#[cfg_attr(docsrs, doc(hidden))]
 pub use collections::{
 	CollectionConfig,
 	CollectionReader,
@@ -163,9 +164,9 @@ pub use collections::{
 	StoreId,
 	WriterOf,
 };
-#[doc(hidden)]
+#[cfg_attr(docsrs, doc(hidden))]
 pub use futures;
-#[doc(hidden)]
+#[cfg_attr(docsrs, doc(hidden))]
 pub use groups::{
 	Consistency,
 	Consistency::{Strong, Weak},
@@ -173,15 +174,15 @@ pub use groups::{
 	GroupId,
 	GroupKey,
 };
-#[doc(hidden)]
+#[cfg_attr(docsrs, doc(hidden))]
 pub use iroh::{self, SecretKey, Signature};
-#[doc(hidden)]
+#[cfg_attr(docsrs, doc(hidden))]
 pub use mosaik_macros::{__collection_impl, __stream_impl, __unique_id_impl};
-#[doc(hidden)]
+#[cfg_attr(docsrs, doc(hidden))]
 pub use network::{Network, NetworkId, PeerId};
-#[doc(hidden)]
-pub use primitives::{Datum, Digest, Tag, Ticket, UniqueId};
-#[doc(hidden)]
+#[cfg_attr(docsrs, doc(hidden))]
+pub use primitives::{Datum, Digest, Tag, UniqueId};
+#[cfg_attr(docsrs, doc(hidden))]
 pub use streams::{
 	ConsumerOf,
 	Criteria,
@@ -201,6 +202,6 @@ pub mod declare {
 	pub use crate::{collection, stream};
 }
 
-#[doc(hidden)]
+#[cfg_attr(docsrs, doc(hidden))]
 #[cfg(feature = "tdx")]
 pub use tee::{tdx, tdx::NetworkTdxExt};

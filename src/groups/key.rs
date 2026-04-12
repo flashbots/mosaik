@@ -4,7 +4,7 @@ use {
 		PeerId,
 		groups::{GroupId, Groups},
 		network::link::Link,
-		primitives::TicketValidator,
+		tickets::TicketValidator,
 	},
 	core::fmt,
 	serde::{Deserialize, Serialize},

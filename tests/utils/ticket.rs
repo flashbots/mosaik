@@ -5,11 +5,10 @@ use {
 	jwt::{RegisteredClaims, SignWithKey, VerifyWithKey},
 	mosaik::{
 		PeerId,
-		Ticket,
 		UniqueId,
 		discovery::PeerEntry,
 		id,
-		primitives::{Expiration, InvalidTicket, TicketValidator},
+		tickets::{Expiration, InvalidTicket, Ticket, TicketValidator},
 	},
 };
 

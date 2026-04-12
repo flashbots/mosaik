@@ -12,7 +12,7 @@ use {
 			config::GroupConfig,
 			worker::Worker,
 		},
-		primitives::TicketValidator,
+		tickets::TicketValidator,
 	},
 	core::time::Duration,
 	dashmap::Entry,

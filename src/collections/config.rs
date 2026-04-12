@@ -1,4 +1,4 @@
-use {super::SyncConfig, crate::primitives::TicketValidator, std::sync::Arc};
+use {super::SyncConfig, crate::tickets::TicketValidator, std::sync::Arc};
 
 /// Configuration for a collection instance.
 ///

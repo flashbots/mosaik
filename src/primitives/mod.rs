@@ -30,7 +30,6 @@ mod queue;
 
 pub mod datum;
 pub mod encoding;
-pub mod ticket;
 
 /// Public API re-exported byte types.
 pub use bytes::{self, Bytes, BytesMut};
@@ -49,7 +48,6 @@ pub use {
 	datum::{Datum, Encoded},
 	fmt::*,
 	id::{Digest, Tag, UniqueId},
-	ticket::{Expiration, InvalidTicket, Ticket, TicketValidator},
 };
 
 /// Used internally as a sentinel type for generic parameters.

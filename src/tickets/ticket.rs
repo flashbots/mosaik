@@ -13,6 +13,11 @@ use {
 	std::sync::Arc,
 };
 
+/// A unique identifier for the type of a ticket, used to determine how to
+/// interpret the ticket data and which authorization scheme to use for
+/// validating the ticket.
+pub type TicketClass = UniqueId;
+
 /// This type represents authentication tokens, credentials, or any other type
 /// of data that may be used to authorize a peer.
 #[derive(
@@ -23,7 +28,7 @@ pub struct Ticket {
 	///
 	/// This is used to determine how to interpret the `data` field and which
 	/// authorization scheme to use for validating the ticket.
-	pub class: UniqueId,
+	pub class: TicketClass,
 
 	/// The opaque data of the ticket. The content and format of this data is
 	/// determined by the `class` field and is not interpreted by the discovery
@@ -32,7 +37,7 @@ pub struct Ticket {
 }
 
 impl Ticket {
-	pub const fn new(class: UniqueId, data: Bytes) -> Self {
+	pub const fn new(class: TicketClass, data: Bytes) -> Self {
 		Self { class, data }
 	}
 
@@ -138,7 +143,7 @@ pub struct InvalidTicket;
 /// authorization.
 pub trait TicketValidator: Send + Sync + 'static {
 	/// Class of tickets that this validator can validate.
-	fn class(&self) -> UniqueId;
+	fn class(&self) -> TicketClass;
 
 	/// A unique identifier for the type of the ticket validator and its
 	/// configuration.
@@ -158,7 +163,7 @@ pub trait TicketValidator: Send + Sync + 'static {
 }
 
 impl<T: TicketValidator + ?Sized> TicketValidator for Box<T> {
-	fn class(&self) -> UniqueId {
+	fn class(&self) -> TicketClass {
 		(**self).class()
 	}
 
@@ -176,7 +181,7 @@ impl<T: TicketValidator + ?Sized> TicketValidator for Box<T> {
 }
 
 impl<T: TicketValidator + ?Sized> TicketValidator for Arc<T> {
-	fn class(&self) -> UniqueId {
+	fn class(&self) -> TicketClass {
 		(**self).class()
 	}
 

@@ -3,7 +3,7 @@ use {
 		GroupKey,
 		discovery::SignedPeerEntry,
 		groups::{ConsensusConfig, GroupId, StateMachine, StateSync},
-		primitives::{Expiration, InvalidTicket, TicketValidator},
+		tickets::{Expiration, InvalidTicket, TicketValidator},
 	},
 	core::time::Duration,
 	derive_builder::Builder,

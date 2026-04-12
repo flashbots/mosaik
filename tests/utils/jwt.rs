@@ -7,7 +7,7 @@ use {
 		UniqueId,
 		discovery::PeerEntry,
 		id,
-		primitives::{Expiration, InvalidTicket, TicketValidator},
+		tickets::{Expiration, InvalidTicket, TicketValidator},
 	},
 	serde_json::Value,
 	std::{collections::BTreeMap, sync::Arc},

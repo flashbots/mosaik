@@ -5,10 +5,10 @@
 //! [`Ticket`]s, published [`streams`](crate::streams), and joined
 //! [`groups`](crate::groups) through two complementary protocols:
 //!
-//! - **Gossip announcements** — real-time broadcast of signed presence
-//!   entries via iroh-gossip. Changes propagate within seconds.
-//! - **Catalog synchronization** — full bidirectional exchange of known
-//!   peer entries for catch-up after network partitions or late joins.
+//! - **Gossip announcements** — real-time broadcast of signed presence entries
+//!   via iroh-gossip. Changes propagate within seconds.
+//! - **Catalog synchronization** — full bidirectional exchange of known peer
+//!   entries for catch-up after network partitions or late joins.
 //!
 //! A background DHT layer via [pkarr](https://pkarr.org) provides
 //! bootstrap connectivity so that the very first nodes on a network
@@ -35,7 +35,6 @@
 use {
 	crate::{
 		Tag,
-		Ticket,
 		UniqueId,
 		discovery::{
 			announce::Announce,
@@ -45,6 +44,7 @@ use {
 		},
 		network::{LocalNode, PeerId, link::Protocol},
 		primitives::{IntoIterOrSingle, Short},
+		tickets::Ticket,
 	},
 	core::fmt,
 	iroh::{

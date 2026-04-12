@@ -1,7 +1,7 @@
 use {
 	super::*,
 	crate::utils::{Jwt, JwtIssuer, discover_all, sleep_s, timeout_s},
-	mosaik::{GroupKey, Network, NetworkId, primitives::TicketValidator},
+	mosaik::{GroupKey, Network, NetworkId, tickets::TicketValidator},
 };
 
 /// Verifies that peers with valid JWT tickets can bond within an auth-gated

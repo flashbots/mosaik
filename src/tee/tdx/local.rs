@@ -2,9 +2,9 @@ use {
 	super::{Measurement, Measurements, ticket::ExtraData},
 	crate::{
 		Network,
-		Ticket,
-		primitives::{Expiration, sealed::Sealed},
+		primitives::sealed::Sealed,
 		tee::tdx::ticket::TdxTicket,
+		tickets::{Expiration, Ticket},
 	},
 	chrono::Utc,
 };
