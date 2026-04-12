@@ -5,9 +5,9 @@
   </p>
   <p align="center">
     <a href="https://github.com/flashbots/mosaik/blob/main/LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-    <a href="https://crates.io/crates/mosaik"><img alt="Status" src="https://img.shields.io/crates/v/mosaik.svg?color=blue"></a>
-    <a href="https://github.com/flashbots/mosaik"><img alt="Rust" src="https://img.shields.io/badge/rust-1.93%2B-blue.svg"></a>
     <a href="https://github.com/flashbots/mosaik"><img alt="Status" src="https://img.shields.io/badge/status-experimental-orange.svg"></a>
+    <a href="https://crates.io/crates/mosaik"><img alt="crates.io" src="https://img.shields.io/crates/v/mosaik.svg?color=blue"></a>
+    <a href="https://docs.rs/mosaik"><img alt="docs.rs" src="https://docs.rs/mosaik/badge.svg"></a>
     <a href="http://docs.mosaik.world"><img alt="Documentation" src="https://img.shields.io/badge/documentation-8A2BE2"></a>
   </p>
 </p>
