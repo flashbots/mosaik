@@ -10,24 +10,6 @@ use {
 	},
 };
 
-pub(super) const UDHCPC_SCRIPT: &str = include_str!("templates/udhcpc.sh");
-
-pub(super) fn generate_init_script(
-	crate_name: &str,
-	ssh_keys: &[String],
-) -> String {
-	let ssh_block = if ssh_keys.is_empty() {
-		String::new()
-	} else {
-		include_str!("templates/init-ssh.sh")
-			.replace("{{SSH_KEYS}}", &ssh_keys.join("\n"))
-	};
-
-	include_str!("templates/init.sh")
-		.replace("{{CRATE_NAME}}", crate_name)
-		.replace("{{SSH_BLOCK}}", &ssh_block)
-}
-
 pub(super) fn generate_launch_script(
 	crate_name: &str,
 	artifacts_dir: &Path,

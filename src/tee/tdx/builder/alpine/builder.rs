@@ -2,25 +2,22 @@
 
 use {
 	super::{
-		cpio::CpioWriter,
+		super::{
+			cpio::CpioWriter,
+			helpers::{
+				detect_profile,
+				download_cached,
+				env_or,
+				extract_file_from_tar_gz,
+				find_target_dir,
+				list_tar_gz,
+			},
+			kernel::{auto_download_kernel, bundle_auto_discovered_modules},
+			mrtd,
+			ovmf::obtain_ovmf,
+			scripts::{generate_launch_script, generate_self_extracting_script},
+		},
 		cross::cross_compile_musl,
-		helpers::{
-			detect_profile,
-			download_cached,
-			env_or,
-			extract_file_from_tar_gz,
-			find_target_dir,
-			list_tar_gz,
-		},
-		kernel::{auto_download_kernel, bundle_auto_discovered_modules},
-		mrtd,
-		ovmf::obtain_ovmf,
-		scripts::{
-			UDHCPC_SCRIPT,
-			generate_init_script,
-			generate_launch_script,
-			generate_self_extracting_script,
-		},
 	},
 	crate::tee::tdx::Measurement,
 	std::{
@@ -240,7 +237,7 @@ impl AlpineBuilder {
 	/// Panics if any required tool (`curl`, `tar`, `gzip`, `ar`,
 	/// etc.) is missing or if cross-compilation fails.
 	#[allow(clippy::too_many_lines)]
-	pub fn build(self) -> Option<AlpineBuilderOutput> {
+	pub fn build(self) -> Option<super::super::BuilderOutput> {
 		// --- Recursion guard -----------------------------------------------
 		if env::var("__TDX_IMAGE_INNER_BUILD").is_ok() {
 			return None;
@@ -734,7 +731,7 @@ impl AlpineBuilder {
 
 		let bundle_path = artifacts_dir.join(format!("{crate_name}-run-qemu.sh"));
 
-		Some(AlpineBuilderOutput {
+		Some(super::super::BuilderOutput {
 			initramfs_path: final_path,
 			kernel_path: kernel_output,
 			ovmf_path: ovmf_output,
@@ -770,13 +767,17 @@ impl Default for AlpineBuilder {
 	}
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct AlpineBuilderOutput {
-	pub initramfs_path: PathBuf,
-	pub kernel_path: PathBuf,
-	pub ovmf_path: PathBuf,
-	pub bundle_path: PathBuf,
-	pub mrtd: Measurement,
-	pub rtmr1: Measurement,
-	pub rtmr2: Measurement,
+const UDHCPC_SCRIPT: &str = include_str!("templates/udhcpc.sh");
+
+fn generate_init_script(crate_name: &str, ssh_keys: &[String]) -> String {
+	let ssh_block = if ssh_keys.is_empty() {
+		String::new()
+	} else {
+		include_str!("../templates/init-ssh.sh")
+			.replace("{{SSH_KEYS}}", &ssh_keys.join("\n"))
+	};
+
+	include_str!("templates/init.sh")
+		.replace("{{CRATE_NAME}}", crate_name)
+		.replace("{{SSH_BLOCK}}", &ssh_block)
 }

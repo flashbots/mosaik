@@ -37,8 +37,7 @@ pub mod build {
 		super::builder::alpine::AlpineBuilder::default()
 	}
 
-	#[cfg(feature = "tdx-builder-alpine")]
-	pub use super::builder::alpine::AlpineBuilderOutput;
+	pub use super::builder::BuilderOutput;
 
 	/// Returns a builder for creating TDX images based on Ubuntu Linux.
 	///
@@ -52,9 +51,6 @@ pub mod build {
 	/// ```
 	#[cfg(feature = "tdx-builder-ubuntu")]
 	pub fn ubuntu() -> super::builder::ubuntu::UbuntuBuilder {
-		todo!("Ubuntu builder not implemented yet")
+		super::builder::ubuntu::UbuntuBuilder::default()
 	}
-
-	#[cfg(feature = "tdx-builder-ubuntu")]
-	pub use super::builder::ubuntu::UbuntuBuilderOutput;
 }

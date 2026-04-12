@@ -1,12 +1,6 @@
 use {
 	super::*,
-	crate::utils::{
-		JwtIssuer,
-		Jwt,
-		discover_all,
-		sleep_s,
-		timeout_s,
-	},
+	crate::utils::{Jwt, JwtIssuer, discover_all, sleep_s, timeout_s},
 	digest::KeyInit,
 	futures::{SinkExt, StreamExt},
 	hmac::Hmac,

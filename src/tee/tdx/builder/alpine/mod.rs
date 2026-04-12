@@ -32,12 +32,6 @@
 //! Ubuntu 24.04 kernel with Alpine 3.21.0 minirootfs.
 
 mod builder;
-mod cpio;
 mod cross;
-mod helpers;
-mod kernel;
-mod mrtd;
-mod ovmf;
-mod scripts;
 
-pub use builder::{AlpineBuilder, AlpineBuilderOutput};
+pub use builder::AlpineBuilder;

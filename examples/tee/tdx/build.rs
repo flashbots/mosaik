@@ -1,3 +1,5 @@
+use std::env::VarError;
+
 fn main() {
 	// Generate a random build ID so every compilation produces a unique
 	// network.  Both the host binary and the TDX-packaged binary share
@@ -17,8 +19,19 @@ fn main() {
 	println!("cargo:rustc-env=BUILD_ID={build_id}");
 	println!("cargo:warning=Build ID: {build_id}");
 
-	let output = mosaik::tdx::build::alpine().build();
-	for line in format!("{output:#?}").lines() {
+	let build_output = match std::env::var("BUILD_TYPE").as_deref() {
+		Err(VarError::NotPresent) | Ok("alpine") => {
+			println!("cargo:warning=Building Alpine-based MUSL TDX image...");
+			mosaik::tee::tdx::build::alpine().build()
+		}
+		Ok("ubuntu") => {
+			println!("cargo:warning=Building Ubuntu-based GLIBC TDX image...");
+			mosaik::tee::tdx::build::ubuntu().build()
+		}
+		_ => panic!("Unknown BUILD_TYPE, expected 'alpine' or 'ubuntu'"),
+	};
+
+	for line in format!("{build_output:#?}").lines() {
 		println!("cargo:warning={line}");
 	}
 }

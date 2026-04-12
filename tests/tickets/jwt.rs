@@ -1,7 +1,7 @@
 use {
 	crate::{
 		Data1,
-		utils::{JwtIssuer, Jwt, discover_all, sleep_s, timeout_s},
+		utils::{Jwt, JwtIssuer, discover_all, sleep_s, timeout_s},
 	},
 	core::time::Duration,
 	futures::{SinkExt, StreamExt},
@@ -40,8 +40,7 @@ async fn stream_consumer() -> anyhow::Result<()> {
 		.streams()
 		.consumer::<Data1>()
 		.require_ticket(
-			Jwt::with_key(jwt_issuer.key())
-				.allow_issuer(jwt_issuer.issuer()),
+			Jwt::with_key(jwt_issuer.key()).allow_issuer(jwt_issuer.issuer()),
 		)
 		.build();
 
@@ -81,8 +80,7 @@ async fn stream_consumer_ticket_expiry() -> anyhow::Result<()> {
 		.streams()
 		.consumer::<Data1>()
 		.require_ticket(
-			Jwt::with_key(jwt_issuer.key())
-				.allow_issuer(jwt_issuer.issuer()),
+			Jwt::with_key(jwt_issuer.key()).allow_issuer(jwt_issuer.issuer()),
 		)
 		.build();
 
@@ -137,8 +135,7 @@ async fn stream_producer() -> anyhow::Result<()> {
 		.streams()
 		.producer::<Data1>()
 		.require_ticket(
-			Jwt::with_key(jwt_issuer.key())
-				.allow_issuer(jwt_issuer.issuer()),
+			Jwt::with_key(jwt_issuer.key()).allow_issuer(jwt_issuer.issuer()),
 		)
 		.build()?;
 
@@ -205,12 +202,10 @@ async fn stream_consumer_multiple_validators() -> anyhow::Result<()> {
 		.streams()
 		.consumer::<Data1>()
 		.require_ticket(
-			Jwt::with_key(issuer_a.key())
-				.allow_issuer(issuer_a.issuer()),
+			Jwt::with_key(issuer_a.key()).allow_issuer(issuer_a.issuer()),
 		)
 		.require_ticket(
-			Jwt::with_key(issuer_b.key())
-				.allow_issuer(issuer_b.issuer()),
+			Jwt::with_key(issuer_b.key()).allow_issuer(issuer_b.issuer()),
 		)
 		.build();
 
@@ -267,12 +262,10 @@ async fn stream_producer_multiple_validators() -> anyhow::Result<()> {
 		.streams()
 		.producer::<Data1>()
 		.require_ticket(
-			Jwt::with_key(issuer_a.key())
-				.allow_issuer(issuer_a.issuer()),
+			Jwt::with_key(issuer_a.key()).allow_issuer(issuer_a.issuer()),
 		)
 		.require_ticket(
-			Jwt::with_key(issuer_b.key())
-				.allow_issuer(issuer_b.issuer()),
+			Jwt::with_key(issuer_b.key()).allow_issuer(issuer_b.issuer()),
 		)
 		.build()?;
 
@@ -319,8 +312,7 @@ async fn stream_producer_ticket_expiry() -> anyhow::Result<()> {
 		.streams()
 		.producer::<Data1>()
 		.require_ticket(
-			Jwt::with_key(jwt_issuer.key())
-				.allow_issuer(jwt_issuer.issuer()),
+			Jwt::with_key(jwt_issuer.key()).allow_issuer(jwt_issuer.issuer()),
 		)
 		.build()?;
 

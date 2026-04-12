@@ -5,12 +5,7 @@ use {
 	},
 	futures::{SinkExt, StreamExt},
 	mosaik::{
-		tee::tdx::{
-			Measurement,
-			MeasurementsCriteria,
-			NetworkTdxExt,
-			Tdx,
-		},
+		tee::tdx::{Measurement, MeasurementsCriteria, NetworkTdxExt, Tdx},
 		*,
 	},
 };

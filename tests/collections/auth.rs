@@ -1,11 +1,5 @@
 use {
-	crate::utils::{
-		JwtIssuer,
-		Jwt,
-		discover_all,
-		sleep_s,
-		timeout_s,
-	},
+	crate::utils::{Jwt, JwtIssuer, discover_all, sleep_s, timeout_s},
 	hmac::{Hmac, digest::KeyInit},
 	mosaik::{
 		collections::{
@@ -34,8 +28,7 @@ async fn map_auth_tickets() -> anyhow::Result<()> {
 	)?;
 
 	let issuer = JwtIssuer::default();
-	let validator =
-		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	// n0 and n1 get valid tickets; n2 gets none
 	n0.discovery()
@@ -89,8 +82,7 @@ async fn vec_auth_tickets() -> anyhow::Result<()> {
 	)?;
 
 	let issuer = JwtIssuer::default();
-	let validator =
-		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	n0.discovery()
 		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
@@ -135,8 +127,7 @@ async fn set_auth_tickets() -> anyhow::Result<()> {
 	)?;
 
 	let issuer = JwtIssuer::default();
-	let validator =
-		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	n0.discovery()
 		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
@@ -181,8 +172,7 @@ async fn cell_auth_tickets() -> anyhow::Result<()> {
 	)?;
 
 	let issuer = JwtIssuer::default();
-	let validator =
-		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	n0.discovery()
 		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
@@ -227,8 +217,7 @@ async fn once_auth_tickets() -> anyhow::Result<()> {
 	)?;
 
 	let issuer = JwtIssuer::default();
-	let validator =
-		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	n0.discovery()
 		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
@@ -273,8 +262,7 @@ async fn priority_queue_auth_tickets() -> anyhow::Result<()> {
 	)?;
 
 	let issuer = JwtIssuer::default();
-	let validator =
-		Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
 
 	n0.discovery()
 		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
@@ -331,10 +319,10 @@ async fn different_auths_produce_different_group_ids() -> anyhow::Result<()> {
 	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
 	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
 
-	let validator_a = Jwt::with_key(issuer_a.key())
-		.allow_issuer(issuer_a.issuer());
-	let validator_b = Jwt::with_key(issuer_b.key())
-		.allow_issuer(issuer_b.issuer());
+	let validator_a =
+		Jwt::with_key(issuer_a.key()).allow_issuer(issuer_a.issuer());
+	let validator_b =
+		Jwt::with_key(issuer_b.key()).allow_issuer(issuer_b.issuer());
 
 	let w_a = collections::Map::<u64, u64>::new_with_config(
 		&n0,
