@@ -154,22 +154,22 @@ let validator = Tdx::new()
 
 ### Builder methods
 
-| Method                       | Description                                              |
-| ---------------------------- | -------------------------------------------------------- |
-| `new()` / `empty()`          | Accept any valid TDX attestation                         |
-| `baseline(criteria)`         | Start from a `MeasurementsCriteria` baseline             |
-| `from_local()`               | Require all measurements to match the local machine      |
-| `require_mrtd(measurement)`  | Require a specific MR_TD value                           |
-| `require_rtmr0(measurement)` | Require a specific RTMR0 value                           |
-| `require_rtmr1(measurement)` | Require a specific RTMR1 value                           |
-| `require_rtmr2(measurement)` | Require a specific RTMR2 value                           |
-| `require_rtmr3(measurement)` | Require a specific RTMR3 value                           |
-| `require_own_mrtd()`         | Require the same MR_TD as the local machine              |
-| `require_own_rtmr0()`        | Require the same RTMR0 as the local machine              |
-| `require_own_rtmr1()`        | Require the same RTMR1 as the local machine              |
-| `require_own_rtmr2()`        | Require the same RTMR2 as the local machine              |
-| `require_own_rtmr3()`        | Require the same RTMR3 as the local machine              |
-| `allow_variant(criteria)`    | Allow an alternative set of measurement criteria         |
+| Method                       | Description                                         |
+| ---------------------------- | --------------------------------------------------- |
+| `new()` / `empty()`          | Accept any valid TDX attestation                    |
+| `baseline(criteria)`         | Start from a `MeasurementsCriteria` baseline        |
+| `from_local()`               | Require all measurements to match the local machine |
+| `require_mrtd(measurement)`  | Require a specific MR_TD value                      |
+| `require_rtmr0(measurement)` | Require a specific RTMR0 value                      |
+| `require_rtmr1(measurement)` | Require a specific RTMR1 value                      |
+| `require_rtmr2(measurement)` | Require a specific RTMR2 value                      |
+| `require_rtmr3(measurement)` | Require a specific RTMR3 value                      |
+| `require_own_mrtd()`         | Require the same MR_TD as the local machine         |
+| `require_own_rtmr0()`        | Require the same RTMR0 as the local machine         |
+| `require_own_rtmr1()`        | Require the same RTMR1 as the local machine         |
+| `require_own_rtmr2()`        | Require the same RTMR2 as the local machine         |
+| `require_own_rtmr3()`        | Require the same RTMR3 as the local machine         |
+| `allow_variant(criteria)`    | Allow an alternative set of measurement criteria    |
 
 The `from_local()` and `require_own_*` methods read measurements from TDX
 hardware and return `Result`, so they require `?` or `.expect()` in the builder
@@ -316,36 +316,85 @@ let writer = mosaik::collections::Map::<String, String>::writer_with_config(
 ## TDX Image Builder
 
 Mosaik includes a build-time tool for creating TDX guest images from Rust
-crates. The builder cross-compiles your binary for `x86_64-unknown-linux-musl`,
-packages it with an Alpine Linux root filesystem, kernel, and OVMF firmware, and
-produces a self-extracting launch script.
+crates. Two builder variants are available:
 
-Enable it in your `build-dependencies`:
+| Builder    | Target                      | Root Filesystem           | Binary Linking  | Feature Flag         |
+| ---------- | --------------------------- | ------------------------- | --------------- | -------------------- |
+| **Alpine** | `x86_64-unknown-linux-musl` | Alpine minirootfs (~5 MB) | Static (musl)   | `tdx-builder-alpine` |
+| **Ubuntu** | `x86_64-unknown-linux-gnu`  | Ubuntu base (~25 MB)      | Dynamic (glibc) | `tdx-builder-ubuntu` |
+
+Both builders cross-compile your binary, package it with a kernel and OVMF
+firmware into a CPIO initramfs, pre-compute TDX measurements, and generate a
+self-extracting QEMU launch script. Use `tdx-builder-all` to enable both.
+
+### When to use which
+
+- **Alpine** — smaller images, faster boot, ideal for lightweight services
+  that don't need glibc or the Ubuntu package ecosystem.
+- **Ubuntu** — full glibc environment with standard Ubuntu packages
+  (`kmod`, `iproute2`, etc.) pre-installed. Better compatibility with
+  libraries that require glibc or dynamically linked C dependencies.
+
+### Enable in build-dependencies
 
 ```toml
 [build-dependencies]
+# Alpine only
 mosaik = { version = "0.3", features = ["tdx-builder-alpine"] }
+
+# Ubuntu only
+mosaik = { version = "0.3", features = ["tdx-builder-ubuntu"] }
+
+# Both
+mosaik = { version = "0.3", features = ["tdx-builder-all"] }
 ```
 
 ### Usage in build.rs
 
 ```rust,ignore
 fn main() {
+    // Alpine builder
     let output = mosaik::tdx::build::alpine().build();
-    for line in format!("{output:#?}").lines() {
-        println!("cargo:warning={line}");
-    }
+
+    // Ubuntu builder
+    let output = mosaik::tdx::build::ubuntu().build();
 }
 ```
 
-The builder:
+You can also select the builder at build time via an environment variable:
 
-1. Cross-compiles the current crate for `x86_64-unknown-linux-musl`
-2. Downloads the Alpine Linux minirootfs and a TDX-enabled kernel
-3. Obtains OVMF firmware for TDX
-4. Bundles everything into a CPIO initramfs
-5. Pre-computes the `MR_TD` measurement for the resulting image
-6. Generates a self-extracting launch script
+```rust,ignore
+fn main() {
+    let output = match std::env::var("BUILD_TYPE").as_deref() {
+        Err(_) | Ok("alpine") => {
+            mosaik::tee::tdx::build::alpine().build()
+        }
+        Ok("ubuntu") => {
+            mosaik::tee::tdx::build::ubuntu().build()
+        }
+        _ => panic!("Unknown BUILD_TYPE"),
+    };
+}
+```
+
+```bash
+# Build with Alpine (default)
+cargo build -p my-crate
+
+# Build with Ubuntu
+BUILD_TYPE=ubuntu cargo build -p my-crate
+```
+
+### Build steps
+
+Both builders follow the same pipeline:
+
+1. Cross-compile the current crate for the target triple
+2. Download the base root filesystem (Alpine minirootfs or Ubuntu base)
+3. Download a TDX-enabled kernel and OVMF firmware
+4. Bundle everything into a gzipped CPIO initramfs
+5. Pre-compute `MR_TD`, `RTMR[1]`, and `RTMR[2]` measurements
+6. Generate a self-extracting QEMU launch script
 
 The pre-computed `MR_TD` can be used directly in `Tdx::require_mrtd()`
 for compile-time attestation binding — the binary that builds the image knows
@@ -353,15 +402,72 @@ exactly what measurement to expect from the resulting TDX guest.
 
 ### Builder options
 
-The `AlpineBuilder` provides a fluent API for customization:
+Both `AlpineBuilder` and `UbuntuBuilder` share a common fluent API:
 
-| Method                     | Description                                       |
-| -------------------------- | ------------------------------------------------- |
-| `alpine_version(m, p)`     | Set Alpine Linux version (default: auto-detected) |
-| `ssh_key(key)`             | Add an SSH public key for guest access            |
-| `ssh_forward(host, guest)` | Configure SSH port forwarding                     |
-| `cpus(n)`                  | Set default vCPU count                            |
-| `memory(size)`             | Set default memory (e.g., `"2G"`)                 |
-| `extra_file(path, dest)`   | Bundle additional files into the image            |
-| `kernel_modules_dir(path)` | Specify custom kernel modules directory           |
-| `bundle_runner(bool)`      | Include the QEMU launch script in the output      |
+| Method                           | Description                                         |
+| -------------------------------- | --------------------------------------------------- |
+| `with_custom_vmlinuz(bytes)`     | Provide a kernel binary in-memory (skips download)  |
+| `with_custom_ovmf(bytes)`        | Provide OVMF firmware in-memory (skips download)    |
+| `with_ssh_key(pubkey)`           | Add an SSH public key for guest access              |
+| `with_ssh_forward(host, guest)`  | Configure SSH port forwarding                       |
+| `with_default_cpu_count(n)`      | Set default vCPU count (default: 4)                 |
+| `with_default_memory_size(size)` | Set default memory size (default: `"4G"`)           |
+| `with_bundle_runner()`           | Include the mosaik bundle runner (default)          |
+| `without_bundle_runner()`        | Exclude the mosaik bundle runner                    |
+| `with_extra_file(host, guest)`   | Bundle additional files into the image              |
+| `with_kernel_module(path)`       | Include a `.ko` kernel module file                  |
+| `with_kernel_modules_dir(path)`  | Auto-discover TDX kernel modules from a directory   |
+| `with_kernel_version(v)`         | Set kernel version for download (e.g. `"6.8.0-55"`) |
+| `with_kernel_abi(abi)`           | Set kernel ABI for download (e.g. `"57"`)           |
+| `with_ovmf_version(v)`           | Set OVMF version for download                       |
+| `with_artifacts_output_path(p)`  | Custom output directory for build artifacts         |
+
+**Alpine-specific:**
+
+| Method                          | Description                                 |
+| ------------------------------- | ------------------------------------------- |
+| `with_major_version(v)`         | Alpine major version (default: `"3.21"`)    |
+| `with_minor_version(v)`         | Alpine patch release (default: `"0"`)       |
+| `with_custom_minirootfs(bytes)` | Provide Alpine minirootfs tarball in-memory |
+
+**Ubuntu-specific:**
+
+| Method                      | Description                                  |
+| --------------------------- | -------------------------------------------- |
+| `with_ubuntu_version(v)`    | Ubuntu version (default: `"24.04.4"`)        |
+| `with_custom_rootfs(bytes)` | Provide Ubuntu base rootfs tarball in-memory |
+
+### Environment variable overrides
+
+Both builders respect environment variables for CI or scripted builds:
+
+| Variable                       | Description                             |
+| ------------------------------ | --------------------------------------- |
+| `TDX_IMAGE_SKIP=1`             | Skip the entire TDX image build         |
+| `TDX_IMAGE_ALPINE_VERSION`     | Alpine major version (Alpine builder)   |
+| `TDX_IMAGE_ALPINE_MINOR`       | Alpine patch release (Alpine builder)   |
+| `TDX_IMAGE_UBUNTU_VERSION`     | Ubuntu version (Ubuntu builder)         |
+| `TDX_IMAGE_KERNEL`             | Path to a custom kernel binary          |
+| `TDX_IMAGE_KERNEL_VERSION`     | Ubuntu kernel version for download      |
+| `TDX_IMAGE_KERNEL_ABI`         | Ubuntu kernel ABI for download          |
+| `TDX_IMAGE_OVMF`               | Path to a custom OVMF firmware file     |
+| `TDX_IMAGE_OVMF_VERSION`       | OVMF version for download               |
+| `TDX_IMAGE_EXTRA_FILES`        | Colon-separated `host:guest` file pairs |
+| `TDX_IMAGE_KERNEL_MODULES`     | Colon-separated `.ko` module paths      |
+| `TDX_IMAGE_KERNEL_MODULES_DIR` | Kernel modules auto-discovery directory |
+
+### Build artifacts
+
+Both builders produce the same set of artifacts under
+`<target_dir>/<profile>/tdx-artifacts/<crate_name>/<distro>/`:
+
+| File                        | Description                        |
+| --------------------------- | ---------------------------------- |
+| `<crate>-initramfs.cpio.gz` | Gzipped initramfs                  |
+| `<crate>-vmlinuz`           | Kernel binary                      |
+| `<crate>-ovmf.fd`           | OVMF firmware                      |
+| `<crate>-run-qemu.sh`       | Self-extracting QEMU launch script |
+| `<crate>-launch-tdx.sh`     | Simple launch wrapper              |
+| `<crate>-mrtd.hex`          | Pre-computed MR_TD measurement     |
+| `<crate>-rtmr1.hex`         | Pre-computed RTMR[1] measurement   |
+| `<crate>-rtmr2.hex`         | Pre-computed RTMR[2] measurement   |

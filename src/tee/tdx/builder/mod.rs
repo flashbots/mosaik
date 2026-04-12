@@ -2,6 +2,7 @@
 
 use {super::Measurement, std::path::PathBuf};
 
+mod common;
 mod cpio;
 mod helpers;
 mod kernel;
