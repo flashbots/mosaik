@@ -81,11 +81,14 @@ all configured validators. When the earliest ticket expires, the producer
 needed:
 
 ```rust,ignore
-use mosaik::primitives::{TicketValidator, Expiration, InvalidTicket};
+use mosaik::tickets::{Jwt, Hs256};
+
+let validator = Jwt::with_key(Hs256::new(secret))
+    .allow_issuer("my-app");
 
 let producer = network.streams()
     .producer::<MyDatum>()
-    .require_ticket(MyJwtValidator::new())
+    .require_ticket(validator)
     .build()?;
 ```
 

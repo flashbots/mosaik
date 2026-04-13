@@ -211,7 +211,10 @@ impl UbuntuBuilder {
 	/// Append multiple command-line arguments at once.
 	#[must_use]
 	pub fn with_args(mut self, args: &[&str]) -> Self {
-		self.common.args.extend(args.iter().map(|a| (*a).to_string()));
+		self
+			.common
+			.args
+			.extend(args.iter().map(|a| (*a).to_string()));
 		self
 	}
 
@@ -219,7 +222,8 @@ impl UbuntuBuilder {
 	/// the binary is started inside the guest.
 	#[must_use]
 	pub fn with_env(mut self, key: &str, value: &str) -> Self {
-		self.common
+		self
+			.common
 			.env_vars
 			.push((key.to_string(), value.to_string()));
 		self

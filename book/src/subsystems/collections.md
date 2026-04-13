@@ -110,9 +110,13 @@ peers carrying valid tickets can join and replicate data.
 ```rust,ignore
 use mosaik::CollectionConfig;
 use mosaik::collections::{Map, StoreId};
+use mosaik::tickets::{Jwt, Hs256};
+
+let validator = Jwt::with_key(Hs256::new(secret))
+    .allow_issuer("my-app");
 
 let config = CollectionConfig::default()
-    .require_ticket(my_validator);
+    .require_ticket(validator);
 
 let writer = Map::<String, u64>::writer_with_config(&network, store_id, config);
 ```
@@ -127,17 +131,17 @@ Peers must satisfy **all** configured validators to participate.
 The `collection!` macro supports `require_ticket` directly:
 
 ```rust,ignore
-use mosaik::*;
-use mosaik::tdx::Tdx;
+use mosaik::tickets::{Jwt, Hs256};
 
-declare::collection!(
+mosaik::collection!(
     pub SecureMap = mosaik::collections::Map<String, String>,
     "secure.store",
-    require_ticket: Tdx::new().require_mrtd("..."),
+    require_ticket: Jwt::with_key(Hs256::new(secret))
+        .allow_issuer("my-app"),
 );
 ```
 
-See [Auth Tickets](discovery/tickets.md) for the `TicketValidator` trait and
+See [Auth Tickets](discovery/tickets.md) for the full JWT API and
 [TEE > TDX](tee/tdx.md) for TDX-specific validation.
 
 ## StoreId and group identity

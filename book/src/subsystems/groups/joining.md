@@ -128,42 +128,31 @@ tickets are checked against the validator -- only peers carrying a valid
 ticket of the expected class are allowed to form bonds.
 
 ```rust,ignore
-use mosaik::primitives::TicketValidator;
-use mosaik::discovery::PeerEntry;
-use mosaik::{UniqueId, id, Expiration, InvalidTicket};
+use mosaik::tickets::{Jwt, Hs256};
 
-struct MyAuth;
-
-impl TicketValidator for MyAuth {
-    fn class(&self) -> UniqueId {
-        id!("my-app.group-auth")
-    }
-
-    fn signature(&self) -> UniqueId {
-        // Must be identical across all group members.
-        // Include any configuration that affects validation.
-        id!("my-app.group-auth.v1")
-    }
-
-    fn validate(
-        &self,
-        ticket: &[u8],
-        peer: &PeerEntry,
-    ) -> Result<Expiration, InvalidTicket> {
-        if ticket.is_empty() {
-            return Err(InvalidTicket);
-        }
-        // Application-specific validation logic.
-        // Return Expiration::Never for non-expiring tickets,
-        // or Expiration::At(datetime) for time-limited ones.
-        Ok(Expiration::Never)
-    }
-}
+let validator = Jwt::with_key(Hs256::new(secret))
+    .allow_issuer("my-app");
 
 let group = network.groups()
-    .with_key(key)
+    .with_key(GroupKey::from(&validator))
     .with_state_machine(MyStateMachine::new())
-    .require_ticket(MyAuth)
+    .require_ticket(validator)
+    .join();
+```
+
+For asymmetric keys (e.g. ECDSA P-256):
+
+```rust,ignore
+use mosaik::tickets::{Jwt, Es256};
+
+// Compressed P-256 public key (33 bytes, SEC1 format)
+let validator = Jwt::with_key(Es256::hex("02abcd..."))
+    .allow_issuer("my-app");
+
+let group = network.groups()
+    .with_key(GroupKey::from(&validator))
+    .with_state_machine(MyStateMachine::new())
+    .require_ticket(validator)
     .join();
 ```
 

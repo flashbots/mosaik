@@ -1,7 +1,18 @@
 use {
 	crate::{
 		Data1,
-		utils::{Jwt, JwtIssuer, discover_all, sleep_s, timeout_s},
+		utils::{
+			DEFAULT_ISSUER,
+			DEFAULT_SECRET,
+			discover_all,
+			expired_expiry,
+			expiry_in,
+			jwt_builder,
+			jwt_validator,
+			sleep_s,
+			timeout_s,
+			valid_expiry,
+		},
 	},
 	core::time::Duration,
 	futures::{SinkExt, StreamExt},
@@ -22,14 +33,13 @@ async fn stream_consumer() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let jwt_issuer = JwtIssuer::default();
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	// n1 gets a valid ticket, n2 an expired one, n3 none
-	let n1_ticket = jwt_issuer.make_valid_ticket(&n1.local().id());
-	let n2_ticket = jwt_issuer.make_expired_ticket(&n2.local().id());
-
-	n1.discovery().add_ticket(n1_ticket);
-	n2.discovery().add_ticket(n2_ticket);
+	n1.discovery()
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n2.discovery()
+		.add_ticket(builder.build(&n2.local().id(), expired_expiry()));
 
 	let mut p1 = n1.streams().produce::<Data1>();
 	let _p2 = n2.streams().produce::<Data1>();
@@ -39,9 +49,7 @@ async fn stream_consumer() -> anyhow::Result<()> {
 	let mut c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.require_ticket(
-			Jwt::with_key(jwt_issuer.key()).allow_issuer(jwt_issuer.issuer()),
-		)
+		.require_ticket(jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET))
 		.build();
 
 	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
@@ -68,20 +76,18 @@ async fn stream_consumer_ticket_expiry() -> anyhow::Result<()> {
 	let (n0, n1) =
 		tokio::try_join!(Network::new(network_id), Network::new(network_id),)?;
 
-	let jwt_issuer = JwtIssuer::default();
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	// Short-lived ticket (3 seconds)
-	let n1_ticket = jwt_issuer
-		.make_ticket_expiring_in(&n1.local().id(), Duration::from_secs(3));
-	n1.discovery().add_ticket(n1_ticket);
+	n1.discovery().add_ticket(
+		builder.build(&n1.local().id(), expiry_in(Duration::from_secs(3))),
+	);
 
 	let mut p1 = n1.streams().produce::<Data1>();
 	let mut c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.require_ticket(
-			Jwt::with_key(jwt_issuer.key()).allow_issuer(jwt_issuer.issuer()),
-		)
+		.require_ticket(jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET))
 		.build();
 
 	timeout_s(5, discover_all([&n0, &n1])).await??;
@@ -114,7 +120,7 @@ async fn stream_consumer_ticket_expiry() -> anyhow::Result<()> {
 async fn stream_producer() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 
-	let jwt_issuer = JwtIssuer::default();
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	let (n0, n1, n2, n3) = tokio::try_join!(
 		Network::new(network_id),
@@ -124,19 +130,16 @@ async fn stream_producer() -> anyhow::Result<()> {
 	)?;
 
 	// n1 gets a valid ticket, n2 an expired one, n3 none
-	let n1_ticket = jwt_issuer.make_valid_ticket(&n1.local().id());
-	let n2_ticket = jwt_issuer.make_expired_ticket(&n2.local().id());
-
-	n1.discovery().add_ticket(n1_ticket);
-	n2.discovery().add_ticket(n2_ticket);
+	n1.discovery()
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n2.discovery()
+		.add_ticket(builder.build(&n2.local().id(), expired_expiry()));
 
 	// Producer with ticket validator
 	let mut p0 = n0
 		.streams()
 		.producer::<Data1>()
-		.require_ticket(
-			Jwt::with_key(jwt_issuer.key()).allow_issuer(jwt_issuer.issuer()),
-		)
+		.require_ticket(jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET))
 		.build()?;
 
 	let mut c1 = n1.streams().consume::<Data1>();
@@ -169,8 +172,8 @@ async fn stream_producer() -> anyhow::Result<()> {
 async fn stream_consumer_multiple_validators() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 
-	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
-	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
+	let builder_a = jwt_builder("issuer-alpha", "secret-alpha");
+	let builder_b = jwt_builder("issuer-beta", "secret-beta");
 
 	let (n0, n1, n2, n3) = tokio::try_join!(
 		Network::new(network_id),
@@ -181,17 +184,17 @@ async fn stream_consumer_multiple_validators() -> anyhow::Result<()> {
 
 	// n1 has both tickets → should be subscribed
 	n1.discovery()
-		.add_ticket(issuer_a.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder_a.build(&n1.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer_b.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder_b.build(&n1.local().id(), valid_expiry()));
 
 	// n2 has only issuer_a ticket → should be rejected
 	n2.discovery()
-		.add_ticket(issuer_a.make_valid_ticket(&n2.local().id()));
+		.add_ticket(builder_a.build(&n2.local().id(), valid_expiry()));
 
 	// n3 has only issuer_b ticket → should be rejected
 	n3.discovery()
-		.add_ticket(issuer_b.make_valid_ticket(&n3.local().id()));
+		.add_ticket(builder_b.build(&n3.local().id(), valid_expiry()));
 
 	let mut p1 = n1.streams().produce::<Data1>();
 	let _p2 = n2.streams().produce::<Data1>();
@@ -201,12 +204,8 @@ async fn stream_consumer_multiple_validators() -> anyhow::Result<()> {
 	let mut c0 = n0
 		.streams()
 		.consumer::<Data1>()
-		.require_ticket(
-			Jwt::with_key(issuer_a.key()).allow_issuer(issuer_a.issuer()),
-		)
-		.require_ticket(
-			Jwt::with_key(issuer_b.key()).allow_issuer(issuer_b.issuer()),
-		)
+		.require_ticket(jwt_validator("issuer-alpha", "secret-alpha"))
+		.require_ticket(jwt_validator("issuer-beta", "secret-beta"))
 		.build();
 
 	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
@@ -233,8 +232,8 @@ async fn stream_consumer_multiple_validators() -> anyhow::Result<()> {
 async fn stream_producer_multiple_validators() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 
-	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
-	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
+	let builder_a = jwt_builder("issuer-alpha", "secret-alpha");
+	let builder_b = jwt_builder("issuer-beta", "secret-beta");
 
 	let (n0, n1, n2, n3) = tokio::try_join!(
 		Network::new(network_id),
@@ -245,28 +244,24 @@ async fn stream_producer_multiple_validators() -> anyhow::Result<()> {
 
 	// n1 has both tickets → should be accepted
 	n1.discovery()
-		.add_ticket(issuer_a.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder_a.build(&n1.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer_b.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder_b.build(&n1.local().id(), valid_expiry()));
 
 	// n2 has only issuer_a ticket → should be rejected
 	n2.discovery()
-		.add_ticket(issuer_a.make_valid_ticket(&n2.local().id()));
+		.add_ticket(builder_a.build(&n2.local().id(), valid_expiry()));
 
 	// n3 has only issuer_b ticket → should be rejected
 	n3.discovery()
-		.add_ticket(issuer_b.make_valid_ticket(&n3.local().id()));
+		.add_ticket(builder_b.build(&n3.local().id(), valid_expiry()));
 
 	// Producer requiring both validators
 	let mut p0 = n0
 		.streams()
 		.producer::<Data1>()
-		.require_ticket(
-			Jwt::with_key(issuer_a.key()).allow_issuer(issuer_a.issuer()),
-		)
-		.require_ticket(
-			Jwt::with_key(issuer_b.key()).allow_issuer(issuer_b.issuer()),
-		)
+		.require_ticket(jwt_validator("issuer-alpha", "secret-alpha"))
+		.require_ticket(jwt_validator("issuer-beta", "secret-beta"))
 		.build()?;
 
 	let mut c1 = n1.streams().consume::<Data1>();
@@ -301,19 +296,17 @@ async fn stream_producer_ticket_expiry() -> anyhow::Result<()> {
 	let (n0, n1) =
 		tokio::try_join!(Network::new(network_id), Network::new(network_id),)?;
 
-	let jwt_issuer = JwtIssuer::default();
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	// Short-lived ticket (3 seconds)
-	let n1_ticket = jwt_issuer
-		.make_ticket_expiring_in(&n1.local().id(), Duration::from_secs(3));
-	n1.discovery().add_ticket(n1_ticket);
+	n1.discovery().add_ticket(
+		builder.build(&n1.local().id(), expiry_in(Duration::from_secs(3))),
+	);
 
 	let mut p0 = n0
 		.streams()
 		.producer::<Data1>()
-		.require_ticket(
-			Jwt::with_key(jwt_issuer.key()).allow_issuer(jwt_issuer.issuer()),
-		)
+		.require_ticket(jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET))
 		.build()?;
 
 	let mut c1 = n1.streams().consume::<Data1>();
@@ -336,6 +329,119 @@ async fn stream_producer_ticket_expiry() -> anyhow::Result<()> {
 		p0.consumers().count(),
 		0,
 		"producer should drop consumer after ticket expiry"
+	);
+
+	Ok(())
+}
+
+/// Verifies end-to-end ES256 (P-256 ECDSA) JWT authentication: tickets
+/// signed with a private key are accepted by a validator configured with
+/// the corresponding compressed public key, and tickets signed with a
+/// different key are rejected.
+#[tokio::test]
+async fn es256_asymmetric_tickets() -> anyhow::Result<()> {
+	use mosaik::tickets::{Es256SigningKey, Jwt, JwtTicketBuilder};
+
+	let network_id = NetworkId::random();
+
+	// Generate a random P-256 keypair.
+	let signing_key = Es256SigningKey::random();
+	let pubkey = signing_key.verifying_key();
+
+	// Build tickets with the private key, validate with the public key.
+	let builder = JwtTicketBuilder::new(signing_key).issuer("es256-issuer");
+	let validator = Jwt::with_key(pubkey).allow_issuer("es256-issuer");
+
+	let (n0, n1, n2) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+	)?;
+
+	// n1 gets a valid ES256 ticket; n2 gets none
+	n1.discovery()
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+
+	let mut p1 = n1.streams().produce::<Data1>();
+	let _p2 = n2.streams().produce::<Data1>();
+
+	let mut c0 = n0
+		.streams()
+		.consumer::<Data1>()
+		.require_ticket(validator)
+		.build();
+
+	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
+	sleep_s(5).await;
+
+	// Only n1 should be subscribed (valid ES256 ticket)
+	let producers = c0.producers().map(|p| *p.peer().id()).collect::<Vec<_>>();
+	assert_eq!(producers.len(), 1, "only n1 has a valid ES256 ticket");
+	assert!(producers.contains(&n1.local().id()));
+
+	// Data flows through the authenticated connection
+	p1.send(Data1("es256".into())).await?;
+	assert_eq!(timeout_s(2, c0.next()).await?, Some(Data1("es256".into())));
+
+	Ok(())
+}
+
+/// Verifies ES256 with a compile-time hex-encoded public key and a
+/// fixed private key, demonstrating that the validator can be declared
+/// as a constant expression.
+#[tokio::test]
+async fn es256_hex_const_key() -> anyhow::Result<()> {
+	use mosaik::tickets::{Es256, Es256SigningKey, Jwt, JwtTicketBuilder};
+
+	// Fixed P-256 keypair (openssl ecparam -genkey -name prime256v1).
+	const PRIVKEY: [u8; 32] = [
+		0xde, 0x01, 0x77, 0x68, 0x91, 0x47, 0x6e, 0xe7, 0xbc, 0xd6, 0xee, 0x9d,
+		0x98, 0x24, 0xd1, 0x44, 0x0c, 0x7a, 0xe0, 0xc0, 0x95, 0xad, 0x71, 0xad,
+		0x75, 0xd3, 0xd1, 0x1a, 0x96, 0x64, 0x7b, 0x85,
+	];
+
+	let network_id = NetworkId::random();
+	let signing_key = Es256SigningKey::from_bytes(PRIVKEY);
+
+	let builder = JwtTicketBuilder::new(signing_key).issuer("es256-hex-issuer");
+
+	let validator = Jwt::with_key(Es256::hex(
+		"0298a82ebe69ad57e0f7d5c2809a05188ff58572c5a5009015f26643f91e0d3236",
+	))
+	.allow_issuer("es256-hex-issuer");
+
+	let (n0, n1, n2) = tokio::try_join!(
+		Network::new(network_id),
+		Network::new(network_id),
+		Network::new(network_id),
+	)?;
+
+	// n1 gets a valid ES256 ticket; n2 gets none
+	n1.discovery()
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+
+	let mut p1 = n1.streams().produce::<Data1>();
+	let _p2 = n2.streams().produce::<Data1>();
+
+	let mut c0 = n0
+		.streams()
+		.consumer::<Data1>()
+		.require_ticket(validator)
+		.build();
+
+	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
+	sleep_s(5).await;
+
+	// Only n1 should be subscribed
+	let producers = c0.producers().map(|p| *p.peer().id()).collect::<Vec<_>>();
+	assert_eq!(producers.len(), 1, "only n1 has a valid ES256 ticket");
+	assert!(producers.contains(&n1.local().id()));
+
+	// Data flows through the authenticated connection
+	p1.send(Data1("es256-hex".into())).await?;
+	assert_eq!(
+		timeout_s(2, c0.next()).await?,
+		Some(Data1("es256-hex".into()))
 	);
 
 	Ok(())

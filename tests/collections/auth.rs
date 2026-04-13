@@ -1,6 +1,17 @@
 use {
-	crate::utils::{Jwt, JwtIssuer, discover_all, sleep_s, timeout_s},
-	hmac::{Hmac, digest::KeyInit},
+	crate::utils::{
+		DEFAULT_ISSUER,
+		DEFAULT_SECRET,
+		Hs256,
+		Jwt,
+		discover_all,
+		jwt_builder,
+		jwt_secret,
+		jwt_validator,
+		sleep_s,
+		timeout_s,
+		valid_expiry,
+	},
 	mosaik::{
 		collections::{
 			CollectionConfig,
@@ -27,14 +38,14 @@ async fn map_auth_tickets() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let issuer = JwtIssuer::default();
-	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
+	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	// n0 and n1 get valid tickets; n2 gets none
 	n0.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -81,13 +92,13 @@ async fn vec_auth_tickets() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let issuer = JwtIssuer::default();
-	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
+	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	n0.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -126,13 +137,13 @@ async fn set_auth_tickets() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let issuer = JwtIssuer::default();
-	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
+	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	n0.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -171,13 +182,13 @@ async fn cell_auth_tickets() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let issuer = JwtIssuer::default();
-	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
+	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	n0.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -216,13 +227,13 @@ async fn once_auth_tickets() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let issuer = JwtIssuer::default();
-	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
+	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	n0.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -261,13 +272,13 @@ async fn priority_queue_auth_tickets() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let issuer = JwtIssuer::default();
-	let validator = Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer());
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
+	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	n0.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -316,13 +327,8 @@ async fn different_auths_produce_different_group_ids() -> anyhow::Result<()> {
 
 	let n0 = Network::new(network_id).await?;
 
-	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
-	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
-
-	let validator_a =
-		Jwt::with_key(issuer_a.key()).allow_issuer(issuer_a.issuer());
-	let validator_b =
-		Jwt::with_key(issuer_b.key()).allow_issuer(issuer_b.issuer());
+	let validator_a = jwt_validator("issuer-alpha", "secret-alpha");
+	let validator_b = jwt_validator("issuer-beta", "secret-beta");
 
 	let w_a = collections::Map::<u64, u64>::new_with_config(
 		&n0,
@@ -363,8 +369,8 @@ async fn collection_macro_with_require_ticket() -> anyhow::Result<()> {
 		AuthMap = mosaik::collections::Map<String, String>,
 		"test.auth.macro.map",
 		require_ticket: Jwt::with_key(
-			JwtIssuer::default().key()
-		).allow_issuer(JwtIssuer::default().issuer()),
+			Hs256::new(jwt_secret(DEFAULT_SECRET))
+		).allow_issuer(DEFAULT_ISSUER),
 	);
 
 	let network_id = NetworkId::random();
@@ -375,13 +381,13 @@ async fn collection_macro_with_require_ticket() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let issuer = JwtIssuer::default();
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	// n0 and n1 get valid tickets; n2 gets none
 	n0.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -411,10 +417,10 @@ async fn collection_macro_with_multiple_tickets() -> anyhow::Result<()> {
 		MultiAuthMap = mosaik::collections::Map<String, String>,
 		"test.multi.auth.macro.map",
 		require_ticket: Jwt::with_key(
-			Hmac::<sha2::Sha256>::new_from_slice(b"secret-alpha").unwrap()
+			Hs256::new(jwt_secret("secret-alpha"))
 		).allow_issuer("issuer-alpha"),
 		require_ticket: Jwt::with_key(
-			Hmac::<sha2::Sha256>::new_from_slice(b"secret-beta").unwrap()
+			Hs256::new(jwt_secret("secret-beta"))
 		).allow_issuer("issuer-beta"),
 	);
 
@@ -426,22 +432,22 @@ async fn collection_macro_with_multiple_tickets() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
-	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
+	let builder_a = jwt_builder("issuer-alpha", "secret-alpha");
+	let builder_b = jwt_builder("issuer-beta", "secret-beta");
 
 	// n0 and n1 carry tickets from both issuers
 	n0.discovery()
-		.add_ticket(issuer_a.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder_a.build(&n0.local().id(), valid_expiry()));
 	n0.discovery()
-		.add_ticket(issuer_b.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder_b.build(&n0.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer_a.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder_a.build(&n1.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer_b.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder_b.build(&n1.local().id(), valid_expiry()));
 
 	// n2 only carries a ticket from issuer-alpha (missing issuer-beta)
 	n2.discovery()
-		.add_ticket(issuer_a.make_valid_ticket(&n2.local().id()));
+		.add_ticket(builder_a.build(&n2.local().id(), valid_expiry()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -473,7 +479,7 @@ async fn macros_different_validators_group_ids() -> anyhow::Result<()> {
 		AuthMapA = mosaik::collections::Map<String, String>,
 		"test.auth.macro.map.a",
 		require_ticket: Jwt::with_key(
-			JwtIssuer::new("issuer-a", "secret-a").key()
+			Hs256::new(jwt_secret("secret-a"))
 		).allow_issuer("issuer-a"),
 	);
 
@@ -481,7 +487,7 @@ async fn macros_different_validators_group_ids() -> anyhow::Result<()> {
 		AuthMapB = mosaik::collections::Map<String, String>,
 		"test.auth.macro.map.b",
 		require_ticket: Jwt::with_key(
-			JwtIssuer::new("issuer-b", "secret-b").key()
+			Hs256::new(jwt_secret("secret-b"))
 		).allow_issuer("issuer-b"),
 	);
 

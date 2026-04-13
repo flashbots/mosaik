@@ -1,13 +1,27 @@
 #![allow(unused)]
 
 mod fut;
-mod jwt;
 mod ticket;
 mod time;
 mod tracing;
 
 use futures::future::try_join_all;
-pub use {fut::*, jwt::*, ticket::*, time::*};
+pub use {
+	fut::*,
+	mosaik::tickets::{
+		EdDsa,
+		Es256,
+		Es384,
+		Hs256,
+		Hs384,
+		Hs512,
+		Jwt,
+		JwtTicketBuilder,
+		VerifyingKey,
+	},
+	ticket::*,
+	time::*,
+};
 
 pub async fn discover_all(
 	networks: impl IntoIterator<Item = &mosaik::Network>,

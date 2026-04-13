@@ -1,90 +1,39 @@
 use {
-	crate::utils::Jwt,
 	core::time::Duration,
-	hmac::{Hmac, digest::KeyInit},
-	jwt::{RegisteredClaims, SignWithKey, VerifyWithKey},
-	mosaik::{
-		PeerId,
-		UniqueId,
-		discovery::PeerEntry,
-		id,
-		tickets::{Expiration, InvalidTicket, Ticket, TicketValidator},
-	},
+	mosaik::tickets::{Expiration, Hs256, Jwt, JwtTicketBuilder},
 };
 
-/// A JWT-based [`TicketValidator`] for producer-side stream authentication.
-pub struct JwtIssuer {
-	key: Hmac<sha2::Sha256>,
-	issuer: &'static str,
-	secret: &'static str,
+pub const DEFAULT_ISSUER: &str = "mosaik.test.jwt.issuer";
+pub const DEFAULT_SECRET: &str = "mosaik.test.jwt.secret";
+
+/// Derives a 32-byte key from a secret string (blake3 hash).
+pub fn jwt_secret(secret: &str) -> [u8; 32] {
+	*blake3::hash(secret.as_bytes()).as_bytes()
 }
 
-impl Default for JwtIssuer {
-	fn default() -> Self {
-		Self::new("mosaik.test.jwt.issuer", "mosaik.test.jwt.secret")
-	}
+/// Creates a [`JwtTicketBuilder`] with the given issuer and secret.
+pub fn jwt_builder(issuer: &str, secret: &str) -> JwtTicketBuilder {
+	JwtTicketBuilder::new(Hs256::new(jwt_secret(secret))).issuer(issuer)
 }
 
-impl JwtIssuer {
-	pub fn new(issuer: &'static str, secret: &'static str) -> Self {
-		Self {
-			key: Hmac::new_from_slice(secret.as_bytes()).unwrap(),
-			issuer,
-			secret,
-		}
-	}
+/// Creates a [`Jwt`] validator matching the given issuer and secret.
+pub fn jwt_validator(issuer: &str, secret: &str) -> Jwt {
+	Jwt::with_key(Hs256::new(jwt_secret(secret))).allow_issuer(issuer)
+}
 
-	pub const fn secret(&self) -> &[u8] {
-		self.secret.as_bytes()
-	}
+/// Returns an expiration one hour from now.
+pub fn valid_expiry() -> Expiration {
+	Expiration::At(chrono::Utc::now() + chrono::Duration::hours(1))
+}
 
-	pub const fn issuer(&self) -> &str {
-		self.issuer
-	}
+/// Returns an already-passed expiration (one hour ago).
+pub fn expired_expiry() -> Expiration {
+	Expiration::At(chrono::Utc::now() - chrono::Duration::hours(1))
+}
 
-	pub fn key(&self) -> Hmac<sha2::Sha256> {
-		self.key.clone()
-	}
-
-	pub fn make_ticket(
-		&self,
-		peer_id: &PeerId,
-		expiration: Expiration,
-	) -> Ticket {
-		Ticket::new(
-			Jwt::CLASS,
-			jwt::Claims::new(RegisteredClaims {
-				issuer: Some(self.issuer.to_string()),
-				subject: Some(peer_id.to_string().to_lowercase()),
-				expiration: match expiration {
-					Expiration::Never => None,
-					Expiration::At(ts) => Some(ts.timestamp().cast_unsigned()),
-				},
-				..Default::default()
-			})
-			.sign_with_key(&self.key)
-			.unwrap()
-			.into(),
-		)
-	}
-
-	pub fn make_ticket_expiring_in(
-		&self,
-		peer_id: &PeerId,
-		duration: Duration,
-	) -> Ticket {
-		let expiration_time =
-			chrono::Utc::now() + chrono::Duration::from_std(duration).unwrap();
-		self.make_ticket(peer_id, Expiration::At(expiration_time))
-	}
-
-	pub fn make_expired_ticket(&self, peer_id: &PeerId) -> Ticket {
-		let expiration_time = chrono::Utc::now() - chrono::Duration::hours(1);
-		self.make_ticket(peer_id, Expiration::At(expiration_time))
-	}
-
-	pub fn make_valid_ticket(&self, peer_id: &PeerId) -> Ticket {
-		let expiration_time = chrono::Utc::now() + chrono::Duration::hours(1);
-		self.make_ticket(peer_id, Expiration::At(expiration_time))
-	}
+/// Returns an expiration `duration` from now.
+pub fn expiry_in(duration: Duration) -> Expiration {
+	Expiration::At(
+		chrono::Utc::now() + chrono::Duration::from_std(duration).unwrap(),
+	)
 }

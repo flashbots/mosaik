@@ -32,17 +32,24 @@ pub type Tag = UniqueId;
 #[derive(Clone, Copy, Deref)]
 pub struct Digest(blake3::Hash);
 
-impl<T: AsRef<str>> From<T> for Digest {
-	fn from(s: T) -> Self {
-		let s = s.as_ref();
-		// if the string is already a 32-byte hex string, decode it directly
-		// otherwise, hash it to produce the unique id
+impl From<&[u8]> for Digest {
+	// if the byte slice is already 32 bytes, use it directly
+	// otherwise, hash it to produce the unique id
+	fn from(s: &[u8]) -> Self {
 		match hex::decode(s) {
 			Ok(b) if b.len() == 32 => {
 				Self(blake3::Hash::from_slice(&b).expect("slice is 32 bytes"))
 			}
-			_ => Self(blake3::hash(s.as_bytes())),
+			_ => Self(blake3::hash(s)),
 		}
+	}
+}
+
+impl From<&str> for Digest {
+	// if the string is already a 32-byte hex string, decode it directly
+	// otherwise, hash it to produce the unique id
+	fn from(s: &str) -> Self {
+		Self::from(s.as_bytes())
 	}
 }
 
@@ -89,6 +96,18 @@ impl From<&Digest> for [u8; 32] {
 	}
 }
 
+impl From<blake3::Hash> for Digest {
+	fn from(hash: blake3::Hash) -> Self {
+		Self(hash)
+	}
+}
+
+impl From<&blake3::Hash> for Digest {
+	fn from(hash: &blake3::Hash) -> Self {
+		Self(*hash)
+	}
+}
+
 impl From<Digest> for SecretKey {
 	fn from(val: Digest) -> Self {
 		Self::from_bytes(val.0.as_bytes())
@@ -111,7 +130,14 @@ impl FromStr for Digest {
 	type Err = Infallible;
 
 	fn from_str(s: &str) -> Result<Self, Self::Err> {
-		Ok(Self::from(s))
+		// if the string is already a 32-byte hex string, decode it directly
+		// otherwise, hash it to produce the unique id
+		match hex::decode(s) {
+			Ok(b) if b.len() == 32 => Ok(Self(
+				blake3::Hash::from_slice(&b).expect("slice is 32 bytes"),
+			)),
+			_ => Ok(Self(blake3::hash(s.as_bytes()))),
+		}
 	}
 }
 
@@ -275,6 +301,11 @@ impl Digest {
 	/// Creates a unique id from the given bytes.
 	pub const fn from_bytes(bytes: [u8; 32]) -> Self {
 		Self(blake3::Hash::from_bytes(bytes))
+	}
+
+	/// Creates a unique id from the given byte slice by hashing it.
+	pub fn hash(bytes: &[u8]) -> Self {
+		blake3::hash(bytes).into()
 	}
 
 	/// Generates a random unique id.

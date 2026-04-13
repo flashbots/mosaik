@@ -212,7 +212,10 @@ impl AlpineBuilder {
 	/// Append multiple command-line arguments at once.
 	#[must_use]
 	pub fn with_args(mut self, args: &[&str]) -> Self {
-		self.common.args.extend(args.iter().map(|a| (*a).to_string()));
+		self
+			.common
+			.args
+			.extend(args.iter().map(|a| (*a).to_string()));
 		self
 	}
 
@@ -220,7 +223,8 @@ impl AlpineBuilder {
 	/// the binary is started inside the guest.
 	#[must_use]
 	pub fn with_env(mut self, key: &str, value: &str) -> Self {
-		self.common
+		self
+			.common
 			.env_vars
 			.push((key.to_string(), value.to_string()));
 		self
@@ -304,8 +308,7 @@ impl AlpineBuilder {
 
 		// --- Generate /init ---
 		eprintln!("==> Generating /init...");
-		let init_script =
-			generate_init_script(&ctx.crate_name, &self.common);
+		let init_script = generate_init_script(&ctx.crate_name, &self.common);
 
 		// --- Kernel + modules ---
 		let kernel_cache_dir = ctx.cache_dir.join("kernel");
@@ -480,10 +483,7 @@ impl AlpineBuilder {
 
 const UDHCPC_SCRIPT: &str = include_str!("templates/udhcpc.sh");
 
-fn generate_init_script(
-	crate_name: &str,
-	common: &CommonConfig,
-) -> String {
+fn generate_init_script(crate_name: &str, common: &CommonConfig) -> String {
 	let ssh_block = if common.ssh_keys.is_empty() {
 		String::new()
 	} else {

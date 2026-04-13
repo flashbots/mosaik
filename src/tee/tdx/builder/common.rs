@@ -88,7 +88,8 @@ impl BuildContext {
 impl CommonConfig {
 	/// Generate shell `export` lines for environment variables.
 	pub fn env_block(&self) -> String {
-		self.env_vars
+		self
+			.env_vars
 			.iter()
 			.map(|(k, v)| {
 				let escaped = v.replace('\'', "'\\''");
@@ -106,7 +107,8 @@ impl CommonConfig {
 		if self.args.is_empty() {
 			"\"$@\"".to_string()
 		} else {
-			self.args
+			self
+				.args
 				.iter()
 				.map(|a| {
 					let escaped = a.replace('\'', "'\\''");

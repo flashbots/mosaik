@@ -49,15 +49,15 @@
 //!   consensus can proceed while lagging nodes catch up.
 //!
 //! - **Pluggable state sync.** When a follower falls behind, it synchronizes
-//!   through a [`StateSync`] implementation. The built-in
-//!   [`LogReplaySync`] recovers missing entries by
-//!   broadcasting a discovery request to all bonded peers, partitioning the
-//!   needed range for balanced load, and pulling entries in parallel. This is a
-//!   good starting point for custom state machines. For domain-specific needs,
-//!   custom [`StateSync`] implementations can use more efficient strategies
-//!   (e.g. snapshot transfer, as the [`collections`](crate::collections)
-//!   subsystem does). Incoming `AppendEntries` are buffered during catch-up and
-//!   applied once the gap is closed.
+//!   through a [`StateSync`] implementation. The built-in [`LogReplaySync`]
+//!   recovers missing entries by broadcasting a discovery request to all bonded
+//!   peers, partitioning the needed range for balanced load, and pulling
+//!   entries in parallel. This is a good starting point for custom state
+//!   machines. For domain-specific needs, custom [`StateSync`] implementations
+//!   can use more efficient strategies (e.g. snapshot transfer, as the
+//!   [`collections`](crate::collections) subsystem does). Incoming
+//!   `AppendEntries` are buffered during catch-up and applied once the gap is
+//!   closed.
 //!
 //! ## Group Identity
 //!

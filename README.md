@@ -115,33 +115,6 @@ let consumer = network.streams()
   .build();
 ```
 
-Tickets let producers authenticate consumers (or vice versa) without out-of-band coordination. Each node attaches a signed credential to its discovery entry; the other side validates it in a predicate:
-
-```rust
-use mosaik::*;
-
-// Both sides agree on a ticket class identifier
-const JWT_TICKET: UniqueId = id!("my-app.jwt");
-
-// Consumer: attach a JWT to its discovery entry
-let jwt: String = sign_jwt_for(network.local().id());
-network.discovery().add_ticket(Ticket::new(JWT_TICKET, Bytes::from(jwt)));
-
-// Producer: validate the ticket before accepting a subscription
-let jwt_key = /* shared verification key */;
-let producer = network.streams()
-    .producer::<MyDatum>()
-    .require(move |peer| {
-        peer.has_valid_ticket(JWT_TICKET, |jwt_bytes| {
-            let jwt_str = std::str::from_utf8(jwt_bytes).unwrap_or("");
-            validate_jwt(jwt_str, peer.id(), &jwt_key)
-        })
-    })
-    .build()?;
-```
-
-Tickets are propagated through gossip alongside the rest of the peer entry — no separate auth round-trip is needed.
-
 Key features:
 
 - **Consumer predicates** — conditions for accepting subscribers (auth, attestation, tags)
@@ -150,6 +123,38 @@ Key features:
 - **Per-subscription stats** — datums count, bytes count, uptime tracking
 - **Backpressure** — slow consumers are disconnected to prevent head-of-line blocking
 
+## Tickets
+
+Opaque, typed credentials for peer authentication. Tickets are attached to a node's discovery entry and propagated via gossip — no separate auth round-trip is needed. Streams, groups, and collections can all require valid tickets before accepting connections.
+
+Mosaik ships a built-in JWT validator (`Jwt`) and ticket builder (`JwtTicketBuilder`) supporting HMAC (HS256/384/512), ECDSA (ES256, ES256K, ES384, ES512), and EdDSA (Ed25519). For hardware-backed authentication, the `Tdx` validator verifies Intel TDX attestation quotes.
+
+```rust
+use mosaik::tickets::{Jwt, Hs256, JwtTicketBuilder, Expiration};
+
+// Validator: verify incoming JWTs with a shared HMAC key
+let validator = Jwt::with_key(Hs256::new(secret))
+    .allow_issuer("my-app");
+
+let producer = network.streams()
+    .producer::<MyDatum>()
+    .require_ticket(validator)
+    .build()?;
+
+// Issuer: sign and attach a JWT ticket for this peer
+let builder = JwtTicketBuilder::new(Hs256::new(secret))
+    .issuer("my-app");
+let ticket = builder.build(&network.local().id(), Expiration::At(expiry));
+network.discovery().add_ticket(ticket);
+```
+
+Key features:
+
+- **Built-in JWT support** — HMAC symmetric and ECDSA/EdDSA asymmetric algorithms
+- **Expiration-aware** — the runtime proactively disconnects peers when tickets expire
+- **Multiple validators** — require several independent credentials (AND-composed)
+- **Group identity** — validator configuration is mixed into the group ID derivation
+- **TDX attestation** — hardware-backed proof of code integrity via Intel TDX
 
 ## Collections
 
@@ -451,6 +456,7 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 | `src/streams/`     | Typed pub/sub: producers, consumers, status conditions, criteria                 |
 | `src/groups/`      | Consensus groups: bonds, Raft consensus, replicated state machines               |
 | `src/collections/` | Replicated data structures: `Map`, `Vec`, `Set`, `Cell`, `Once`, `PriorityQueue` |
+| `src/tickets/`     | Auth tickets: `Ticket`, `TicketValidator`, built-in JWT and TDX validators       |
 | `src/network/`     | Transport layer, connection management, typed links                              |
 | `src/primitives/`  | Identifiers, formatting helpers, async work queues, etc.                         |
 | `src/tee/`         | TEE support: Intel TDX attestation, validation, and image building               |
@@ -506,7 +512,8 @@ Core primitives for building self-organized distributed systems in trusted, perm
 - [x] **Discovery** — gossip announcements, catalog sync, tags
 - [x] **Streams** — producers, consumers, predicates, limits, online conditions, stats
 - [x] **Groups** — membership, shared state, failover, load balancing
-- [x] **Collections** - Replicated, eventually consistent data structures
+- [x] **Collections** — Replicated, eventually consistent data structures
+- [x] **Tickets** — JWT and TDX-based peer authentication with expiration-aware disconnect
 - [x] **TEE** — First-class Intel TDX support for hardware-attested identity and access control
 - [ ] **Preferences** — ranking producers by latency, geo-proximity
 - [ ] **Diagnostics** — network inspection, automatic metrics, developer debug tools

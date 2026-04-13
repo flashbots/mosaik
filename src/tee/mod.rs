@@ -11,15 +11,15 @@
 //!
 //! The [`tdx`] module (requires the `tdx` feature) provides:
 //!
-//! - **Attestation** — generate and verify TDX quotes that bind a
-//!   node's identity to its measurement registers (MRTD, RTMR).
-//! - **Ticket integration** — [`TdxTicket`](tdx::TdxTicket) wraps a
-//!   TDX quote as a mosaik [`Ticket`](crate::Ticket), and
-//!   [`Tdx`](tdx::Tdx) implements [`TicketValidator`](crate::primitives::TicketValidator)
-//!   for verifying them.
-//! - **Image builders** (`tdx-builder-alpine`, `tdx-builder-ubuntu`)
-//!   — build-time tools for packaging Rust crates into bootable TDX
-//!   guest images, used from `build.rs` scripts:
+//! - **Attestation** — generate and verify TDX quotes that bind a node's
+//!   identity to its measurement registers (MRTD, RTMR).
+//! - **Ticket integration** — [`TdxTicket`](tdx::TdxTicket) wraps a TDX quote
+//!   as a mosaik [`Ticket`](crate::Ticket), and [`Tdx`](tdx::Tdx) implements
+//!   [`TicketValidator`](crate::primitives::TicketValidator) for verifying
+//!   them.
+//! - **Image builders** (`tdx-builder-alpine`, `tdx-builder-ubuntu`) —
+//!   build-time tools for packaging Rust crates into bootable TDX guest images,
+//!   used from `build.rs` scripts:
 //!
 //!   ```rust,ignore
 //!   // build.rs

@@ -20,11 +20,11 @@
 //!
 //! Every collection has two roles:
 //!
-//! - A **writer** participates in Raft consensus and can mutate the
-//!   collection. Mutations return a [`Version`] that can be used to
-//!   track replication progress.
-//! - A **reader** is a read-only replica that receives updates from
-//!   the consensus group without voting.
+//! - A **writer** participates in Raft consensus and can mutate the collection.
+//!   Mutations return a [`Version`] that can be used to track replication
+//!   progress.
+//! - A **reader** is a read-only replica that receives updates from the
+//!   consensus group without voting.
 //!
 //! ```rust,ignore
 //! let scores = collections::Map::<String, u64>::writer(
@@ -38,8 +38,8 @@
 //!
 //! # Compile-time declarations
 //!
-//! The [`collection!`](crate::collection) macro declares a named collection with a
-//! baked-in [`StoreId`]:
+//! The [`collection!`](crate::collection) macro declares a named collection
+//! with a baked-in [`StoreId`]:
 //!
 //! ```rust,ignore
 //! mosaik::collection!(pub Leaderboard =

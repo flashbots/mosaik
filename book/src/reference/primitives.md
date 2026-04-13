@@ -86,10 +86,10 @@ The `id!` macro is a short alias for `unique_id!` — both produce a compile-tim
 ## `Ticket`
 
 An opaque, typed credential that peers attach to their discovery entry for
-authorization purposes.
+authorization purposes. Ticket types live in the `mosaik::tickets` module.
 
 ```rust,ignore
-use mosaik::{Ticket, UniqueId, id, Bytes};
+use mosaik::{tickets::Ticket, UniqueId, id, Bytes};
 
 const MY_AUTH: UniqueId = id!("my-app.auth");
 
@@ -104,8 +104,17 @@ let id: UniqueId = ticket.id(); // deterministic, derived from class + data
 
 Tickets are stored in a peer's `PeerEntry` and propagated via gossip and
 catalog sync. The discovery system never interprets ticket data --
-validation is done in application code (e.g. inside a producer's
-`require` predicate).
+validation is done via `TicketValidator` implementations or `require`
+closures.
+
+The `mosaik::tickets` module also provides:
+
+- **`Jwt`** — built-in JWT validator supporting HS256/384/512,
+  ES256/256K/384/512, and EdDSA.
+- **`JwtTicketBuilder`** — signs and issues JWT tickets for peers.
+- **`TicketValidator`** trait — implement for custom credential schemes.
+- Algorithm-specific key types (`Hs256`, `Es256`, `Es256SigningKey`,
+  `EdDsa`, `EdDsaSigningKey`, etc.).
 
 See [Discovery > Auth Tickets](../subsystems/discovery/tickets.md) for
 a full walkthrough.

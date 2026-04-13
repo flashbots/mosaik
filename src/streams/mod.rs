@@ -93,8 +93,8 @@ pub use {
 
 /// Trait for stream definitions that provide a producer constructor.
 ///
-/// Implemented automatically by the [`stream!`](crate::stream) macro. The generated
-/// implementation bakes in any `require`, `online_when`, or other
+/// Implemented automatically by the [`stream!`](crate::stream) macro. The
+/// generated implementation bakes in any `require`, `online_when`, or other
 /// producer configuration specified in the macro invocation.
 pub trait StreamProducer {
 	type Producer;
@@ -109,8 +109,8 @@ pub trait StreamProducer {
 
 /// Trait for stream definitions that provide a consumer constructor.
 ///
-/// Implemented automatically by the [`stream!`](crate::stream) macro. The generated
-/// implementation bakes in any `require` or other consumer
+/// Implemented automatically by the [`stream!`](crate::stream) macro. The
+/// generated implementation bakes in any `require` or other consumer
 /// configuration specified in the macro invocation.
 pub trait StreamConsumer {
 	type Consumer;

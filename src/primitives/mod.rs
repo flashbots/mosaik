@@ -22,6 +22,7 @@
 //!   attestation quotes).
 
 mod channel;
+mod chex;
 mod fmt;
 mod fut;
 mod id;
@@ -33,10 +34,10 @@ pub mod encoding;
 
 /// Public API re-exported byte types.
 pub use bytes::{self, Bytes, BytesMut};
-pub use hex;
 /// Internal primitives.
 pub(crate) use {
 	channel::UnboundedChannel,
+	chex::const_hex,
 	encoding::{EncodeError, deserialize, serialize, serialize_to_writer},
 	fut::BoxPinFut,
 	fut::InternalFutureExt,

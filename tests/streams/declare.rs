@@ -1,9 +1,19 @@
 use {
 	super::*,
-	crate::utils::{Jwt, JwtIssuer, discover_all, sleep_s, timeout_s},
-	digest::KeyInit,
+	crate::utils::{
+		DEFAULT_ISSUER,
+		DEFAULT_SECRET,
+		Hs256,
+		Jwt,
+		discover_all,
+		expired_expiry,
+		jwt_builder,
+		jwt_secret,
+		sleep_s,
+		timeout_s,
+		valid_expiry,
+	},
 	futures::{SinkExt, StreamExt},
-	hmac::Hmac,
 	mosaik::{declare, *},
 	serde::{Deserialize, Serialize},
 };
@@ -75,25 +85,26 @@ declare::stream!(
 	pub(crate) TicketAuthStream = Data1,
 		"ticket.auth.stream",
 		require_ticket: Jwt::with_key(
-				JwtIssuer::default().key()
-			),
+			Hs256::new(jwt_secret(DEFAULT_SECRET))
+		),
 );
 
 // Producer-only with ticket validator.
 declare::stream!(
 	pub(crate) producer ProducerTicketStream = Data1,
 		"producer.ticket.stream",
-		require_ticket: {
-			let issuer = JwtIssuer::default();
-			Jwt::with_key(issuer.key()).allow_issuer(issuer.issuer())
-		},
+		require_ticket: Jwt::with_key(
+			Hs256::new(jwt_secret(DEFAULT_SECRET))
+		).allow_issuer(DEFAULT_ISSUER),
 );
 
 // Consumer-only with ticket validator.
 declare::stream!(
 	pub(crate) consumer ConsumerTicketStream = Data1,
 		"consumer.ticket.stream",
-		require_ticket: Jwt::with_key(JwtIssuer::default().key()),
+		require_ticket: Jwt::with_key(
+			Hs256::new(jwt_secret(DEFAULT_SECRET))
+		),
 );
 
 // Both sides require two independent JWT validators (different issuers).
@@ -101,11 +112,11 @@ declare::stream!(
 	pub(crate) MultiTicketStream = Data1,
 		"multi.ticket.stream",
 		require_ticket: Jwt::with_key(
-				Hmac::<sha2::Sha256>::new_from_slice(b"secret-alpha").unwrap()
-			).allow_issuer("issuer-alpha"),
+			Hs256::new(jwt_secret("secret-alpha"))
+		).allow_issuer("issuer-alpha"),
 		require_ticket: Jwt::with_key(
-				Hmac::<sha2::Sha256>::new_from_slice(b"secret-beta").unwrap()
-			).allow_issuer("issuer-beta"),
+			Hs256::new(jwt_secret("secret-beta"))
+		).allow_issuer("issuer-beta"),
 );
 
 #[tokio::test]
@@ -347,15 +358,15 @@ async fn stream_macro_require_ticket() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let jwt_validator = JwtIssuer::default();
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	// n0 and n1 get valid tickets; n2 gets an expired one; n3 gets none.
 	n0.discovery()
-		.add_ticket(jwt_validator.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(jwt_validator.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
 	n2.discovery()
-		.add_ticket(jwt_validator.make_expired_ticket(&n2.local().id()));
+		.add_ticket(builder.build(&n2.local().id(), expired_expiry()));
 
 	let mut p0 = TicketAuthStream::producer(&n0);
 	let mut c1 = TicketAuthStream::consumer(&n1);
@@ -398,10 +409,10 @@ async fn stream_macro_producer_require_ticket() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let jwt_validator = JwtIssuer::default();
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	n1.discovery()
-		.add_ticket(jwt_validator.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
 
 	let mut p0 = ProducerTicketStream::producer(&n0);
 
@@ -446,10 +457,10 @@ async fn stream_macro_consumer_require_ticket() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	let jwt_validator = JwtIssuer::default();
+	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	n1.discovery()
-		.add_ticket(jwt_validator.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
 
 	let mut c0 = ConsumerTicketStream::consumer(&n0);
 
@@ -488,8 +499,8 @@ async fn stream_macro_consumer_require_ticket() -> anyhow::Result<()> {
 async fn stream_macro_multiple_require_ticket() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 
-	let issuer_a = JwtIssuer::new("issuer-alpha", "secret-alpha");
-	let issuer_b = JwtIssuer::new("issuer-beta", "secret-beta");
+	let builder_a = jwt_builder("issuer-alpha", "secret-alpha");
+	let builder_b = jwt_builder("issuer-beta", "secret-beta");
 
 	let (n0, n1, n2, n3) = tokio::try_join!(
 		Network::new(network_id),
@@ -500,21 +511,21 @@ async fn stream_macro_multiple_require_ticket() -> anyhow::Result<()> {
 
 	// n0 (producer) and n1 (consumer) carry tickets from BOTH issuers.
 	n0.discovery()
-		.add_ticket(issuer_a.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder_a.build(&n0.local().id(), valid_expiry()));
 	n0.discovery()
-		.add_ticket(issuer_b.make_valid_ticket(&n0.local().id()));
+		.add_ticket(builder_b.build(&n0.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer_a.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder_a.build(&n1.local().id(), valid_expiry()));
 	n1.discovery()
-		.add_ticket(issuer_b.make_valid_ticket(&n1.local().id()));
+		.add_ticket(builder_b.build(&n1.local().id(), valid_expiry()));
 
 	// n2 only has issuer_a ticket → should be rejected.
 	n2.discovery()
-		.add_ticket(issuer_a.make_valid_ticket(&n2.local().id()));
+		.add_ticket(builder_a.build(&n2.local().id(), valid_expiry()));
 
 	// n3 only has issuer_b ticket → should be rejected.
 	n3.discovery()
-		.add_ticket(issuer_b.make_valid_ticket(&n3.local().id()));
+		.add_ticket(builder_b.build(&n3.local().id(), valid_expiry()));
 
 	let mut p0 = MultiTicketStream::producer(&n0);
 	let mut c1 = MultiTicketStream::consumer(&n1);

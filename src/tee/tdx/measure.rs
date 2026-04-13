@@ -1,5 +1,5 @@
 use {
-	crate::{UniqueId, id},
+	crate::{UniqueId, id, primitives::const_hex},
 	core::str::FromStr,
 	tdx_quote::Quote,
 };
@@ -22,33 +22,7 @@ impl Measurement {
 	/// # Panics
 	/// Panics if the string is not exactly 96 hex characters (48 bytes).
 	pub const fn hex(input: &str) -> Self {
-		const fn hex_nibble(b: u8) -> u8 {
-			match b {
-				b'0'..=b'9' => b - b'0',
-				b'a'..=b'f' => b - b'a' + 10,
-				b'A'..=b'F' => b - b'A' + 10,
-				_ => panic!("Invalid hex character"),
-			}
-		}
-
-		assert!(
-			input.len() == 96,
-			"Hex string must be exactly 96 characters (48 bytes)"
-		);
-
-		let bytes = input.as_bytes();
-
-		let mut arr = [0u8; 48];
-
-		let mut i = 0;
-		while i < 48 {
-			let hi = hex_nibble(bytes[i * 2]);
-			let lo = hex_nibble(bytes[i * 2 + 1]);
-			arr[i] = (hi << 4) | lo;
-			i += 1;
-		}
-
-		Self(arr)
+		Self(const_hex::<48>(input))
 	}
 
 	pub const fn as_bytes(&self) -> &[u8; 48] {
