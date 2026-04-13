@@ -1,5 +1,4 @@
 use {
-	crate::primitives::Short,
 	core::{convert::Infallible, fmt, str::FromStr},
 	derive_more::Deref,
 	iroh::SecretKey,
@@ -149,7 +148,7 @@ impl fmt::Debug for Digest {
 
 impl fmt::Display for Digest {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		write!(f, "{}", Short(self.0.as_bytes()))
+		write!(f, "{}", self.0.to_hex())
 	}
 }
 

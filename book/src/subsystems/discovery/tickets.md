@@ -19,8 +19,6 @@ stores, signs, and propagates tickets alongside the rest of the peer
 entry. Validation logic lives entirely in application code -- typically
 via a `TicketValidator` implementation.
 
-> **Module location:** Ticket types live in `mosaik::tickets` (the
-> top-level `tickets` module), not in `mosaik::primitives`.
 
 ### Ticket identity
 
@@ -90,16 +88,16 @@ imports are needed.
 
 ### Supported algorithms
 
-| Verifying key | Signing key           | Algorithm               |
-| ------------- | --------------------- | ----------------------- |
-| `Hs256`       | `Hs256`               | HMAC-SHA256 (symmetric) |
-| `Hs384`       | `Hs384`               | HMAC-SHA384 (symmetric) |
-| `Hs512`       | `Hs512`               | HMAC-SHA512 (symmetric) |
-| `Es256`       | `Es256SigningKey`     | ECDSA P-256             |
-| `Es256k`      | `Es256kSigningKey`    | ECDSA secp256k1         |
-| `Es384`       | `Es384SigningKey`     | ECDSA P-384             |
-| `Es512`       | `Es512SigningKey`     | ECDSA P-521             |
-| `EdDsa`       | `EdDsaSigningKey`     | Ed25519                 |
+| Verifying key | Signing key        | Algorithm               |
+| ------------- | ------------------ | ----------------------- |
+| `Hs256`       | `Hs256`            | HMAC-SHA256 (symmetric) |
+| `Hs384`       | `Hs384`            | HMAC-SHA384 (symmetric) |
+| `Hs512`       | `Hs512`            | HMAC-SHA512 (symmetric) |
+| `Es256`       | `Es256SigningKey`  | ECDSA P-256             |
+| `Es256k`      | `Es256kSigningKey` | ECDSA secp256k1         |
+| `Es384`       | `Es384SigningKey`  | ECDSA P-384             |
+| `Es512`       | `Es512SigningKey`  | ECDSA P-521             |
+| `EdDsa`       | `EdDsaSigningKey`  | Ed25519                 |
 
 For HMAC algorithms the same key type is used for both signing and
 verification (symmetric). For ECDSA and EdDSA the signing key is a
@@ -133,15 +131,15 @@ let validator = Jwt::with_key(Es256::hex(
 
 Validator builder methods (all optional, all chainable):
 
-| Method                         | Effect                                                          |
-| ------------------------------ | --------------------------------------------------------------- |
-| `.allow_issuer(s)`             | Require `iss` to match; call multiple times for OR logic        |
-| `.allow_audience(s)`           | Require `aud` to match; call multiple times for OR logic        |
-| `.require_subject(s)`          | Override default subject (default: peer id in lowercase hex)    |
-| `.require_claim(name, value)`  | Require a custom private claim; multiple calls compose as AND   |
-| `.allow_non_expiring()`        | Accept JWTs without an `exp` claim                              |
-| `.max_lifetime(duration)`      | Reject tokens with `exp - now` exceeding this duration          |
-| `.max_age(duration)`           | Require `iat` and reject tokens older than this duration        |
+| Method                        | Effect                                                        |
+| ----------------------------- | ------------------------------------------------------------- |
+| `.allow_issuer(s)`            | Require `iss` to match; call multiple times for OR logic      |
+| `.allow_audience(s)`          | Require `aud` to match; call multiple times for OR logic      |
+| `.require_subject(s)`         | Override default subject (default: peer id in lowercase hex)  |
+| `.require_claim(name, value)` | Require a custom private claim; multiple calls compose as AND |
+| `.allow_non_expiring()`       | Accept JWTs without an `exp` claim                            |
+| `.max_lifetime(duration)`     | Reject tokens with `exp - now` exceeding this duration        |
+| `.max_age(duration)`          | Require `iat` and reject tokens older than this duration      |
 
 The validator checks `iss`, `sub`, `nbf`, `exp`, `aud`, `iat`, and any
 custom claims you specify. Tokens with overflowed or non-representable
@@ -179,15 +177,15 @@ network.discovery().add_ticket(ticket);
 
 Builder methods (all optional, all chainable):
 
-| Method                      | Effect                                                   |
-| --------------------------- | -------------------------------------------------------- |
-| `.issuer(s)`                | Set the `iss` claim                                      |
-| `.subject(s)`               | Override the `sub` claim (default: peer id in lower hex) |
-| `.audience(s)`              | Set the `aud` claim                                      |
-| `.issued_at(datetime)`      | Override `iat` (default: current time)                   |
-| `.not_before(datetime)`     | Set the `nbf` claim                                      |
-| `.token_id(jti)`            | Set the `jti` claim                                      |
-| `.claim(name, value)`       | Add a custom claim (standard names route to their field) |
+| Method                  | Effect                                                   |
+| ----------------------- | -------------------------------------------------------- |
+| `.issuer(s)`            | Set the `iss` claim                                      |
+| `.subject(s)`           | Override the `sub` claim (default: peer id in lower hex) |
+| `.audience(s)`          | Set the `aud` claim                                      |
+| `.issued_at(datetime)`  | Override `iat` (default: current time)                   |
+| `.not_before(datetime)` | Set the `nbf` claim                                      |
+| `.token_id(jti)`        | Set the `jti` claim                                      |
+| `.claim(name, value)`   | Add a custom claim (standard names route to their field) |
 
 Because tickets propagate through gossip, the remote peer will see them
 when the updated `PeerEntry` arrives.
@@ -218,15 +216,37 @@ let consumer = network.streams()
     .build();
 ```
 
-The `stream!` macro supports this via `require_ticket`:
+The `stream!` macro supports `require_ticket`, enabling compile-time
+ACL declarations. Combined with `Es256::hex`, a stream's access
+policy — including the exact public key — is fully expressed in code
+with no runtime configuration:
+
+```rust,ignore
+use mosaik::{declare, tickets::{Jwt, Es256}};
+
+declare::stream!(
+    pub AuthFeed = MyDatum, "auth.feed",
+    producer require_ticket: Jwt::with_key(Es256::hex(
+        "0298a82ebe69ad57e0f7d5c2809a05188ff58572c5a5009015f26643f91e0d3236"
+    )).allow_issuer("my-auth-service"),
+);
+```
+
+Here `producer require_ticket` means consumers validate producer
+tickets — only producers that present a JWT signed by the
+corresponding private key are accepted. The hex-encoded P-256 public
+key and issuer constraint are baked into the binary at compile time.
+
+HMAC keys work the same way:
 
 ```rust,ignore
 use mosaik::{declare, tickets::{Jwt, Hs256}};
 
 declare::stream!(
     pub AuthFeed = MyDatum, "auth.feed",
-    require_ticket: Jwt::with_key(Hs256::new(secret))
-        .allow_issuer("my-app"),
+    require_ticket: Jwt::with_key(Hs256::hex(
+        "87e50edd90e2f9d53a7f2a9bd51c1069a454b827f0e1002577c54e1c2a598568"
+    )).allow_issuer("my-app"),
 );
 ```
 
@@ -337,12 +357,12 @@ pub trait TicketValidator: Send + Sync + 'static {
 
 ### When to use `TicketValidator` vs `require` closures
 
-| Feature                         | Built-in `Jwt`                   | Custom `TicketValidator` | `require` closure   |
-| ------------------------------- | -------------------------------- | ------------------------ | ------------------- |
-| Proactive expiration disconnect | Yes                              | Yes                      | No (next reconnect) |
-| Group ID derivation             | Yes (via `signature()`)          | Yes (via `signature()`)  | Not applicable      |
-| Complexity                      | Zero — built in                  | Implement a trait        | Inline closure      |
-| Best for                        | JWT auth (HMAC / ECDSA / EdDSA)  | Custom credential types  | Quick prototyping   |
+| Feature                         | Built-in `Jwt`                  | Custom `TicketValidator` | `require` closure   |
+| ------------------------------- | ------------------------------- | ------------------------ | ------------------- |
+| Proactive expiration disconnect | Yes                             | Yes                      | No (next reconnect) |
+| Group ID derivation             | Yes (via `signature()`)         | Yes (via `signature()`)  | Not applicable      |
+| Complexity                      | Zero — built in                 | Implement a trait        | Inline closure      |
+| Best for                        | JWT auth (HMAC / ECDSA / EdDSA) | Custom credential types  | Quick prototyping   |
 
 ## Custom validators
 

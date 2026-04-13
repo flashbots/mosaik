@@ -11,7 +11,7 @@ use {
 		PeerId,
 		discovery::PeerEntry,
 		network::{GracefulShutdown, link::Link},
-		primitives::{Bytes, Digest, Short},
+		primitives::{Bytes, Digest, Short, ShortFmtExt},
 		streams::{
 			TooSlow,
 			status::{ActiveChannelsMap, ChannelConditions},
@@ -170,8 +170,8 @@ impl<D: Datum> WorkerLoop<D> {
 		tokio::spawn(worker.run());
 
 		tracing::info!(
-			stream_id = %Short(config.stream_id),
-			network_id = %config.network_id,
+			stream_id = %config.stream_id.short(),
+			network_id = %config.network_id.short(),
 			"created new stream producer",
 		);
 

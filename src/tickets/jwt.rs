@@ -654,6 +654,7 @@ mod alg {
 	/// let validator = Jwt::with_key(Hs256::hex("dd90e2..598568"))
 	///     .allow_issuer("my-issuer");
 	/// ```
+	#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 	pub struct Hs256([u8; 32]);
 
 	impl Hs256 {
@@ -707,6 +708,7 @@ mod alg {
 	}
 
 	/// HMAC-SHA384 (`HS384`) verifying key.
+	#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 	pub struct Hs384([u8; 48]);
 
 	impl Hs384 {
@@ -760,6 +762,7 @@ mod alg {
 	}
 
 	/// HMAC-SHA512 (`HS512`) verifying key.
+	#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 	pub struct Hs512([u8; 64]);
 
 	impl Hs512 {
@@ -823,7 +826,14 @@ mod alg {
 	/// let validator = Jwt::with_key(Es256::hex("02dd90e2..598568"))
 	///     .allow_issuer("my-issuer");
 	/// ```
+	#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 	pub struct Es256([u8; 33]);
+
+	impl core::fmt::Debug for Es256 {
+		fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+			f.debug_tuple("Es256").field(&hex::encode(self.0)).finish()
+		}
+	}
 
 	impl Es256 {
 		/// Creates a new ES256 verifying key from a compressed P-256
@@ -946,6 +956,12 @@ mod alg {
 	/// ```
 	pub struct Es384([u8; 49]);
 
+	impl core::fmt::Debug for Es384 {
+		fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+			f.debug_tuple("Es384").field(&hex::encode(self.0)).finish()
+		}
+	}
+
 	impl Es384 {
 		/// Creates a new ES384 verifying key from a compressed P-384
 		/// public key (49 bytes, SEC1 format).
@@ -1044,7 +1060,14 @@ mod alg {
 	///
 	/// Expects a 67-byte SEC1 compressed public key (prefix byte +
 	/// 66-byte x-coordinate).
+	#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 	pub struct Es512([u8; 67]);
+
+	impl core::fmt::Debug for Es512 {
+		fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+			f.debug_tuple("Es512").field(&hex::encode(self.0)).finish()
+		}
+	}
 
 	impl Es512 {
 		/// Creates a new ES512 verifying key from a compressed P-521

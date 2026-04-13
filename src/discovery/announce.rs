@@ -10,6 +10,7 @@ use {
 			IntoIterOrSingle,
 			Pretty,
 			Short,
+			ShortFmtExt,
 			UnboundedChannel,
 			deserialize,
 			serialize,
@@ -147,7 +148,7 @@ impl Announce {
 			if let Err(e) = driver.spawn().await {
 				error!(
 					error = %e,
-					network_id = %network_id,
+					network_id = %network_id.short(),
 					"Unrecoverable error in discovery protocol, terminating network"
 				);
 

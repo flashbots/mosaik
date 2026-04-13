@@ -14,11 +14,24 @@ trait FmtWrapper<T> {
 
 /// A wrapper type that pretty-prints the inner value.
 #[derive(Deref, AsRef)]
-pub struct Pretty<'a, T>(pub &'a T);
+pub struct Pretty<'a, T: ?Sized>(pub &'a T);
 
 impl<T> Pretty<'_, T> {
 	pub const fn iter<I: IntoIterator<Item = T>>(iter: I) -> FmtIter<Self, I> {
 		FmtIter::new(iter)
+	}
+}
+
+pub trait PrettyFmtExt<'a> {
+	fn pretty(&'a self) -> Pretty<'a, Self>;
+}
+
+impl<'a, T: 'a> PrettyFmtExt<'a> for T
+where
+	Pretty<'a, T>: core::fmt::Display,
+{
+	fn pretty(&'a self) -> Pretty<'a, Self> {
+		Pretty(self)
 	}
 }
 
@@ -51,6 +64,19 @@ impl<T> FmtWrapper<T> for Short<T> {
 impl<T> Short<T> {
 	pub const fn iter<I: IntoIterator<Item = T>>(iter: I) -> FmtIter<Self, I> {
 		FmtIter::new(iter)
+	}
+}
+
+pub trait ShortFmtExt {
+	fn short(&self) -> Short<&Self>;
+}
+
+impl<T> ShortFmtExt for T
+where
+	Short<T>: core::fmt::Display,
+{
+	fn short(&self) -> Short<&Self> {
+		Short(self)
 	}
 }
 
@@ -102,6 +128,19 @@ impl<T> fmt::Debug for Redacted<T> {
 impl<T> FmtWrapper<T> for Redacted<T> {
 	fn wrap(value: T) -> Self {
 		Self(value)
+	}
+}
+
+pub trait RedactedFmtExt {
+	fn redacted(&self) -> Redacted<&Self>;
+}
+
+impl<T> RedactedFmtExt for T
+where
+	Redacted<T>: core::fmt::Display,
+{
+	fn redacted(&self) -> Redacted<&Self> {
+		Redacted(self)
 	}
 }
 
