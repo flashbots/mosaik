@@ -187,11 +187,11 @@ fn leadership_preference(&self) -> LeadershipPreference {
 }
 ```
 
-| Variant                      | Behavior                                                                |
-| ---------------------------- | ----------------------------------------------------------------------- |
-| `Normal` (default)           | Standard Raft behavior -- participates in elections as a candidate      |
-| `Reluctant { factor: u32 }`  | Longer election timeouts (multiplied by `factor`), can still be elected |
-| `Observer`                   | Never self-nominates as candidate; still votes and replicates log       |
+| Variant                      | Behavior                                                                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `Normal` (default)           | Standard Raft behavior -- participates in elections and counts toward quorum                                                     |
+| `Reluctant { factor: u32 }`  | Longer election timeouts (multiplied by `factor`), can still be elected, counts toward quorum                                    |
+| `Observer`                   | Never self-nominates; abstains from all votes (elections and commit advancement); replicates log but does not count toward quorum |
 
 The convenience constructor `LeadershipPreference::reluctant()` creates a
 `Reluctant` variant with the default factor of 3.
@@ -200,9 +200,16 @@ The convenience constructor `LeadershipPreference::reluctant()` creates a
 > leader can ever be elected and the group will be unable to make progress.
 > Ensure at least one node has `Normal` or `Reluctant` preference.
 
+Observer nodes still replicate the log and advance their committed state
+from leader heartbeats. The key difference is that they respond with
+`Vote::Abstained` instead of `Vote::Granted` to both `RequestVote` and
+`AppendEntries` messages, so they are excluded from the quorum denominator
+entirely.
+
 This mechanism is used internally by [collection readers](../collections/writer-reader.md),
-which return `Observer` so that leadership stays on writer nodes where
-writes are handled directly rather than being forwarded.
+which return `Observer` so that only writer nodes fill the voting committee.
+Without this, a group with many readers and few writers could gate write
+latency on slow reader acknowledgment.
 
 ## Storage
 

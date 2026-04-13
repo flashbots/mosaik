@@ -22,15 +22,24 @@ quorum counts. In mosaik, a follower can **abstain** from voting:
 enum Vote {
     Granted,    // Standard yes vote
     Denied,     // Standard no vote
-    Abstained,  // Mosaik-specific: "I'm too far behind to vote"
+    Abstained,  // Mosaik-specific: removes node from quorum denominator
 }
 ```
 
-A follower abstains when it detects that it is **lagging behind** the
-leader's log and cannot verify log consistency. Abstaining removes the node
-from the quorum denominator until it catches up. This prevents stale nodes
-from blocking progress while still allowing them to receive new entries and
-rejoin the quorum later.
+A follower abstains in two situations:
+
+- **Lagging behind.** When a follower detects that its log is behind the
+  candidate's or leader's log, it abstains rather than granting or denying.
+  This removes the node from the quorum denominator until it catches up,
+  preventing stale nodes from blocking progress while still allowing them to
+  receive new entries and rejoin the quorum later.
+
+- **Observer role.** Nodes with `LeadershipPreference::Observer` abstain
+  permanently from both election votes (`RequestVote`) and commit-advancement
+  votes (`AppendEntriesResponse`). They replicate the log and advance their
+  committed state from leader heartbeats, but never count toward quorum.
+  This is how collection readers avoid inflating the voting committee --
+  see [Writer/Reader Pattern](../subsystems/collections/writer-reader.md).
 
 ### 2. No per-follower tracking on the leader
 
@@ -71,17 +80,28 @@ uses a **state sync** mechanism rather than the leader shipping log snapshots:
 This is fundamentally different from standard Raft's approach where only the
 leader sends snapshots.
 
-### 5. Leadership deprioritization
+### 5. Leadership preference
 
-Nodes can configure longer election timeouts to reduce the probability of
-becoming leader:
+Nodes declare a `LeadershipPreference` that controls election behavior and
+quorum participation:
 
-```rust,ignore
-ConsensusConfig::default().deprioritize_leadership()
-```
+| Variant     | Self-nominate? | Votes in elections? | Counts toward commit quorum? |
+| ----------- | -------------- | ------------------- | ---------------------------- |
+| `Normal`    | Yes            | Yes                 | Yes                          |
+| `Reluctant` | Yes (slower)   | Yes                 | Yes                          |
+| `Observer`  | Never          | No (abstains)       | No (abstains)                |
 
-This is used by collection readers, which prefer to leave leadership to writer
-nodes.
+`Reluctant` nodes use longer election timeouts (multiplied by a configurable
+factor), reducing their likelihood of becoming leader but still participating
+fully in quorum. `Observer` nodes never self-nominate and abstain from all
+votes, so they never inflate the quorum denominator.
+
+Collection readers use `Observer` to ensure that only writer nodes fill the
+voting committee. Without this, a group with 2 writers and 10 readers could
+have its 5-slot committee filled by readers, gating write latency on reader
+acknowledgment. See the
+[Writer/Reader Pattern](../subsystems/collections/writer-reader.md) for
+details.
 
 ### 6. Bootstrap delay
 
