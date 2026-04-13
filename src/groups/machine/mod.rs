@@ -113,8 +113,8 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 	///   timeouts, reducing its likelihood of becoming leader, but can still be
 	///   elected if no other candidate is available.
 	/// - [`LeadershipPreference::Observer`] — the node never self-nominates as a
-	///   candidate. It participates in voting and log replication as a full
-	///   member of the group, but will never initiate an election.
+	///   candidate and abstains from all votes. It replicates the log but does
+	///   not count toward quorum.
 	#[inline]
 	fn leadership_preference(&self) -> LeadershipPreference {
 		LeadershipPreference::Normal
@@ -173,14 +173,16 @@ impl<T> QueryResult for T where T: Datum + Sync + Clone {}
 /// observers never transition to candidate state, and reluctant nodes use
 /// longer election timeouts to reduce their likelihood of winning elections.
 ///
-/// All preference levels participate fully in voting and log replication. The
-/// distinction is solely about whether and how eagerly the node self-nominates
-/// as a candidate during leader elections.
+/// `Normal` and `Reluctant` nodes participate fully in voting and log
+/// replication. `Observer` nodes replicate the log but abstain from both
+/// election votes and commit-advancement votes, so they never inflate the
+/// quorum.
 ///
 /// # Safety Considerations
 ///
-/// - **Observer nodes still vote.** They are full members of the group and
-///   count toward quorum. They simply never initiate elections.
+/// - **Observer nodes do not count toward quorum.** They replicate the log and
+///   advance their committed state, but abstain from election and commit votes.
+///   This prevents slow or offline observers from stalling writes.
 /// - **Liveness.** If all nodes in a group are observers, no leader can ever be
 ///   elected and the group will be unable to make progress. Ensure that at
 ///   least one node in every group has `Normal` or `Reluctant` preference.
@@ -203,11 +205,10 @@ pub enum LeadershipPreference {
 		factor: u32,
 	},
 
-	/// The node never self-nominates as a candidate. It participates in
-	/// voting and log replication as a full member of the group, but will
-	/// never initiate an election. This provides a hard guarantee that the
-	/// node will not become leader, unlike `Reluctant` which is
-	/// probabilistic.
+	/// The node never self-nominates as a candidate and abstains from all
+	/// votes (both elections and commit advancement), so it never counts
+	/// toward quorum. It still replicates the log and advances its
+	/// committed state from the leader's heartbeats.
 	Observer,
 }
 

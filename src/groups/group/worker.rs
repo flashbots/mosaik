@@ -23,7 +23,7 @@ use {
 			},
 		},
 		network::Cancelled,
-		primitives::{AsyncWorkQueue, Short},
+		primitives::{AsyncWorkQueue, ShortFmtExt},
 	},
 	core::{any::TypeId, future::poll_fn, pin::Pin},
 	futures::{Stream, StreamExt, stream::SelectAll},
@@ -198,8 +198,8 @@ where
 			.update_local_entry(move |entry| entry.add_groups(group_id));
 
 		tracing::info!(
-			group = %Short(group_id),
-			network = %self.state.network_id(),
+			group = %group_id.short(),
+			network = %self.state.network_id().short(),
 			"joining",
 		);
 	}
@@ -208,8 +208,8 @@ where
 	/// shutting down or when the group is being explicitly left.
 	fn on_terminated(&self) {
 		tracing::debug!(
-			group = %Short(self.state.group_id()),
-			network = %self.state.network_id(),
+			group = %self.state.group_id().short(),
+			network = %self.state.network_id().short(),
 			"leaving",
 		);
 	}
@@ -252,10 +252,10 @@ where
 						&& reason != AlreadyBonded
 					{
 						tracing::debug!(
-							id = %Short(bond.id()),
-							group = %Short(self.state.group_id()),
-							peer = %Short(peer_id),
-							network = %self.state.network_id(),
+							id = %bond.id().short(),
+							group = %self.state.group_id().short(),
+							peer = %peer_id.short(),
+							network = %self.state.network_id().short(),
 							reason = %reason,
 							"bond terminated",
 						);
@@ -290,19 +290,19 @@ where
 		};
 
 		tracing::debug!(
-			id = %Short(bond.id()),
-			peer = %Short(peer_id),
-			group = %Short(self.state.group_id()),
-			network = %self.state.network_id(),
+			id = %bond.id().short(),
+			peer = %peer_id.short(),
+			group = %self.state.group_id().short(),
+			network = %self.state.network_id().short(),
 			"bond established",
 		);
 
 		let catalog = self.state.discovery.catalog();
 		let Some(peer_entry) = catalog.get_signed(&peer_id).cloned() else {
 			tracing::warn!(
-				network = %self.state.network_id(),
-				peer = %Short(peer_id),
-				group = %Short(self.state.group_id()),
+				network = %self.state.network_id().short(),
+				peer = %peer_id.short(),
+				group = %self.state.group_id().short(),
 				"peer entry not found in catalog after bond formed",
 			);
 			return;
@@ -408,9 +408,9 @@ where
 					if !matches!(reason, Error::AlreadyBonded(_)) {
 						tracing::trace!(
 							error = %reason,
-							network = %state.local.network_id(),
-							peer = %Short(peer_id),
-							group = %Short(state.group_id()),
+							network = %state.local.network_id().short(),
+							peer = %peer_id.short(),
+							group = %state.group_id().short(),
 							"bonding failed",
 						);
 					}

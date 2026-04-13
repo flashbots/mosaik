@@ -592,15 +592,22 @@ impl<M: StateMachine> Follower<M> {
 				appended_count += 1;
 			}
 
-			// confirm to the leader that we have appended the entries and report the
-			// index of our last log entry
+			// confirm to the leader that we have appended the entries and
+			// report the index of our last log entry. Observers abstain so
+			// they replicate the log without inflating the commit quorum.
 			let local_position = shared.storage.last();
+			let vote = if self.leadership_preference == LeadershipPreference::Observer
+			{
+				Vote::Abstained
+			} else {
+				Vote::Granted
+			};
 			shared
 				.bonds()
 				.send_raft_to(
 					Message::AppendEntriesResponse(AppendEntriesResponse {
 						term: self.term(),
-						vote: Vote::Granted,
+						vote,
 						last_log_index: local_position.index(),
 					}),
 					sender,

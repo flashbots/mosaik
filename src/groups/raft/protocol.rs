@@ -100,11 +100,11 @@ pub enum Vote {
 	/// Vote denied to the candidate during elections.
 	Denied,
 
-	/// Abstain from voting because the follower is lagging behind the leader or
-	/// candidate's log progress. This will remove the node from the quorum
-	/// denominator until it catches up with the log, but will still allow it to
-	/// receive log entries and become a voting member again once it is back in
-	/// sync.
+	/// Abstain from voting because the follower is lagging behind the leader
+	/// or candidate's log progress, or because the node is an observer that
+	/// does not participate in quorum. This removes the node from the quorum
+	/// denominator. Lagging nodes become voting members again once they
+	/// catch up; observers abstain permanently.
 	Abstained,
 }
 

@@ -18,7 +18,7 @@ use {
 			ping::Ping,
 		},
 		network::LocalNode,
-		primitives::{IntoIterOrSingle, Pretty, Short},
+		primitives::{IntoIterOrSingle, Pretty, Short, ShortFmtExt},
 	},
 	chrono::Utc,
 	core::{sync::atomic::AtomicUsize, time::Duration},
@@ -414,7 +414,7 @@ impl WorkerLoop {
 				UpsertResult::New(peer_entry) => {
 					tracing::debug!(
 						peer = %Short(peer_entry),
-						network = %self.handle.local.network_id(),
+						network = %self.handle.local.network_id().short(),
 						"discovered new"
 					);
 
@@ -446,8 +446,8 @@ impl WorkerLoop {
 				}
 				UpsertResult::Outdated(peer_entry) => {
 					tracing::trace!(
-						peer_id = %Short(peer_entry.id()),
-						network = %Short(self.handle.local.network_id()),
+						peer_id = %peer_entry.id().short(),
+						network = %self.handle.local.network_id().short(),
 						"rejected outdated"
 					);
 					false

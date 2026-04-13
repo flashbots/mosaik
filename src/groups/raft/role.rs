@@ -2,6 +2,7 @@ use {
 	crate::{
 		PeerId,
 		groups::{
+			LeadershipPreference,
 			StateMachine,
 			Storage,
 			Term,
@@ -378,11 +379,18 @@ impl<M: StateMachine> Role<M> {
 			// candidate.
 			shared.save_vote(request.term, sender);
 
-			// if we are fully caught up with the candidate's log, and we are ready to
-			// become voting followers, then we grant a full vote to the candidate and
-			// the candidate upon winning the elections will consider us to be part of
-			// the initial quorum.
-			vote_with(Vote::Granted);
+			// If we are fully caught up with the candidate's log we can
+			// participate in this election. Observers abstain so they don't
+			// inflate the election quorum — only nodes that can become
+			// leader (and thus hold committed entries) should count.
+			let is_observer = shared.state_machine.leadership_preference()
+				== LeadershipPreference::Observer;
+
+			if is_observer {
+				vote_with(Vote::Abstained);
+			} else {
+				vote_with(Vote::Granted);
+			}
 
 			tracing::debug!(
 				candidate = %Short(request.candidate),
@@ -391,7 +399,12 @@ impl<M: StateMachine> Role<M> {
 				local_log = %local_cursor,
 				group = %Short(shared.group_id()),
 				network = %Short(shared.network_id()),
-				"granting vote to candidate",
+				"{}",
+				if is_observer {
+					"abstained from voting as observer"
+				} else {
+					"granting vote to candidate"
+				},
 			);
 		}
 
