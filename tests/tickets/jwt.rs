@@ -461,27 +461,29 @@ async fn es256_stream_macro_hex_key() -> anyhow::Result<()> {
 		0x75, 0xd3, 0xd1, 0x1a, 0x96, 0x64, 0x7b, 0x85,
 	];
 
+	const NETWORK_ID: NetworkId = id!("mosaik.test.es256.stream.network");
+
 	// Declare a stream where producers are required to present a valid ES256
 	// ticket with the specified public key.
 	declare::stream!(
 		Es256AuthStream = Data1, "es256.auth.stream",
 		producer require_ticket: Jwt::with_key(Es256::hex(
 				"0298a82ebe69ad57e0f7d5c2809a05188ff58572c5a5009015f26643f91e0d3236"
-			)).allow_issuer("es256-macro-issuer"),
+			)).allow_issuer("es256-macro-issuer")
+				.allow_audience(NETWORK_ID.to_string()),
 	);
 
-	let network_id = NetworkId::random();
-
 	let (n0, n1, n2) = tokio::try_join!(
-		Network::new(network_id),
-		Network::new(network_id),
-		Network::new(network_id),
+		Network::new(NETWORK_ID),
+		Network::new(NETWORK_ID),
+		Network::new(NETWORK_ID),
 	)?;
 
 	// n0 (producer) gets a valid ES256 ticket; n2 (producer) gets none.
 	n0.discovery().add_ticket(
 		JwtTicketBuilder::new(Es256SigningKey::from_bytes(PRIVKEY))
 			.issuer("es256-macro-issuer")
+			.audience(n0.network_id().to_string())
 			.build(&n0.local().id(), valid_expiry()),
 	);
 
