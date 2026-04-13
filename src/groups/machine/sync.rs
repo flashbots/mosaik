@@ -1,5 +1,51 @@
-//! State synchronization (catch-up) implementation for followers that are not
-//! up-to-date with the current state of the group.
+//! State synchronization (catch-up) for followers that are behind the
+//! leader's log.
+//!
+//! When a follower receives a log entry that is not an immediate successor
+//! of its last local entry, it knows there is a gap. The [`StateSync`]
+//! trait provides the machinery to close that gap — either by replaying
+//! the missing log entries from peers ([`LogReplaySync`](super::LogReplaySync))
+//! or by transferring a compact snapshot of the state.
+//!
+//! # Architecture
+//!
+//! A `StateSync` implementation is a factory for two companion types:
+//!
+//! - **[`StateSyncProvider`]** — a long-lived object created once per
+//!   peer. It runs on *every* node in the group (including the leader)
+//!   and serves state to sessions on lagging followers.
+//! - **[`StateSyncSession`]** — a short-lived object created on a
+//!   lagging follower for the duration of a single catch-up episode.
+//!   It drives the sync protocol (requesting data from providers,
+//!   applying it to the state machine) and terminates once the
+//!   follower's log is fully caught up.
+//!
+//! Both types communicate via [`StateSync::Message`]s sent through the
+//! group's bond network.
+//!
+//! # Built-in implementation
+//!
+//! [`LogReplaySync`](super::LogReplaySync) works with any state machine.
+//! It recovers missing entries by broadcasting an availability request to
+//! all bonded peers, partitioning the needed range across responders, and
+//! pulling entries in parallel batches. This is the recommended starting
+//! point — switch to a custom implementation only when log replay becomes
+//! too slow for your workload.
+//!
+//! # Custom implementations
+//!
+//! For high-throughput state machines where replaying every command is
+//! expensive, you can implement snapshot-based sync. The general
+//! approach is:
+//!
+//! 1. The **provider** periodically snapshots the state machine and
+//!    remembers the log position of the snapshot.
+//! 2. When a **session** starts, it requests the latest snapshot from a
+//!    provider, loads it into the local state machine, and then replays
+//!    only the commands that arrived after the snapshot.
+//!
+//! The mosaik [`collections`](crate::collections) subsystem uses this
+//! strategy internally.
 
 use {
 	crate::{
@@ -12,64 +58,105 @@ use {
 	serde::{Serialize, de::DeserializeOwned},
 };
 
-/// Implements the state synchronization (catch-up) process for followers that
-/// are not up-to-date with the current state of the group.
+/// Defines how a lagging follower catches up with the rest of the group.
+///
+/// A `StateSync` implementation is a **factory** that produces two
+/// collaborating types:
+///
+/// | Type | Lifetime | Runs on | Purpose |
+/// |------|----------|---------|---------|
+/// | [`StateSyncProvider`] | Group lifetime | Every peer | Serves state to catching-up followers |
+/// | [`StateSyncSession`] | Catch-up duration | Lagging follower | Drives one catch-up episode |
+///
+/// The runtime calls [`create_provider`](Self::create_provider) once at
+/// group initialization on every peer, and
+/// [`create_session`](Self::create_session) each time a follower detects
+/// a gap in its log.
+///
+/// # Signature and group identity
+///
+/// Like [`StateMachine::signature`], the
+/// [`signature`](Self::signature) of the sync implementation is part
+/// of the [`GroupId`](super::GroupId) derivation. All group members
+/// must use the same sync implementation with the same configuration,
+/// otherwise they will derive different group ids and fail to bond.
+///
+/// # Using the built-in log replay
+///
+/// For most use cases [`LogReplaySync`](super::LogReplaySync) is
+/// sufficient:
+///
+/// ```rust,ignore
+/// impl StateSync for LogReplaySync<MyMachine> {
+///     // All types and methods are already implemented.
+/// }
+///
+/// // In your StateMachine impl:
+/// fn state_sync(&self) -> LogReplaySync<Self> {
+///     LogReplaySync::default()
+///         .with_batch_size(NonZero::new(5000).unwrap())
+/// }
+/// ```
 pub trait StateSync: Send + 'static {
-	/// The state machine type for which this state synchronization implementation
-	/// is designed.
+	/// The [`StateMachine`] that this sync implementation is designed
+	/// for.
 	type Machine: StateMachine;
 
-	/// The implementation-specific protocol message that are exchanged between
-	/// peers on the wire during the state synchronization process.
+	/// The wire message type exchanged between providers and sessions
+	/// during sync.
+	///
+	/// This must be serializable because messages are sent over the
+	/// group's bond connections.
 	type Message: StateSyncMessage;
 
-	/// Instances of this type run on every peer in the group and are responsible
-	/// for serving state to `StateSyncSession` instances that are created by
-	/// lagging followers during the catch-up process.
+	/// The provider type — a long-lived object that runs on every peer
+	/// and serves state to [`StateSyncSession`] instances created by
+	/// lagging followers.
 	///
-	/// Those are long-lived objects that are created at group initialization and
-	/// run for the entire lifetime of the group.
+	/// Created once at group initialization via
+	/// [`create_provider`](Self::create_provider) and lives for the
+	/// entire lifetime of the group.
 	type Provider: StateSyncProvider<Owner = Self>;
 
-	/// Instances of this type are created by the lagging follower for the
-	/// duration of the catch-up process and terminated once the follower is
-	/// fully synchronized with the current state of the group.
+	/// The session type — a short-lived object created on a lagging
+	/// follower for the duration of a single catch-up episode.
+	///
+	/// Created via [`create_session`](Self::create_session) when a
+	/// gap is detected, and dropped once the follower has caught up.
 	type Session: StateSyncSession<Owner = Self>;
 
-	/// Returns a unique identifier for this state synchronization implementation
-	/// and its settings. This value is part of the group id derivation and must
-	/// be identical for all members of the same group. Any difference in this
-	/// value will render a different group id and will prevent peers from joining
-	/// the same group.
+	/// Returns a unique fingerprint of this sync implementation and
+	/// its configuration.
 	///
-	/// Examples of relevant settings that should alter the signature are things
-	/// like batch sizes, timeouts, or any other parameters that should be
-	/// identical across all members of the same group.
+	/// This is part of the [`GroupId`](super::GroupId) derivation —
+	/// all group members must return an identical value. Include any
+	/// parameters that affect sync behavior and must be uniform
+	/// across the group (batch sizes, timeouts, etc.).
 	fn signature(&self) -> UniqueId;
 
-	/// Returns a new instance of the state synchronization provider that serves
-	/// state to [`StateSyncSession`] instances during the catch-up process.
+	/// Creates the [`StateSyncProvider`] for this peer.
 	///
-	/// This method is called exactly once on every peer in the group at
-	/// initialization.
+	/// Called exactly **once** per peer at group initialization. The
+	/// returned provider will be polled for the entire lifetime of
+	/// the group.
 	fn create_provider(&self, cx: &dyn SyncContext<Self>) -> Self::Provider;
 
-	/// Creates a new state synchronization session for a specific lagging
-	/// follower that is undergoing the catch-up process.
+	/// Creates a new [`StateSyncSession`] on a lagging follower.
 	///
-	/// This is called the moment a follower receives the first log entry that is
-	/// not an immediate successor of the last local entry, which indicates that
-	/// the follower is behind and needs to start the catch-up process.
+	/// This is called the moment a follower receives a log entry that
+	/// is not an immediate successor of its last local entry —
+	/// indicating a gap that needs to be filled.
 	///
-	/// The `position` parameter indicates the log position at the leader
-	/// preceding the arriving entries, which is the position to which the
-	/// follower needs to catch up. The `entries` parameter contains the batch of
-	/// log entries that triggered the catch-up process, which should be buffered
-	/// by the session and applied to the state machine once the follower has
-	/// caught up with the leader.
+	/// # Parameters
 	///
-	/// The `leader_commit` parameter indicates the latest committed log index
-	/// at the leader, at the moment the sync session is created.
+	/// - `position` — the leader's log position **preceding** the
+	///   arriving entries. This is the point the follower needs to
+	///   catch up to.
+	/// - `leader_commit` — the leader's latest committed index at the
+	///   time the session is created.
+	/// - `entries` — the batch of log entries that triggered the
+	///   catch-up. The session should buffer these and apply them
+	///   once the gap is closed.
 	fn create_session(
 		&self,
 		cx: &mut dyn SyncSessionContext<Self>,
@@ -79,22 +166,41 @@ pub trait StateSync: Send + 'static {
 	) -> Self::Session;
 }
 
+/// A long-lived server that runs on every peer and serves state to
+/// catching-up followers.
+///
+/// One `StateSyncProvider` instance is created per peer via
+/// [`StateSync::create_provider`] at group initialization and lives
+/// for the entire group lifetime. Its responsibilities are:
+///
+/// - **Responding to sync requests** — when a lagging follower's
+///   [`StateSyncSession`] sends a message, the provider handles it
+///   via [`receive`](Self::receive).
+/// - **Background work** — the optional [`poll`](Self::poll) method
+///   is called on each tick of the group scheduler, letting the
+///   provider drive timeouts, create snapshots, or perform other
+///   periodic work.
+/// - **Log compaction hints** — via
+///   [`safe_to_prune_prefix`](Self::safe_to_prune_prefix), the
+///   provider can tell the runtime which log entries are safe to
+///   discard.
 pub trait StateSyncProvider: Send + 'static {
+	/// The parent [`StateSync`] implementation that created this
+	/// provider.
 	type Owner: StateSync;
 
-	/// Polls the provider on every tick of the group-internal work scheduler.
-	/// This can be used to drive internal timeouts, trigger retries, etc.
+	/// Called on each tick of the group's internal work scheduler.
 	///
-	/// When this method returns `Poll::Ready(())`, the provider is indicating
-	/// that it has completed some work and that it is ready to be polled again
-	/// immediately to drive the next step of the state sync process.
+	/// Use this to drive internal timeouts, trigger retries, create
+	/// periodic snapshots, or perform any background work that is
+	/// independent of incoming messages.
 	///
-	/// The provider can also wake the scheduler at any time by calling
-	/// `cx.wake()`, which will cause the scheduler to poll the provider
-	/// again.
+	/// - Return `Poll::Ready(())` to signal that work was completed
+	///   and the provider should be polled again immediately.
+	/// - Return `Poll::Pending` when idle. Call `cx.waker().wake()`
+	///   to request a future poll.
 	///
-	/// This is an optional method that is usable by sync providers that need to
-	/// do background work irrespective of receiving messages from followers.
+	/// The default implementation returns `Poll::Pending` (no-op).
 	fn poll(
 		&mut self,
 		_: &mut Context<'_>,
@@ -103,7 +209,12 @@ pub trait StateSyncProvider: Send + 'static {
 		Poll::Pending
 	}
 
-	/// Receives a message from a remote peer.
+	/// Handles an incoming sync message from a remote peer.
+	///
+	/// Returns `Ok(())` if the message was processed, or
+	/// `Err(message)` if the message was not recognized or not
+	/// applicable to this provider (e.g. it belongs to a different
+	/// protocol version).
 	fn receive(
 		&mut self,
 		message: Message<Self::Owner>,
@@ -111,12 +222,14 @@ pub trait StateSyncProvider: Send + 'static {
 		cx: &mut dyn SyncProviderContext<Self::Owner>,
 	) -> Result<(), Message<Self::Owner>>;
 
-	/// Returns the log position up to which it is safe to prune log entries
-	/// without risking that they are still needed for state synchronization of
-	/// lagging followers.
+	/// Returns the highest log index up to which entries can be
+	/// safely pruned without breaking in-progress sync sessions.
 	///
-	/// This value should never be greater than the position of the latest
-	/// committed log entry.
+	/// Returning `None` (the default) means the provider does not
+	/// support log pruning — all entries must be retained. This is
+	/// the case for [`LogReplaySync`](super::LogReplaySync).
+	///
+	/// The returned value must never exceed the committed index.
 	#[inline]
 	fn safe_to_prune_prefix(
 		&self,
@@ -125,9 +238,11 @@ pub trait StateSyncProvider: Send + 'static {
 		None
 	}
 
-	/// Notifies the provider that the committed index has advanced to a new
-	/// position. This can be used by the provider to update its internal state,
-	/// create snapshots, etc.
+	/// Called when the group's committed index advances.
+	///
+	/// Use this to trigger snapshot creation, update internal
+	/// bookkeeping, or notify active sync sessions that new data
+	/// is available.
 	#[inline]
 	fn committed(
 		&mut self,
@@ -137,28 +252,38 @@ pub trait StateSyncProvider: Send + 'static {
 	}
 }
 
-/// Represents one active state synchronization process for a specific follower
-/// that is not up-to-date.
+/// A short-lived catch-up session running on a single lagging follower.
 ///
-/// Instances of this type are created by the lagging follower for the duration
-/// of the catch-up process and terminated once the follower is fully
-/// synchronized with the current state of the group.
+/// Created by [`StateSync::create_session`] when a follower detects a
+/// gap in its log, and dropped once the gap is closed. The session
+/// drives the sync protocol by:
+///
+/// 1. Requesting missing state from [`StateSyncProvider`]s on other
+///    peers via messages.
+/// 2. Receiving responses and applying them to the local state machine
+///    (through the [`SyncSessionContext`]).
+/// 3. Buffering any new entries that arrive from the leader while the
+///    gap is being filled (via [`buffer`](Self::buffer)).
+/// 4. Returning `Poll::Ready(position)` from [`poll`](Self::poll)
+///    once the follower is fully caught up to the returned position.
 pub trait StateSyncSession: Send + 'static {
+	/// The parent [`StateSync`] implementation that created this
+	/// session.
 	type Owner: StateSync;
 
-	/// Drives the state synchronization process forward by polling for the next
-	/// tick according to the group-internal work scheduler. This method will be
-	/// polled repeatedly until it returns `Poll::Ready(position)`, at which
-	/// point the state synchronization process is complete and the follower is
-	/// fully synchronized with the current state of the group up to the returned
-	/// position.
+	/// Drives the sync process forward.
+	///
+	/// Polled repeatedly by the group scheduler. Return
+	/// `Poll::Ready(position)` when the follower is fully
+	/// synchronized up to `position`, or `Poll::Pending` to yield
+	/// until more data arrives or a timeout fires.
 	fn poll(
 		&mut self,
 		cx: &mut Context<'_>,
 		driver: &mut dyn SyncSessionContext<Self::Owner>,
 	) -> Poll<Cursor>;
 
-	/// Receives a message from a remote peer.
+	/// Handles an incoming sync message from a remote provider.
 	fn receive(
 		&mut self,
 		message: Message<Self::Owner>,
@@ -166,9 +291,12 @@ pub trait StateSyncSession: Send + 'static {
 		cx: &mut dyn SyncSessionContext<Self::Owner>,
 	);
 
-	/// Accepts a batch of log entries that have been produced by the current
-	/// leader while the sync process is ongoing. Those entries are going to be
-	/// immediately after the gap we're trying to fill.
+	/// Buffers new log entries that arrive from the leader while
+	/// sync is in progress.
+	///
+	/// These entries come *after* the gap the session is trying to
+	/// fill. The session must retain them and apply them after the
+	/// gap is closed.
 	fn buffer(
 		&mut self,
 		position: Cursor,
@@ -177,106 +305,111 @@ pub trait StateSyncSession: Send + 'static {
 	);
 }
 
-/// Context object that is passed to instances of [`StateSyncProvider`] and
-/// [`StateSyncSession`] instances to provide them with access to the state of
-/// the group.
+/// Shared context available to both [`StateSyncProvider`] and
+/// [`StateSyncSession`] instances.
+///
+/// Provides access to the group's state machine, log storage, network
+/// identity, and messaging primitives. All context methods are
+/// determinism-safe — they expose only state that is consistent across
+/// nodes.
 pub trait SyncContext<S: StateSync>: Sealed {
-	/// Returns the current state machine instance of this group.
+	/// Returns a shared reference to the state machine.
 	fn state_machine(&self) -> &S::Machine;
 
-	/// Returns a mutable reference to the current state machine instance of this
-	/// group.
+	/// Returns an exclusive reference to the state machine.
 	fn state_machine_mut(&mut self) -> &mut S::Machine;
 
-	/// Returns a read-only access to the raw log entries storage.
+	/// Returns read-only access to the raw log storage.
 	fn log(&self) -> &dyn Storage<Command<S>>;
 
-	/// Returns a mutable access to the raw log entries storage.
+	/// Returns mutable access to the raw log storage.
 	fn log_mut(&mut self) -> &mut dyn Storage<Command<S>>;
 
-	/// Returns the index of the latest committed log entry that has received a
-	/// quorum of votes.
+	/// The position of the latest committed log entry (replicated to
+	/// a quorum).
 	fn committed(&self) -> Cursor;
 
-	/// Returns the `PeerId` of the local node.
+	/// The [`PeerId`] of the local node.
 	fn local_id(&self) -> PeerId;
 
-	/// Returns the unique identifier of the group.
+	/// The [`GroupId`] of this group.
 	fn group_id(&self) -> GroupId;
 
-	/// Returns the unique identifier of the network.
+	/// The [`NetworkId`] of the network this group belongs to.
 	fn network_id(&self) -> NetworkId;
 
-	/// Sends a message to a specific peer.
+	/// Sends a sync message to a specific peer.
 	fn send_to(
 		&mut self,
 		peer: PeerId,
 		message: S::Message,
 	) -> Result<(), EncodeError>;
 
-	/// Broadcasts a message to all peers in the group and returns the list of
-	/// peers the message was sent to.
+	/// Broadcasts a sync message to all bonded peers, returning the
+	/// list of peers the message was sent to.
 	fn broadcast(
 		&mut self,
 		message: S::Message,
 	) -> Result<Vec<PeerId>, EncodeError>;
 
-	/// Returns [`Bonds`] of the group which can be used to observe changes to the
-	/// list of connected/bonded peers.
+	/// Returns the [`Bonds`] handle for observing connectivity
+	/// changes in the group.
 	fn bonds(&self) -> Bonds<S::Machine>;
 }
 
-/// Context object that is passed to instances of [`StateSyncSession`] instances
-/// to provide them with access to the state of the group.
+/// Extended context for [`StateSyncSession`] instances, available only
+/// on the lagging follower during catch-up.
 ///
-/// Instances of this type are instantiated on lagging followers during
-/// state catch-up.
+/// Adds leader-awareness and the ability to fast-forward the committed
+/// index after a snapshot load.
 pub trait SyncSessionContext<S: StateSync>: SyncContext<S> {
-	/// Returns the `PeerId` of the current leader.
+	/// Returns the [`PeerId`] of the current leader.
 	///
-	/// When a sync session is triggered, the leader is always known. This can be
-	/// used to deprioritize syncing from the leader to avoid overloading it with
-	/// sync requests, or to trigger specific logic that can only be executed on
-	/// the leader during the sync process.
+	/// Always known when a sync session is active. Useful for
+	/// avoiding sync requests to the leader (to prevent overloading
+	/// it) or for triggering leader-specific sync logic.
 	fn leader(&self) -> PeerId;
 
-	/// Sets the committed index to the given value. This is used after
-	/// snapshot-based state sync to fast-forward the committed index to the
-	/// snapshot anchor position having the actual log entries.
+	/// Fast-forwards the committed index to the given position.
+	///
+	/// Used after snapshot-based sync to set the committed index to
+	/// the snapshot's anchor position without having the
+	/// corresponding log entries.
 	fn set_committed(&mut self, position: Cursor);
 }
 
-/// Context object that is passed to instances of [`StateSyncProvider`]
-/// instances to provide them with access to the state of the group.
+/// Extended context for [`StateSyncProvider`] instances, available on
+/// all peers in all Raft roles.
 ///
-/// Instances of this type are instantiated on all peers in the group running
-/// in all roles.
+/// Adds leader-awareness and the ability to inject commands into the
+/// Raft log.
 pub trait SyncProviderContext<S: StateSync>: SyncContext<S> {
-	/// Returns the `PeerId` of the current leader, if known.
+	/// Returns the [`PeerId`] of the current leader, if known.
 	///
-	/// The leader is not guaranteed to be known at all times on all peers as the
-	/// network topology changes.
+	/// May be `None` during elections or network partitions.
 	fn leader(&self) -> Option<PeerId>;
 
-	/// Returns `true` if the local node is the current leader, `false` otherwise.
+	/// Returns `true` if the local node is the current leader.
 	#[inline]
 	fn is_leader(&self) -> bool {
 		self.leader() == Some(self.local_id())
 	}
 
-	/// Adds a new command to the log of the group. This call is only valid on the
-	/// current leader and will be rejected if called on a non-leader node.
+	/// Injects a command into the Raft log (leader only).
 	///
-	/// This is a best-effort method that can be used by the provider to feed new
-	/// commands into the log during the sync process, for example to create new
-	/// markers seen by all group members at the same position in the log, there
-	/// is no guarantee of timing, delivery or order of the command added through
-	/// this method. The only guarantee is that if this command makes it to the
-	/// state machine, all nodes in the network will see it at exactly the same
-	/// position.
+	/// This is a **best-effort** operation — the command is not
+	/// guaranteed to be committed. It is useful for inserting
+	/// sync-protocol markers (e.g. snapshot anchors) that must be
+	/// seen by all group members at exactly the same log position.
+	///
+	/// Returns `Err(command)` if the local node is not the leader.
 	fn feed_command(&mut self, command: Command<S>) -> Result<(), Command<S>>;
 }
 
+/// Marker trait for sync protocol wire messages.
+///
+/// Automatically implemented for any type that is `Clone +
+/// Serialize + DeserializeOwned + Send + Sync + 'static`.
 pub trait StateSyncMessage:
 	Clone + Serialize + DeserializeOwned + Send + Sync + 'static
 {

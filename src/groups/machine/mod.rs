@@ -1,10 +1,15 @@
-//! Replicated State Machine (RSM) module for the Raft consensus algorithm. This
-//! module defines the `StateMachine` trait, which represents the
-//! application-specific logic of a Raft group.
+//! Replicated State Machine (RSM) module for consensus groups.
 //!
-//! Each group has a state machine that processes commands and queries, and the
-//! log module maintains a replicated log of commands that are applied to the
-//! state machine.
+//! This module defines the [`StateMachine`] trait — the main integration
+//! point for application-specific logic in a mosaik consensus group. Every
+//! group runs exactly one state machine instance per node, and the Raft
+//! protocol ensures that all instances process the same commands in the same
+//! order, converging on identical state.
+//!
+//! The module also defines the [`StateSync`] trait, which handles catch-up
+//! for followers that fall behind the leader's log. The built-in
+//! [`LogReplaySync`](super::LogReplaySync) implementation works with any
+//! state machine by replaying missed log entries.
 
 use {
 	crate::{
@@ -23,57 +28,221 @@ pub use noop::NoOp;
 // Public API traits for user-provided state machine implementations.
 pub use sync::*;
 
-/// This trait defines the replicated state machine (RSM) that is used by the
-/// Raft log. Each group has a state machine that represents the
-/// application-specific logic of the group.
+/// The core trait for application-specific replicated state in a consensus
+/// group.
+///
+/// Every mosaik consensus group is backed by a single `StateMachine`
+/// implementation. The Raft protocol replicates [`Command`]s across all
+/// group members, and each member applies them **in the same order** to
+/// its local `StateMachine` instance, guaranteeing that all nodes converge
+/// on identical state.
+///
+/// # Lifecycle
+///
+/// 1. **Create** — you instantiate your state machine and pass it to the
+///    group builder via
+///    [`with_state_machine`](super::GroupBuilder::with_state_machine).
+/// 2. **Join** — calling
+///    [`join()`](super::GroupBuilder::join) on the builder starts the
+///    Raft protocol and returns a [`Group<M>`](super::Group) handle.
+/// 3. **Commands** — clients submit commands through
+///    [`Group::execute`](super::Group::execute). The leader replicates
+///    each command to a quorum of followers; once committed, every node
+///    calls [`apply`](StateMachine::apply) with that command.
+/// 4. **Queries** — clients call
+///    [`Group::query`](super::Group::query) with either `Weak`
+///    (local, possibly stale) or `Strong` (forwarded to leader)
+///    consistency. The group calls
+///    [`query`](StateMachine::query) on the local state machine and
+///    returns the result.
+/// 5. **Catch-up** — when a follower falls behind, the
+///    [`StateSync`] implementation returned by
+///    [`state_sync`](StateMachine::state_sync) fills the gap
+///    (replaying missed log entries or transferring a snapshot).
+///
+/// # Determinism
+///
+/// **`apply` must be deterministic.** Given the same sequence of commands,
+/// every node must produce the exact same state. Do not read wall-clock
+/// time, random values, or any external I/O inside `apply`. If you need
+/// non-deterministic input, inject it *into* a command before submitting
+/// it.
+///
+/// # Example
+///
+/// A simple counter replicated across a group:
+///
+/// ```rust
+/// use mosaik::groups::{
+///     ApplyContext, LeadershipPreference, LogReplaySync,
+///     StateMachine,
+/// };
+/// use mosaik::UniqueId;
+/// use serde::{Deserialize, Serialize};
+///
+/// /// Commands that mutate the counter.
+/// #[derive(Clone, Serialize, Deserialize)]
+/// enum CounterCmd {
+///     Increment(u32),
+///     Decrement(u32),
+/// }
+///
+/// /// Queries that read the counter.
+/// #[derive(Clone, Serialize, Deserialize)]
+/// struct GetValue;
+///
+/// struct Counter {
+///     value: i64,
+/// }
+///
+/// impl StateMachine for Counter {
+///     type Command = CounterCmd;
+///     type Query = GetValue;
+///     type QueryResult = i64;
+///     type StateSync = LogReplaySync<Self>;
+///
+///     fn signature(&self) -> UniqueId {
+///         UniqueId::from("my_counter_v1")
+///     }
+///
+///     fn apply(
+///         &mut self,
+///         cmd: CounterCmd,
+///         _ctx: &dyn ApplyContext,
+///     ) {
+///         match cmd {
+///             CounterCmd::Increment(n) => {
+///                 self.value += i64::from(n);
+///             }
+///             CounterCmd::Decrement(n) => {
+///                 self.value -= i64::from(n);
+///             }
+///         }
+///     }
+///
+///     fn query(&self, _: GetValue) -> i64 {
+///         self.value
+///     }
+///
+///     fn state_sync(&self) -> LogReplaySync<Self> {
+///         LogReplaySync::default()
+///     }
+/// }
+/// ```
+///
+/// Then, to use it in a group:
+///
+/// ```rust,ignore
+/// let group = network
+///     .groups()
+///     .with_key("my-counter-group")
+///     .with_state_machine(Counter { value: 0 })
+///     .join();
+///
+/// // Wait for a leader to be elected.
+/// group.when().online().await;
+///
+/// // Submit a command (replicated to all members).
+/// group.execute(CounterCmd::Increment(1)).await?;
+///
+/// // Read the current value (strong consistency).
+/// let result = group.query(GetValue, Consistency::Strong).await?;
+/// assert_eq!(*result, 1);
+/// ```
 pub trait StateMachine: Sized + Send + Sync + 'static {
-	/// The type of commands that are applied to the state machine and replicated
-	/// in the log. Commands represent state transitions and mutate the state
-	/// machine. They are sent to the leader by clients and replicated to
-	/// followers via the log.
+	/// The type of commands that mutate the state machine.
+	///
+	/// Commands are the unit of replication: the leader appends each
+	/// command to the Raft log, replicates it to a quorum of followers,
+	/// and then every node applies it via [`apply`](Self::apply).
+	///
+	/// Commands must be serializable ([`Datum`]) because they are
+	/// transmitted over the network and persisted in the log. They must
+	/// also be [`Clone`] so the runtime can copy them when needed (e.g.
+	/// during state sync or forwarding).
 	type Command: Command;
 
-	/// The type of queries that can be executed against the state machine.
-	/// Queries are read-only operations that do not mutate the state machine.
-	/// They can be sent to any node in the group (leader or followers) and are
-	/// not replicated in the log. They are used to read the current state of the
-	/// state machine without modifying it.
+	/// The type of read-only queries against the state machine.
+	///
+	/// Queries do **not** go through the Raft log. They are evaluated
+	/// directly against the local state machine on whichever node
+	/// handles the request:
+	///
+	/// - **Weak consistency** — the query runs on the local node
+	///   immediately, which may return stale data.
+	/// - **Strong consistency** — the query is forwarded to the current
+	///   leader, guaranteeing a consistent read.
 	type Query: Query;
 
-	/// The type of results returned by executing queries against the state
-	/// machine. This type is returned by the `query` method when a query is
-	/// executed by external clients.
+	/// The result type returned by [`query`](Self::query).
+	///
+	/// Must be serializable so it can be sent over the network when a
+	/// follower forwards a strong-consistency query to the leader.
 	type QueryResult: QueryResult;
 
-	/// The type responsible for implementing the state synchronization (catch-up)
-	/// process for followers that are not up to date with the committed group
-	/// state.
+	/// The [`StateSync`] implementation used to synchronize followers
+	/// that fall behind the leader's log.
 	///
-	/// When writing your own state machine use
-	/// [`LogReplaySync`](super::LogReplaySync) as the initial state sync
-	/// implementation, which works with any state machine as a starting point.
+	/// Use [`LogReplaySync`](super::LogReplaySync) as a sensible
+	/// default — it works with any state machine by replaying missed
+	/// log entries from peers. For higher-throughput workloads, you can
+	/// provide a snapshot-based implementation instead.
 	type StateSync: StateSync<Machine = Self>;
 
-	/// A unique identifier for the state machine type and settings. This value is
-	/// part of the group id derivation and must be identical for all members of
-	/// the same group. Any difference in this value will render a different
-	/// group id and will prevent peers from joining the same group.
+	/// Returns a unique fingerprint of this state machine type and its
+	/// configuration.
 	///
-	/// This value should be derived from the state machine implementation type
-	/// and any relevant init parameters, such that different state machine
-	/// implementations or configurations yield different ids. This is used to
-	/// prevent peers with incompatible state machines from joining the same group
-	/// and causing undefined behavior.
+	/// This value is **part of the [`GroupId`](super::GroupId)
+	/// derivation**. All members of the same group must return an
+	/// identical signature; any mismatch produces a different group id,
+	/// preventing nodes from bonding.
+	///
+	/// # What to include
+	///
+	/// - The state machine's **type name or version tag** (so
+	///   incompatible implementations never collide).
+	/// - Any **configuration parameters** that affect command semantics
+	///   (e.g. capacity limits, feature flags). If two nodes interpret
+	///   the same command differently because of a config difference,
+	///   the signature must differ.
+	///
+	/// # Example
+	///
+	/// ```rust,ignore
+	/// fn signature(&self) -> UniqueId {
+	///     UniqueId::from("my_orderbook_v2")
+	///         .derive(self.max_depth.to_le_bytes())
+	/// }
+	/// ```
 	fn signature(&self) -> UniqueId;
 
-	/// Applies a command to the state machine, mutating its state. This method is
-	/// called by the log when a command is committed (replicated to a majority).
+	/// Applies a committed command to the state machine.
+	///
+	/// This method is called **exactly once per committed log entry**,
+	/// in log order, on every node in the group. Because all nodes
+	/// apply the same commands in the same order, the state machine
+	/// must remain **deterministic**: the same input must always produce
+	/// the same state mutation.
+	///
+	/// The [`ApplyContext`] provides metadata about the current log
+	/// position and term, which can be useful for versioning,
+	/// compaction, or progress tracking.
+	///
+	/// # Panics
+	///
+	/// Panicking inside `apply` is treated as a fatal divergence — the
+	/// node will shut down rather than risk inconsistent state.
 	fn apply(&mut self, command: Self::Command, ctx: &dyn ApplyContext);
 
-	/// Optionally allows state machine implementations to optimize the
-	/// application of a batch of commands. By default, this method applies
-	/// commands one by one using the `apply` method, but state machines that
-	/// can optimize batch processing can override this method.
+	/// Applies a batch of commands in one call.
+	///
+	/// The default implementation calls [`apply`](Self::apply) for
+	/// each command sequentially. Override this if your state machine
+	/// can amortize per-command overhead (e.g. by deferring index
+	/// rebuilds until the end of the batch).
+	///
+	/// The batch is received in log order and all commands belong to
+	/// the same term (available via [`ApplyContext::current_term`]).
 	#[inline]
 	fn apply_batch(
 		&mut self,
@@ -85,36 +254,54 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 		}
 	}
 
-	/// Executes a query against the state machine, returning a result. This
-	/// method is called when an external client sends a query to any node in the
-	/// group. The query is executed against the current state of the state
-	/// machine and returns a result without modifying the state.
+	/// Evaluates a read-only query against the current state.
+	///
+	/// This is called on the node that handles the query (the local
+	/// node for weak consistency, the leader for strong consistency).
+	/// It must **not** mutate the state machine.
 	fn query(&self, query: Self::Query) -> Self::QueryResult;
 
-	/// Returns a new instance of the state synchronization implementation that is
-	/// used to synchronize lagging followers with the current state of the group.
+	/// Returns a new [`StateSync`] instance for this state machine.
 	///
-	/// When writing your own state machine use
-	/// [`LogReplaySync`](super::LogReplaySync) as the initial state sync
-	/// implementation, which works with any state machine as a starting point.
+	/// Called once when the group is initialized. The returned value
+	/// provides the session/provider factories that the Raft protocol
+	/// uses during follower catch-up.
+	///
+	/// For most use cases, returning
+	/// [`LogReplaySync::default()`](super::LogReplaySync::default) is
+	/// sufficient:
+	///
+	/// ```rust,ignore
+	/// fn state_sync(&self) -> LogReplaySync<Self> {
+	///     LogReplaySync::default()
+	/// }
+	/// ```
 	fn state_sync(&self) -> Self::StateSync;
 
-	/// Returns the leadership preference for this state machine instance. This
-	/// controls whether the node running this state machine will seek to become
-	/// a leader, avoid leadership, or never assume leadership at all.
+	/// Returns the leadership preference for this node.
 	///
-	/// This is a per-node preference that does not affect the group identity —
-	/// different nodes in the same group can have different leadership
-	/// preferences. The preference is enforced by the Raft election logic:
+	/// This is a **per-node** setting that does not affect the group
+	/// id — different nodes in the same group can have different
+	/// preferences. The Raft election logic enforces the preference:
 	///
-	/// - [`LeadershipPreference::Normal`] — default Raft behavior, the node
-	///   participates in elections as a candidate.
-	/// - [`LeadershipPreference::Reluctant`] — the node uses longer election
-	///   timeouts, reducing its likelihood of becoming leader, but can still be
-	///   elected if no other candidate is available.
-	/// - [`LeadershipPreference::Observer`] — the node never self-nominates as a
-	///   candidate and abstains from all votes. It replicates the log but does
-	///   not count toward quorum.
+	/// - [`LeadershipPreference::Normal`] — standard candidate
+	///   behavior (the default).
+	/// - [`LeadershipPreference::Reluctant`] — longer election
+	///   timeouts, reducing the chance of becoming leader but not
+	///   preventing it entirely.
+	/// - [`LeadershipPreference::Observer`] — never self-nominates,
+	///   abstains from all votes, and does not count toward quorum.
+	///   The node still replicates the log and applies commands.
+	///
+	/// # Example
+	///
+	/// A read-replica that should never lead:
+	///
+	/// ```rust,ignore
+	/// fn leadership_preference(&self) -> LeadershipPreference {
+	///     LeadershipPreference::Observer
+	/// }
+	/// ```
 	#[inline]
 	fn leadership_preference(&self) -> LeadershipPreference {
 		LeadershipPreference::Normal

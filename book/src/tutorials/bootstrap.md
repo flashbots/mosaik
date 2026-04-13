@@ -19,7 +19,7 @@ The bootstrap example is a single file at `examples/bootstrap.rs`. It uses these
 
 ```toml
 [dependencies]
-mosaik = "0.2"
+mosaik = "0.3"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"

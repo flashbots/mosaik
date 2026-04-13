@@ -4,15 +4,15 @@ Mosaik is a Rust runtime for building self-organizing, leaderless distributed sy
 
 ## Key Features
 
-| Feature                    | Description                                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------------------------- |
-| **Self-organizing**        | Nodes discover each other via gossip and form the correct topology automatically                  |
-| **Typed pub/sub**          | Stream any serializable Rust type between nodes with backpressure and filtering                   |
-| **Raft consensus**         | Form consensus groups with leader election and replicated state machines                          |
-| **Replicated collections** | Distributed `Map`, `Vec`, `Set`, `Cell`, `Once`, and `PriorityQueue` with strong consistency  |
-| **QUIC transport**         | Built on [iroh](https://github.com/n0-computer/iroh) for modern, encrypted P2P networking         |
-| **Relay support**          | Nodes behind NAT can communicate via relay servers with automatic hole-punching                   |
-| **TEE support**            | First-class Intel TDX support for hardware-attested identity and access control                   |
+| Feature                    | Description                                                                                  |
+| -------------------------- | -------------------------------------------------------------------------------------------- |
+| **Self-organizing**        | Nodes discover each other via gossip and form the correct topology automatically             |
+| **Typed pub/sub**          | Stream any serializable Rust type between nodes with backpressure and filtering              |
+| **Raft consensus**         | Form consensus groups with leader election and replicated state machines                     |
+| **Replicated collections** | Distributed `Map`, `Vec`, `Set`, `Cell`, `Once`, and `PriorityQueue` with strong consistency |
+| **QUIC transport**         | Built on [iroh](https://github.com/n0-computer/iroh) for modern, encrypted P2P networking    |
+| **Relay support**          | Nodes behind NAT can communicate via relay servers with automatic hole-punching              |
+| **TEE support**            | First-class Intel TDX support for hardware-attested identity and access control              |
 
 ## Module Map
 
@@ -26,7 +26,7 @@ Mosaik is organized into five composable subsystems:
 │  Discovery  │   Streams   │   Groups    │Collections │
 │  Gossip &   │  Typed      │  Raft       │ Replicated │
 │  peer       │  pub/sub    │  consensus  │ Map, Vec,  │
-│  catalog    │  channels   │  groups     │ Set, Reg,  │
+│  catalog    │  channels   │  groups     │ Set, Cell, │
 │             │             │             │ Once, DEPQ │
 └─────────────┴─────────────┴─────────────┴────────────┘
 ```

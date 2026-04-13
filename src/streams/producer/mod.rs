@@ -226,7 +226,6 @@ impl<D: Datum> Sink<D> for Producer<D> {
 		match online_fut.poll(cx) {
 			Poll::Ready(_) => {}
 			Poll::Pending => {
-				cx.waker().wake_by_ref();
 				return Poll::Pending;
 			}
 		}

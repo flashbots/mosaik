@@ -6,7 +6,7 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.93"
-version = "0.3.14"
+version = "0.3.15"
 license = "MIT"
 homepage = "https://docs.mosaik.world"
 documentation = "https://docs.rs/mosaik"
