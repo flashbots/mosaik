@@ -90,6 +90,9 @@ pub struct Consumer<D: Datum> {
 	/// tracking.
 	chan: mpsc::UnboundedReceiver<(D, usize)>,
 
+	/// Pre-computed metrics labels for this consumer.
+	metrics_labels: [(&'static str, String); 2],
+
 	/// Drop guard that aborts the consumer worker task when this handle is
 	/// dropped.
 	_abort: DropGuard,
@@ -172,6 +175,11 @@ impl<D: Datum> Consumer<D> {
 			Some((datum, bytes_len)) => {
 				self.stats.increment_datums();
 				self.stats.increment_bytes(bytes_len);
+				let labels = self.metrics_labels.as_slice();
+				metrics::counter!("mosaik.streams.consumer.items.received", labels)
+					.increment(1);
+				metrics::counter!("mosaik.streams.consumer.bytes.received", labels)
+					.increment(bytes_len as u64);
 				Some(datum)
 			}
 			None => None,
@@ -186,6 +194,11 @@ impl<D: Datum> Consumer<D> {
 			Ok((datum, bytes_len)) => {
 				self.stats.increment_datums();
 				self.stats.increment_bytes(bytes_len);
+				let labels = self.metrics_labels.as_slice();
+				metrics::counter!("mosaik.streams.consumer.items.received", labels)
+					.increment(1);
+				metrics::counter!("mosaik.streams.consumer.bytes.received", labels)
+					.increment(bytes_len as u64);
 				Ok(datum)
 			}
 			Err(e) => Err(e),
@@ -205,6 +218,11 @@ impl<D: Datum> Stream for Consumer<D> {
 			Poll::Ready(Some((datum, bytes_len))) => {
 				this.stats.increment_datums();
 				this.stats.increment_bytes(bytes_len);
+				let labels = this.metrics_labels.as_slice();
+				metrics::counter!("mosaik.streams.consumer.items.received", labels)
+					.increment(1);
+				metrics::counter!("mosaik.streams.consumer.bytes.received", labels)
+					.increment(bytes_len as u64);
 				Poll::Ready(Some(datum))
 			}
 			Poll::Ready(None) => Poll::Ready(None),

@@ -30,6 +30,7 @@ use {
 		endpoint::Connection,
 		protocol::DynProtocolHandler,
 	},
+	metrics::{counter, gauge},
 	rand::Rng,
 	std::{collections::HashSet, io, sync::Arc},
 	tokio::{
@@ -307,6 +308,9 @@ impl WorkerLoop {
 
 				// Drive catalog sync tasks
 				Some(Ok(Ok(peer_id))) = self.syncs.join_next() => {
+					let network = self.network_label();
+					counter!("mosaik.discovery.catalog.syncs", &network)
+						.increment(1);
 					self.on_peer_observed(&peer_id.into());
 				}
 
@@ -435,6 +439,7 @@ impl WorkerLoop {
 	/// updated, or rejected.
 	fn on_peer_entry_received(&mut self, peer_entry: SignedPeerEntry) {
 		self.on_peer_observed(peer_entry.address());
+		let network = self.network_label();
 		let modified = self.handle.catalog.send_if_modified(|catalog| {
 			match catalog.upsert_signed(peer_entry) {
 				UpsertResult::New(peer_entry) => {
@@ -443,6 +448,8 @@ impl WorkerLoop {
 						network = %self.handle.local.network_id().short(),
 						"discovered new"
 					);
+
+					counter!("mosaik.discovery.peers.discovered", &network).increment(1);
 
 					// Publish the new peer entry to the static provider
 					self.handle.local.observe(peer_entry.address());
@@ -465,6 +472,8 @@ impl WorkerLoop {
 					true
 				}
 				UpsertResult::Updated(peer_entry) => {
+					counter!("mosaik.discovery.peers.updated", &network).increment(1);
+
 					// Publish the new peer entry to the static provider
 					self.handle.local.observe(peer_entry.address());
 					self.events.send(Event::PeerUpdated(peer_entry.into())).ok();
@@ -502,6 +511,10 @@ impl WorkerLoop {
 		});
 
 		if modified {
+			let network = self.network_label();
+			let size = self.handle.catalog.borrow().peers_count();
+			gauge!("mosaik.discovery.catalog.size", &network).set(size as f64);
+
 			let purge_in = self.next_purge_deadline();
 			self.purge_interval.reset_after(purge_in);
 		}
@@ -540,6 +553,11 @@ impl WorkerLoop {
 			.send_if_modified(|catalog| catalog.remove_signed(&peer_id).is_some());
 
 		if modified {
+			let network = self.network_label();
+			counter!("mosaik.discovery.peers.departed", &network).increment(1);
+			let size = self.handle.catalog.borrow().peers_count();
+			gauge!("mosaik.discovery.catalog.size", &network).set(size as f64);
+
 			tracing::trace!(
 				peer = %Short(&peer_id),
 				network = %self.handle.local.network_id(),
@@ -646,6 +664,12 @@ impl WorkerLoop {
 			return;
 		}
 
+		let network = self.network_label();
+		counter!("mosaik.discovery.peers.departed", &network)
+			.increment(purged.len() as u64);
+		let size = self.handle.catalog.borrow().peers_count();
+		gauge!("mosaik.discovery.catalog.size", &network).set(size as f64);
+
 		for peer in &purged {
 			self.handle.rtt.remove(peer.id());
 			self.events.send(Event::PeerDeparted(*peer.id())).ok();
@@ -683,6 +707,14 @@ impl WorkerLoop {
 		}
 
 		false
+	}
+
+	/// Returns a label set with the network id for metrics.
+	fn network_label(&self) -> [(&'static str, String); 1] {
+		[(
+			"network",
+			self.handle.local.network_id().short().to_string(),
+		)]
 	}
 
 	/// Calculates the next deadline for purging stale entries from the catalog by

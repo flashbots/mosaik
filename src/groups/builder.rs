@@ -12,6 +12,7 @@ use {
 			config::GroupConfig,
 			worker::Worker,
 		},
+		primitives::ShortFmtExt,
 		tickets::TicketValidator,
 	},
 	core::time::Duration,
@@ -194,6 +195,13 @@ where
 				existing.get().public_handle(&self.groups.active)
 			}
 			Entry::Vacant(place) => {
+				let network = self.groups.local.network_id().short().to_string();
+				let group = group_id.short().to_string();
+				let network_label = [("network", network.clone())];
+				let labels = [("network", network), ("group", group)];
+				metrics::gauge!("mosaik.groups.active", &network_label).increment(1.0);
+				metrics::gauge!("mosaik.groups.bonds.active", &labels).set(0.0);
+
 				let worker = Worker::<S, M>::spawn(
 					self.groups,
 					config,

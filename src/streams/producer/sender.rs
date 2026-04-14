@@ -20,7 +20,7 @@ use {
 			UnexpectedClose,
 			link::{Link, LinkError},
 		},
-		primitives::Short,
+		primitives::{Short, ShortFmtExt},
 	},
 	bytes::Bytes,
 	iroh::endpoint::{ApplicationClose, ConnectionError},
@@ -121,7 +121,10 @@ impl Sender {
 		let (state_tx, state_rx) = watch::channel(State::Connecting);
 		let (bytes_tx, bytes_rx) = mpsc::channel::<Bytes>(config.buffer_size);
 
-		let stats = Arc::new(Stats::default());
+		let stats = Arc::new(Stats::new([
+			("network", config.network_id.short().to_string()),
+			("stream", config.stream_id.short().to_string()),
+		]));
 
 		let status = ChannelInfo {
 			criteria: criteria.clone(),

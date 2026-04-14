@@ -21,12 +21,13 @@ use {
 		PeerId,
 		UniqueId,
 		groups::*,
-		primitives::{EncodeError, Encoded, Short, UnboundedChannel},
+		primitives::{EncodeError, Encoded, Short, ShortFmtExt, UnboundedChannel},
 	},
 	chrono::{DateTime, Utc},
 	core::{any::type_name, cmp::Ordering, ops::Range},
 	futures::{FutureExt, TryFutureExt},
 	serde::{Deserialize, Serialize},
+	std::sync::OnceLock,
 	tokio::sync::{broadcast, mpsc::UnboundedSender, watch},
 };
 
@@ -554,6 +555,7 @@ struct VecStateMachine<T: Value> {
 	is_writer: bool,
 	state_sync: SnapshotSync<Self>,
 	local_id: PeerId,
+	metrics_labels: OnceLock<[(&'static str, String); 2]>,
 }
 
 impl<T: Value> VecStateMachine<T> {
@@ -576,6 +578,7 @@ impl<T: Value> VecStateMachine<T> {
 			is_writer,
 			state_sync,
 			local_id,
+			metrics_labels: OnceLock::new(),
 		}
 	}
 
@@ -656,6 +659,15 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 
 		self.latest.send_replace(self.data.clone());
 
+		let labels = self.metrics_labels.get_or_init(|| {
+			[
+				("network", ctx.network_id().short().to_string()),
+				("group", ctx.group_id().short().to_string()),
+			]
+		});
+		metrics::gauge!("mosaik.collections.vec.size", labels.as_slice())
+			.set(self.data.len() as f64);
+
 		if !sync_requests.is_empty() {
 			let snapshot = self.create_snapshot();
 			let position = Cursor::new(
@@ -663,6 +675,8 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 				ctx.committed().index() + commands_len as u64,
 			);
 
+			metrics::counter!("mosaik.collections.syncs.started", labels.as_slice())
+				.increment(sync_requests.len() as u64);
 			for request in sync_requests {
 				self
 					.state_sync

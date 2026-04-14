@@ -449,6 +449,20 @@ Mosaik is built on [iroh](https://github.com/n0-computer/iroh) for QUIC-based pe
 └────────────────────────────────────────────────────────┘
 ```
 
+# Observability
+
+Every subsystem emits metrics via the [`metrics`](https://docs.rs/metrics) facade crate. When no recorder is installed the calls are zero-cost no-ops. Enable the `prometheus` feature (on by default) to start a Prometheus HTTP exporter:
+
+```rust
+let network = Network::builder("my-app")
+    .with_prometheus_addr("0.0.0.0:9000".parse().unwrap())
+    .build()
+    .await?;
+// GET http://0.0.0.0:9000/ returns Prometheus text format
+```
+
+Metrics cover discovery (catalog size, peer churn, gossip neighbors), groups (elections, leadership, committee, bond traffic), streams (throughput, consumer counts, dropped items), collections (size per collection, sync operations), and network-level aggregate traffic. See the [Metrics reference](./book/src/reference/metrics.md) for the full catalog.
+
 # Repository Layout
 
 | Path               | Description                                                                      |
@@ -518,7 +532,8 @@ Core primitives for building self-organized distributed systems in trusted, perm
 - [x] **Tickets** — JWT and TDX-based peer authentication with expiration-aware disconnect
 - [x] **TEE** — First-class Intel TDX support for hardware-attested identity and access control
 - [ ] **Preferences** — ranking producers by latency, geo-proximity
-- [ ] **Diagnostics** — network inspection, automatic metrics, developer debug tools
+- [x] **Metrics** — built-in observability via `metrics` with optional Prometheus exporter
+- [ ] **Diagnostics** — network inspection, developer debug tools
 
 ### Stage 2: Trust & Privacy
 

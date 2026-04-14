@@ -52,15 +52,16 @@ let network = Network::builder("my-app".into())
 
 ### Builder Options
 
-| Method                  | Type                   | Default   | Description                         |
-| ----------------------- | ---------------------- | --------- | ----------------------------------- |
-| `with_secret_key()`     | `SecretKey`            | Random    | Node identity (determines `PeerId`) |
-| `with_relay_mode()`     | `RelayMode`            | `Default` | NAT traversal via relay servers     |
-| `with_mdns_discovery()` | `bool`                 | `false`   | Local network mDNS peer discovery   |
-| `with_addresses()`      | `BTreeSet<SocketAddr>` | Empty     | Explicit bind addresses             |
-| `with_discovery()`      | `ConfigBuilder`        | Defaults  | Discovery subsystem configuration   |
-| `with_streams()`        | `ConfigBuilder`        | Defaults  | Streams subsystem configuration     |
-| `with_groups()`         | `ConfigBuilder`        | Defaults  | Groups subsystem configuration      |
+| Method                   | Type                   | Default   | Description                         |
+| ------------------------ | ---------------------- | --------- | ----------------------------------- |
+| `with_secret_key()`      | `SecretKey`            | Random    | Node identity (determines `PeerId`) |
+| `with_relay_mode()`      | `RelayMode`            | `Default` | NAT traversal via relay servers     |
+| `with_mdns_discovery()`  | `bool`                 | `false`   | Local network mDNS peer discovery   |
+| `with_addresses()`       | `BTreeSet<SocketAddr>` | Empty     | Explicit bind addresses             |
+| `with_discovery()`       | `ConfigBuilder`        | Defaults  | Discovery subsystem configuration   |
+| `with_streams()`         | `ConfigBuilder`        | Defaults  | Streams subsystem configuration     |
+| `with_groups()`          | `ConfigBuilder`        | Defaults  | Groups subsystem configuration      |
+| `with_prometheus_addr()` | `SocketAddr`           | None      | Prometheus metrics exporter address |
 
 ## Accessing Subsystems
 
@@ -141,6 +142,7 @@ pub struct Link<P: Protocol> { /* ... */ }
 ```
 
 Links provide:
+
 - **Length-delimited framing** via `LengthDelimitedCodec`
 - **Serialization** via `postcard` (compact binary format)
 - **Type safety** via the `Protocol` trait and generic parameter

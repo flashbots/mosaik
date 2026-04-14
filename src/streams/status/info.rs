@@ -37,6 +37,9 @@ pub struct Stats {
 
 	/// Total number of bytes transmitted.
 	bytes: AtomicUsize,
+
+	/// Pre-computed network label for metrics.
+	network_label: [(&'static str, String); 2],
 }
 
 // Public API
@@ -72,10 +75,20 @@ impl Stats {
 impl Stats {
 	pub(crate) fn increment_datums(&self) {
 		self.datums.fetch_add(1, Ordering::Relaxed);
+		metrics::counter!(
+			"mosaik.streams.datums.total",
+			self.network_label.as_slice()
+		)
+		.increment(1);
 	}
 
 	pub(crate) fn increment_bytes(&self, n: usize) {
 		self.bytes.fetch_add(n, Ordering::Relaxed);
+		metrics::counter!(
+			"mosaik.streams.bytes.total",
+			self.network_label.as_slice()
+		)
+		.increment(n as u64);
 	}
 
 	pub(crate) fn disconnected(&self) {
@@ -88,20 +101,21 @@ impl Stats {
 			.store(Utc::now().timestamp_millis(), Ordering::Relaxed);
 	}
 
-	pub(crate) fn default_connected() -> Self {
-		let stats = Self::default();
-		stats.connected();
-		stats
-	}
-}
-
-impl Default for Stats {
-	fn default() -> Self {
+	pub const fn new(network_label: [(&'static str, String); 2]) -> Self {
 		Self {
 			connected_at: AtomicI64::new(0),
 			bytes: AtomicUsize::new(0),
 			datums: AtomicUsize::new(0),
+			network_label,
 		}
+	}
+
+	pub(crate) fn new_connected(
+		network_label: [(&'static str, String); 2],
+	) -> Self {
+		let stats = Self::new(network_label);
+		stats.connected();
+		stats
 	}
 }
 

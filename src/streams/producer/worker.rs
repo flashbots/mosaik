@@ -149,6 +149,9 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// A future that resolves when the producer can publish data based on
 	/// the configured online conditions.
 	online_when: ChannelConditions,
+
+	/// Pre-computed metrics labels for this stream.
+	metrics_labels: [(&'static str, String); 2],
 }
 
 impl<D: Datum> WorkerLoop<D> {
@@ -169,6 +172,11 @@ impl<D: Datum> WorkerLoop<D> {
 		let rtt = Arc::clone(sinks.discovery.rtt_tracker());
 		let catalog = sinks.discovery.catalog_watch();
 
+		let metrics_labels = [
+			("stream", config.stream_id.short().to_string()),
+			("network", config.network_id.short().to_string()),
+		];
+
 		let worker = Self {
 			cancel,
 			data_rx,
@@ -183,6 +191,7 @@ impl<D: Datum> WorkerLoop<D> {
 			dropped: JoinSet::new(),
 			ticket_expiries: JoinSet::new(),
 			catalog,
+			metrics_labels,
 		};
 
 		tokio::spawn(worker.run());
@@ -283,7 +292,15 @@ impl<D: Datum> WorkerLoop<D> {
 				};
 
 				// forward the serialized datum to the matching consumer
-				if subscription.bytes_tx.try_send(bytes.clone()).is_err() {
+				let labels = self.metrics_labels.as_slice();
+				if subscription.bytes_tx.try_send(bytes.clone()).is_ok() {
+					metrics::counter!("mosaik.streams.producer.items.sent", labels)
+						.increment(1);
+					metrics::counter!("mosaik.streams.producer.bytes.sent", labels)
+						.increment(bytes.len() as u64);
+				} else {
+					metrics::counter!("mosaik.streams.producer.items.dropped", labels)
+						.increment(1);
 					// if the consumer is falling behind
 					if self.config.disconnect_lagging {
 						// and we are configured to disconnect lagging consumers,
@@ -348,6 +365,10 @@ impl<D: Datum> WorkerLoop<D> {
 				"rejected consumer connection: no capacity",
 			);
 
+			let labels = self.metrics_labels.as_slice();
+			metrics::counter!("mosaik.streams.producer.consumers.rejected", labels)
+				.increment(1);
+
 			// Close the link with `NoCapacity` reason, this producer has
 			// reached its maximum number of allowed subscribers.
 			let _ = link.close(NoCapacity).await;
@@ -372,6 +393,10 @@ impl<D: Datum> WorkerLoop<D> {
 				"rejected consumer connection: unauthorized",
 			);
 
+			let labels = self.metrics_labels.as_slice();
+			metrics::counter!("mosaik.streams.producer.consumers.rejected", labels)
+				.increment(1);
+
 			// Close the link with `NotAllowed` reason, this peer is not
 			// authorized to subscribe to this stream.
 			let _ = link.close(NotAllowed).await;
@@ -387,6 +412,10 @@ impl<D: Datum> WorkerLoop<D> {
 				consumer_id = %Short(&peer),
 				"rejected consumer connection: invalid ticket",
 			);
+
+			let labels = self.metrics_labels.as_slice();
+			metrics::counter!("mosaik.streams.producer.consumers.rejected", labels)
+				.increment(1);
 
 			let _ = link.close(NotAllowed).await;
 			return;
@@ -405,6 +434,12 @@ impl<D: Datum> WorkerLoop<D> {
 
 		// Add this consumer to the list of active subscriptions
 		let sub_id = self.active.insert(sub);
+
+		let labels = self.metrics_labels.as_slice();
+		metrics::counter!("mosaik.streams.producer.consumers.accepted", labels)
+			.increment(1);
+		metrics::gauge!("mosaik.streams.producer.consumers", labels)
+			.set(self.active.len() as f64);
 
 		// Monitor the disconnection of this consumer
 		let drop_fut = info.disconnected();
@@ -492,6 +527,10 @@ impl<D: Datum> WorkerLoop<D> {
 		});
 
 		if let Some(subscription) = self.active.remove(sub_id) {
+			let labels = self.metrics_labels.as_slice();
+			metrics::gauge!("mosaik.streams.producer.consumers", labels)
+				.set(self.active.len() as f64);
+
 			tracing::info!(
 				stream_id = %Short(self.config.stream_id),
 				consumer_id = %Short(&subscription.peer.id()),

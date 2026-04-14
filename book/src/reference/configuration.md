@@ -31,6 +31,7 @@ let network = Network::builder()
 | `discovery`      | `DiscoveryConfigBuilder` | see below              | Nested discovery config                      |
 | `streams`        | `StreamsConfigBuilder`   | see below              | Nested streams config                        |
 | `groups`         | `GroupsConfigBuilder`    | see below              | Nested groups config                         |
+| `prometheus_addr`| `Option<SocketAddr>`     | `None`                 | Prometheus HTTP exporter address (`prometheus` feature) |
 
 > **Note**: `secret_key` determines the `PeerId`. If omitted, a random key
 > is generated on each run, giving the node a new identity every time.
@@ -162,6 +163,7 @@ NetworkBuilder
 ├── relay_mode          (transport)
 ├── mdns_discovery      (transport)
 ├── addresses           (transport)
+├── prometheus_addr     (observability, `prometheus` feature)
 │
 ├── discovery::Config
 │   ├── bootstrap_peers

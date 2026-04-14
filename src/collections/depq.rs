@@ -28,7 +28,7 @@ use {
 			LeadershipPreference,
 			StateMachine,
 		},
-		primitives::{EncodeError, Encoded},
+		primitives::{EncodeError, Encoded, ShortFmtExt},
 	},
 	core::{
 		any::type_name,
@@ -39,7 +39,7 @@ use {
 	futures::{FutureExt, TryFutureExt},
 	iroh::endpoint_info::EncodingError,
 	serde::{Deserialize, Serialize},
-	std::hash::BuildHasherDefault,
+	std::{hash::BuildHasherDefault, sync::OnceLock},
 	tokio::sync::watch,
 };
 
@@ -739,6 +739,7 @@ struct DepqStateMachine<
 	local_id: PeerId,
 	state_sync: SnapshotSync<Self>,
 	is_writer: bool,
+	metrics_labels: OnceLock<[(&'static str, String); 2]>,
 }
 
 impl<P: OrderedKey, K: Key, V: Value, const CAP: u64>
@@ -763,6 +764,7 @@ impl<P: OrderedKey, K: Key, V: Value, const CAP: u64>
 			local_id,
 			state_sync,
 			is_writer,
+			metrics_labels: OnceLock::new(),
 		}
 	}
 
@@ -937,6 +939,15 @@ impl<P: OrderedKey, K: Key, V: Value, const CAP: u64> StateMachine
 
 		self.latest.send_replace(self.data.clone());
 
+		let labels = self.metrics_labels.get_or_init(|| {
+			[
+				("network", ctx.network_id().short().to_string()),
+				("group", ctx.group_id().short().to_string()),
+			]
+		});
+		metrics::gauge!("mosaik.collections.depq.size", labels.as_slice())
+			.set(self.data.by_key.len() as f64);
+
 		if !sync_requests.is_empty() {
 			let snapshot = self.create_snapshot();
 			let position = Cursor::new(
@@ -944,6 +955,8 @@ impl<P: OrderedKey, K: Key, V: Value, const CAP: u64> StateMachine
 				ctx.committed().index() + commands_len as u64,
 			);
 
+			metrics::counter!("mosaik.collections.syncs.started", labels.as_slice())
+				.increment(sync_requests.len() as u64);
 			for request in sync_requests {
 				self
 					.state_sync

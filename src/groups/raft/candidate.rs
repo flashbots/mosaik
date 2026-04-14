@@ -14,7 +14,7 @@ use {
 				shared::Shared,
 			},
 		},
-		primitives::Short,
+		primitives::{Short, ShortFmtExt},
 	},
 	core::{
 		iter::once,
@@ -97,6 +97,12 @@ impl<M: StateMachine> Candidate<M> {
 			candidate,
 			log_position,
 		};
+
+		let labels = [
+			("network", shared.network_id().short().to_string()),
+			("group", shared.group_id().short().to_string()),
+		];
+		metrics::counter!("mosaik.groups.raft.elections", &labels).increment(1);
 
 		tracing::debug!(
 			term = %term,

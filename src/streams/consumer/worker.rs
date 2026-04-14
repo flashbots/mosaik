@@ -4,7 +4,7 @@ use {
 		PeerId,
 		discovery::{Catalog, Discovery, rtt::PeerInfo},
 		network::LocalNode,
-		primitives::{Digest, Short},
+		primitives::{Digest, Short, ShortFmtExt},
 		streams::{
 			Consumer,
 			Streams,
@@ -77,6 +77,9 @@ pub(super) struct ConsumerWorker<D: Datum> {
 	/// the discovery system, which triggers a catalog update that
 	/// re-evaluates `require()` with RTT data available.
 	rtt_probes: JoinSet<()>,
+
+	/// Pre-computed metrics labels for this consumer.
+	metrics_labels: [(&'static str, String); 2],
 }
 
 impl<D: Datum> ConsumerWorker<D> {
@@ -97,6 +100,11 @@ impl<D: Datum> ConsumerWorker<D> {
 
 		online.send_replace(online_when.is_condition_met());
 
+		let metrics_labels = [
+			("stream", config.stream_id.short().to_string()),
+			("network", local.network_id().short().to_string()),
+		];
+
 		let worker = Self {
 			local,
 			data_tx,
@@ -110,15 +118,22 @@ impl<D: Datum> ConsumerWorker<D> {
 			online_when,
 			ticket_expiries: JoinSet::new(),
 			rtt_probes: JoinSet::new(),
+			metrics_labels,
 		};
 
+		let consumer_labels = worker.metrics_labels.clone();
 		tokio::spawn(worker.run());
 
+		let network_label = [
+			("network", streams.local.network_id().short().to_string()),
+			("stream", config.stream_id.short().to_string()),
+		];
 		Consumer {
 			config: Arc::clone(&config),
 			chan: data_rx,
-			stats: Stats::default_connected(),
+			stats: Stats::new_connected(network_label),
 			status: When::new(active.subscribe(), online.subscribe()),
+			metrics_labels: consumer_labels,
 			_abort: cancel.drop_guard(),
 		}
 	}
@@ -269,6 +284,11 @@ impl<D: Datum> ConsumerWorker<D> {
 				self.active.send_modify(|active| {
 					active.insert(sub_id, channel_info);
 				});
+				let labels = self.metrics_labels.as_slice();
+				metrics::gauge!("mosaik.streams.consumers.active", labels)
+					.increment(1.0);
+				metrics::gauge!("mosaik.streams.consumer.producers", labels)
+					.set(self.active.borrow().len() as f64);
 				self.receiver_cancels.insert(sub_id, receiver_cancel);
 
 				// Schedule ticket expiry timer if the ticket has an expiration
@@ -367,6 +387,10 @@ impl<D: Datum> ConsumerWorker<D> {
 				.active
 				.send_if_modified(|active| active.remove(&sub_id).is_some());
 			self.receiver_cancels.remove(&sub_id);
+			let labels = self.metrics_labels.as_slice();
+			metrics::gauge!("mosaik.streams.consumers.active", labels).decrement(1.0);
+			metrics::gauge!("mosaik.streams.consumer.producers", labels)
+				.set(self.active.borrow().len() as f64);
 
 			tracing::info!(
 				producer_id = %Short(&peer_id),

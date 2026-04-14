@@ -19,6 +19,10 @@ pub enum Error {
 
 	#[error("Groups config error: {0}")]
 	GroupsConfig(#[from] groups::ConfigBuilderError),
+
+	#[cfg(feature = "prometheus")]
+	#[error("Prometheus exporter error: {0}")]
+	Prometheus(String),
 }
 
 pub trait CloseReason:

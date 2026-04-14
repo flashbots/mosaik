@@ -156,6 +156,8 @@ impl<P: Protocol> Link<P> {
 		let sender = FramedWrite::new(tx, codec.clone());
 		let receiver = FramedRead::new(rx, codec);
 
+		metrics::counter!("mosaik.network.connections.opened").increment(1);
+
 		Ok(Self {
 			connection,
 			sender,
@@ -219,6 +221,8 @@ impl<P: Protocol> Link<P> {
 
 		let sender = FramedWrite::new(tx, codec.clone());
 		let receiver = FramedRead::new(rx, codec);
+
+		metrics::counter!("mosaik.network.connections.opened").increment(1);
 
 		Ok(Self {
 			connection,
@@ -312,7 +316,10 @@ impl<P: Protocol> Link<P> {
 			}
 		};
 
-		Ok((decoded, bytes.len()))
+		let len = bytes.len();
+		metrics::counter!("mosaik.network.ingress.bytes").increment(len as u64);
+
+		Ok((decoded, len))
 	}
 
 	/// Sends a framed message over the link.
@@ -357,7 +364,11 @@ impl<P: Protocol> Link<P> {
 		};
 
 		match send_result {
-			Ok(()) => Ok(msg_len),
+			Ok(()) => {
+				metrics::counter!("mosaik.network.egress.bytes")
+					.increment(msg_len as u64);
+				Ok(msg_len)
+			}
 			Err(err) => match err.downcast::<WriteError>() {
 				Ok(io_err) => Err(SendError::Io(io_err)),
 				Err(other_err) => Err(SendError::Unknown(other_err)),
@@ -913,7 +924,11 @@ impl<P: Protocol> LinkSender<P> {
 		};
 
 		match send_result {
-			Ok(()) => Ok(msg_len),
+			Ok(()) => {
+				metrics::counter!("mosaik.network.egress.bytes")
+					.increment(msg_len as u64);
+				Ok(msg_len)
+			}
 			Err(err) => match err.downcast::<WriteError>() {
 				Ok(io_err) => Err(SendError::Io(io_err)),
 				Err(other_err) => Err(SendError::Unknown(other_err)),
@@ -976,6 +991,9 @@ impl<P: Protocol> LinkReceiver<P> {
 			}
 		};
 
-		Ok((decoded, bytes.len()))
+		let len = bytes.len();
+		metrics::counter!("mosaik.network.ingress.bytes").increment(len as u64);
+
+		Ok((decoded, len))
 	}
 }

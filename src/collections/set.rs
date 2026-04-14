@@ -28,12 +28,12 @@ use {
 			LeadershipPreference,
 			StateMachine,
 		},
-		primitives::{EncodeError, Encoded},
+		primitives::{EncodeError, Encoded, ShortFmtExt},
 	},
 	core::{any::type_name, borrow::Borrow, hash::Hash, ops::Range},
 	futures::{FutureExt, TryFutureExt},
 	serde::{Deserialize, Serialize},
-	std::hash::BuildHasherDefault,
+	std::{hash::BuildHasherDefault, sync::OnceLock},
 	tokio::sync::watch,
 };
 
@@ -419,6 +419,7 @@ struct SetStateMachine<T: Key> {
 	local_id: PeerId,
 	state_sync: SnapshotSync<Self>,
 	is_writer: bool,
+	metrics_labels: OnceLock<[(&'static str, String); 2]>,
 }
 
 impl<T: Key> SetStateMachine<T> {
@@ -442,6 +443,7 @@ impl<T: Key> SetStateMachine<T> {
 			local_id,
 			state_sync,
 			is_writer,
+			metrics_labels: OnceLock::new(),
 		}
 	}
 
@@ -501,6 +503,15 @@ impl<T: Key> StateMachine for SetStateMachine<T> {
 
 		self.latest.send_replace(self.data.clone());
 
+		let labels = self.metrics_labels.get_or_init(|| {
+			[
+				("network", ctx.network_id().short().to_string()),
+				("group", ctx.group_id().short().to_string()),
+			]
+		});
+		metrics::gauge!("mosaik.collections.set.size", labels.as_slice())
+			.set(self.data.len() as f64);
+
 		if !sync_requests.is_empty() {
 			let snapshot = self.create_snapshot();
 			let position = Cursor::new(
@@ -508,6 +519,8 @@ impl<T: Key> StateMachine for SetStateMachine<T> {
 				ctx.committed().index() + commands_len as u64,
 			);
 
+			metrics::counter!("mosaik.collections.syncs.started", labels.as_slice())
+				.increment(sync_requests.len() as u64);
 			for request in sync_requests {
 				self
 					.state_sync

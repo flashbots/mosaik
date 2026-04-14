@@ -623,12 +623,23 @@ impl WorkerLoop {
 		}
 	}
 
+	fn network_label(&self) -> [(&'static str, String); 1] {
+		[("network", self.local.network_id().short().to_string())]
+	}
+
 	fn increment_neighbor_count(&self) {
-		self.neighbors_count.fetch_add(1, Ordering::SeqCst);
+		let count = self.neighbors_count.fetch_add(1, Ordering::SeqCst) + 1;
+		let network = self.network_label();
+		metrics::gauge!("mosaik.discovery.gossip.neighbors", &network)
+			.set(count as f64);
 	}
 
 	async fn decrement_neighbor_count(&self, topic_tx: &GossipSender) {
-		if self.neighbors_count.fetch_sub(1, Ordering::SeqCst) == 1 {
+		let prev = self.neighbors_count.fetch_sub(1, Ordering::SeqCst);
+		let network = self.network_label();
+		metrics::gauge!("mosaik.discovery.gossip.neighbors", &network)
+			.set(prev.saturating_sub(1) as f64);
+		if prev == 1 {
 			// if we are left with no neighbors, attempt connect to all known peers in
 			// the catalog to re-establish connectivity
 			let mut peers = Vec::with_capacity(self.catalog.borrow().peers_count());
@@ -644,6 +655,9 @@ impl WorkerLoop {
 
 	async fn set_neighbor_count(&self, count: usize, topic_tx: &GossipSender) {
 		self.neighbors_count.store(count, Ordering::SeqCst);
+		let network = self.network_label();
+		metrics::gauge!("mosaik.discovery.gossip.neighbors", &network)
+			.set(count as f64);
 
 		if count == 0 {
 			// if we are left with no neighbors, attempt connect to all known peers in

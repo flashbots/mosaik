@@ -4,7 +4,7 @@ use {
 		builder::ProducerConfig,
 		worker::{Handle, WorkerLoop},
 	},
-	crate::{discovery::Discovery, network::LocalNode},
+	crate::{discovery::Discovery, network::LocalNode, primitives::ShortFmtExt},
 	dashmap::{DashMap, Entry},
 	derive_more::{Deref, From, Into},
 	std::sync::Arc,
@@ -59,6 +59,9 @@ impl Sinks {
 				// and insert it into the active map, then return a handle to it.
 				let sink = WorkerLoop::<D>::spawn(self, config);
 				let handle = entry.insert(sink.into()).clone();
+				let labels = [("network", self.local.network_id().short().to_string())];
+				metrics::gauge!("mosaik.streams.producers.active", &labels)
+					.increment(1.0);
 
 				// Update our local peer entry in discovery to include this stream id
 				// in the list of advertised streams so it can be discovered by others.

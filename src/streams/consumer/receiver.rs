@@ -9,7 +9,7 @@ use {
 		Datum,
 		discovery::{Discovery, PeerEntry, rtt::best_rtt},
 		network::{LocalNode, error::*, link::*},
-		primitives::Short,
+		primitives::{Short, ShortFmtExt},
 		streams::{NotAllowed, StreamNotFound, status::ChannelInfo},
 	},
 	backoff::backoff::Backoff,
@@ -98,7 +98,10 @@ impl<D: Datum> Receiver<D> {
 		let data_tx = data_tx.clone();
 		let discovery = discovery.clone();
 		let peer = Arc::new(peer);
-		let stats = Arc::new(Stats::default());
+		let stats = Arc::new(Stats::new([
+			("network", local.network_id().short().to_string()),
+			("stream", config.stream_id.short().to_string()),
+		]));
 		let next_recv = ReusableBoxFuture::new(pending());
 		let next_connect = ReusableBoxFuture::new(pending());
 		let (state_tx, state) = watch::channel(State::Connecting);

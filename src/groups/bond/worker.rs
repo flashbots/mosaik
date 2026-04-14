@@ -12,7 +12,7 @@ use {
 			state::WorkerState,
 		},
 		network::{link::*, *},
-		primitives::{Short, UnboundedChannel},
+		primitives::{Short, ShortFmtExt, UnboundedChannel},
 		tickets::Expiration,
 	},
 	bytes::Bytes,
@@ -111,6 +111,9 @@ pub struct BondWorker<M: StateMachine> {
 	/// When it fires, the peer's ticket is re-validated and the bond is
 	/// terminated if the ticket has expired.
 	ticket_expiry: Pin<Box<Sleep>>,
+
+	/// Pre-computed metrics labels for this bond.
+	metrics_labels: [(&'static str, String); 2],
 }
 
 impl<M: StateMachine> BondWorker<M> {
@@ -132,8 +135,13 @@ impl<M: StateMachine> BondWorker<M> {
 		let (events_tx, events_rx) = unbounded_channel();
 		link.replace_cancel_token(cancel.clone());
 
-		let id = link.shared_random(BOND_ID_LABEL);
+		let id = link.shared_random("mosaik.group.bond.id");
 		let (terminated_tx, terminated_rx) = watch::channel(None);
+
+		let metrics_labels = [
+			("network", group.network_id().short().to_string()),
+			("group", group.group_id().short().to_string()),
+		];
 
 		let bond = Self {
 			id,
@@ -148,6 +156,7 @@ impl<M: StateMachine> BondWorker<M> {
 			pending_sends: UnboundedChannel::default(),
 			close_reason: Cancelled.into(),
 			ticket_expiry,
+			metrics_labels,
 		};
 
 		tokio::spawn(bond.run());
@@ -184,7 +193,7 @@ impl<M: StateMachine> BondWorker<M> {
 				}
 
 				// incoming wire message
-				result = self.link.recv::<BondMessage<M>>(), if !self.cancel.is_cancelled() => {
+				result = self.link.recv_with_size::<BondMessage<M>>(), if !self.cancel.is_cancelled() => {
 					self.on_next_recv(result);
 				}
 
@@ -249,9 +258,19 @@ impl<M: StateMachine> BondWorker<M> {
 
 	/// Called when the next message is received from the bonded remote peer.
 	/// Implicitly resets the idle heartbeat timer.
-	fn on_next_recv(&mut self, result: RecvResult<M>) {
+	fn on_next_recv(&mut self, result: RecvWithSizeResult<M>) {
 		match result {
-			Ok(message) => {
+			Ok((message, bytes_len)) => {
+				metrics::counter!(
+					"mosaik.groups.bonds.bytes.received",
+					&self.metrics_labels
+				)
+				.increment(bytes_len as u64);
+				metrics::counter!(
+					"mosaik.groups.bonds.messages.received",
+					&self.metrics_labels
+				)
+				.increment(1);
 				self.heartbeat.reset();
 
 				// Sample RTT from the connection's selected path
@@ -315,6 +334,15 @@ impl<M: StateMachine> BondWorker<M> {
 	/// Called after sending a message over the link.
 	/// Ensures that the link is still healthy and closes it on error.
 	fn on_send_complete(&mut self, result: SendResult) {
+		if let Ok(bytes_sent) = &result {
+			metrics::counter!("mosaik.groups.bonds.bytes.sent", &self.metrics_labels)
+				.increment(*bytes_sent as u64);
+			metrics::counter!(
+				"mosaik.groups.bonds.messages.sent",
+				&self.metrics_labels
+			)
+			.increment(1);
+		}
 		if let Err(e) = result {
 			tracing::debug!(
 				error = %e,
@@ -474,8 +502,6 @@ impl<M: StateMachine> BondWorker<M> {
 }
 
 type SendResult = Result<usize, SendError>;
-type RecvResult<M> = Result<BondMessage<M>, RecvError>;
-
-const BOND_ID_LABEL: &str = "group_bond_id";
+type RecvWithSizeResult<M> = Result<(BondMessage<M>, usize), RecvError>;
 
 const FAR_FUTURE: Duration = Duration::from_secs(365 * 24 * 60 * 60); // 1 year

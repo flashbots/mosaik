@@ -327,6 +327,12 @@ pub trait ApplyContext {
 
 	/// The term of the commands being applied.
 	fn current_term(&self) -> Term;
+
+	/// The unique identifier of the group this state machine belongs to.
+	fn group_id(&self) -> &crate::groups::GroupId;
+
+	/// The network identifier of the group this state machine belongs to.
+	fn network_id(&self) -> &crate::NetworkId;
 }
 
 pub trait StateMachineMessage:

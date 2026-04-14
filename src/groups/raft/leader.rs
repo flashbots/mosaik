@@ -15,7 +15,14 @@ use {
 				shared::Shared,
 			},
 		},
-		primitives::{Encoded, FmtIter, Pretty, Short, UnboundedChannel},
+		primitives::{
+			Encoded,
+			FmtIter,
+			Pretty,
+			Short,
+			ShortFmtExt,
+			UnboundedChannel,
+		},
 	},
 	core::{
 		cmp::Reverse,
@@ -297,6 +304,9 @@ impl<M: StateMachine> Leader<M> {
 
 		let prev_committed = shared.committed();
 		let quorum_index = self.committee.record_vote(follower, log_index);
+		self
+			.committee
+			.emit_metrics(shared.network_id(), shared.group_id());
 
 		if prev_committed != quorum_index {
 			let new_committed = shared.commit_up_to(quorum_index);
@@ -348,6 +358,9 @@ impl<M: StateMachine> Leader<M> {
 		// purge voters that are down and try to backfill voters from online
 		// non-voters.
 		self.committee.remove_dead_voters(shared);
+		self
+			.committee
+			.emit_metrics(shared.network_id(), shared.group_id());
 
 		// see if after purging dead voters and removing this non-voting follower,
 		// we have reached a quorum with a smaller committee and can advance the
@@ -679,5 +692,23 @@ impl Committee {
 				self.voters.insert(non_voter, log_index);
 			}
 		}
+	}
+
+	/// Emits metrics about the current committee state.
+	fn emit_metrics(
+		&self,
+		network_id: &crate::NetworkId,
+		group_id: &crate::groups::GroupId,
+	) {
+		let labels = [
+			("network", network_id.short().to_string()),
+			("group", group_id.short().to_string()),
+		];
+		metrics::gauge!("mosaik.groups.raft.committee.voters", &labels)
+			.set(self.voters.len() as f64);
+		metrics::gauge!("mosaik.groups.raft.committee.non_voters", &labels)
+			.set(self.non_voters.len() as f64);
+		metrics::gauge!("mosaik.groups.raft.committee.size", &labels)
+			.set((self.voters.len() + self.non_voters.len()) as f64);
 	}
 }

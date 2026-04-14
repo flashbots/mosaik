@@ -21,7 +21,7 @@ use {
 			raft::Message,
 			state::{WorkerCommand, WorkerRaftCommand, WorkerState},
 		},
-		primitives::EncodeError,
+		primitives::{EncodeError, ShortFmtExt},
 	},
 	core::{mem::MaybeUninit, task::Poll},
 	std::sync::Arc,
@@ -196,6 +196,14 @@ where
 
 	/// Updates the leader information in the group state.
 	pub fn update_leader(&self, leader: Option<PeerId>) {
+		if leader.is_some() {
+			let labels = [
+				("network", self.network_id().short().to_string()),
+				("group", self.group_id().short().to_string()),
+			];
+			metrics::counter!("mosaik.groups.raft.leader.changes", &labels)
+				.increment(1);
+		}
 		self.group.when.update_leader(leader);
 	}
 
@@ -216,6 +224,12 @@ where
 	/// Updates the committed index in the group public api observers. This should
 	/// be called whenever the committed index of the log advances.
 	pub fn update_committed(&mut self, committed: Cursor) {
+		let labels = [
+			("network", self.network_id().short().to_string()),
+			("group", self.group_id().short().to_string()),
+		];
+		metrics::gauge!("mosaik.groups.raft.committed", &labels)
+			.set(u64::from(committed.index()) as f64);
 		self.group.when.update_committed(committed.index());
 
 		// SAFETY: The `sync_provider` field is initialized in the constructor of
@@ -297,6 +311,8 @@ where
 				prev_committed: self.committed,
 				log_position,
 				term: batch_term,
+				group_id: *self.group_id(),
+				network_id: *self.network_id(),
 			};
 
 			self
@@ -473,6 +489,8 @@ struct LocalApplyContext {
 	prev_committed: Cursor,
 	log_position: Cursor,
 	term: Term,
+	group_id: GroupId,
+	network_id: crate::NetworkId,
 }
 
 impl ApplyContext for LocalApplyContext {
@@ -486,5 +504,13 @@ impl ApplyContext for LocalApplyContext {
 
 	fn current_term(&self) -> Term {
 		self.term
+	}
+
+	fn group_id(&self) -> &GroupId {
+		&self.group_id
+	}
+
+	fn network_id(&self) -> &crate::NetworkId {
+		&self.network_id
 	}
 }

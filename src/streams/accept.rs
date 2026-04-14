@@ -8,7 +8,7 @@ use {
 			error::DifferentNetwork,
 			link::{Link, Protocol},
 		},
-		primitives::Short,
+		primitives::{Short, ShortFmtExt},
 		streams::StreamNotFound,
 	},
 	core::fmt,
@@ -73,11 +73,16 @@ impl ProtocolHandler for Acceptor {
 		let mut link = Link::accept_with_cancel(connection, cancel).await?;
 		let remote_peer_id = link.remote_id();
 		let catalog = self.discovery.catalog();
+		let network_label =
+			[("network", self.sinks.local.network_id().short().to_string())];
 		let Some(peer) = catalog.get(&remote_peer_id) else {
 			tracing::trace!(
 				peer_id = %Short(&remote_peer_id),
 				"rejecting unidentified consumer",
 			);
+
+			metrics::counter!("mosaik.streams.connections.rejected", &network_label)
+				.increment(1);
 
 			// Close the link with a reason before returning error
 			link
@@ -119,6 +124,9 @@ impl ProtocolHandler for Acceptor {
 				"Consumer connected to wrong network",
 			);
 
+			metrics::counter!("mosaik.streams.connections.rejected", &network_label)
+				.increment(1);
+
 			// Close the link with a reason before returning error
 			link
 				.close(DifferentNetwork)
@@ -138,6 +146,9 @@ impl ProtocolHandler for Acceptor {
 				"Consumer requesting unavailable stream",
 			);
 
+			metrics::counter!("mosaik.streams.connections.rejected", &network_label)
+				.increment(1);
+
 			// Close the link with a reason before returning error
 			link
 				.close(StreamNotFound)
@@ -151,6 +162,8 @@ impl ProtocolHandler for Acceptor {
 
 		// pass the connection to the stream-specific [`SinkHandle`]
 		// to handle the initiation of the data stream with this remote consumer.
+		metrics::counter!("mosaik.streams.connections.accepted", &network_label)
+			.increment(1);
 		if let Err(link) = sink.accept(link, handshake.criteria, peer.clone()) {
 			// the sink was terminated or unable to accept new consumers
 			tracing::debug!(

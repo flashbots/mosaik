@@ -5,6 +5,7 @@ use {
 		discovery::{self, Discovery},
 		groups::{self, Groups},
 		network::{LocalNode, ProtocolProvider},
+		primitives::ShortFmtExt,
 		streams::{self, Streams},
 	},
 	core::net::SocketAddr,
@@ -71,6 +72,15 @@ pub struct NetworkConfig {
 	/// See [`groups::Config`] for details.
 	#[builder(default = "groups::Config::builder()")]
 	pub groups: groups::ConfigBuilder,
+
+	/// When set, starts a Prometheus metrics exporter HTTP server at the
+	/// given socket address. The server responds to any GET request with
+	/// the current metrics in Prometheus text exposition format.
+	///
+	/// Requires the `prometheus` feature.
+	#[cfg(feature = "prometheus")]
+	#[builder(setter(into), default)]
+	pub prometheus_addr: Option<SocketAddr>,
 }
 
 /// Public API
@@ -78,6 +88,15 @@ impl NetworkBuilder {
 	/// Builds and returns a new `Network` instance.
 	pub async fn build(self) -> Result<Network, Error> {
 		let compiled = self.compile().map_err(|_| Error::MissingNetworkId)?;
+
+		#[cfg(feature = "prometheus")]
+		if let Some(addr) = compiled.prometheus_addr {
+			metrics_exporter_prometheus::PrometheusBuilder::new()
+				.with_http_listener(addr)
+				.add_global_label("network", compiled.network_id.short().to_string())
+				.install()
+				.map_err(|e| Error::Prometheus(e.to_string()))?;
+		}
 
 		let endpoint = compiled.bind_endpoint().await?;
 		let local = LocalNode::new(compiled.network_id, endpoint);
@@ -130,8 +149,9 @@ impl NetworkConfig {
 			.address_lookup(MemoryLookup::new());
 
 		if self.mdns_discovery {
-			endpoint_builder =
-				endpoint_builder.address_lookup(MdnsAddressLookupBuilder::default());
+			endpoint_builder = endpoint_builder.address_lookup(
+				MdnsAddressLookupBuilder::default().service_name("mosaik"),
+			);
 		}
 
 		for addr in &self.addresses {

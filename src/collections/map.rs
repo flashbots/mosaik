@@ -31,12 +31,12 @@ use {
 			LogReplaySync,
 			StateMachine,
 		},
-		primitives::{EncodeError, Encoded},
+		primitives::{EncodeError, Encoded, ShortFmtExt},
 	},
 	core::{any::type_name, borrow::Borrow, hash::Hash},
 	futures::{FutureExt, TryFutureExt},
 	serde::{Deserialize, Serialize},
-	std::hash::BuildHasherDefault,
+	std::{hash::BuildHasherDefault, sync::OnceLock},
 	tokio::sync::watch,
 };
 
@@ -508,6 +508,7 @@ struct MapStateMachine<K: Key, V: Value> {
 	local_id: PeerId,
 	state_sync: SnapshotSync<Self>,
 	is_writer: bool,
+	metrics_labels: OnceLock<[(&'static str, String); 2]>,
 }
 
 impl<K: Key, V: Value> MapStateMachine<K, V> {
@@ -531,6 +532,7 @@ impl<K: Key, V: Value> MapStateMachine<K, V> {
 			local_id,
 			state_sync,
 			is_writer,
+			metrics_labels: OnceLock::new(),
 		}
 	}
 
@@ -609,6 +611,15 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 
 		self.latest.send_replace(self.data.clone());
 
+		let labels = self.metrics_labels.get_or_init(|| {
+			[
+				("network", ctx.network_id().short().to_string()),
+				("group", ctx.group_id().short().to_string()),
+			]
+		});
+		metrics::gauge!("mosaik.collections.map.size", labels.as_slice())
+			.set(self.data.len() as f64);
+
 		if !sync_requests.is_empty() {
 			let snapshot = self.create_snapshot();
 			let position = Cursor::new(
@@ -616,6 +627,8 @@ impl<K: Key, V: Value> StateMachine for MapStateMachine<K, V> {
 				ctx.committed().index() + commands_len as u64,
 			);
 
+			metrics::counter!("mosaik.collections.syncs.started", labels.as_slice())
+				.increment(sync_requests.len() as u64);
 			for request in sync_requests {
 				self
 					.state_sync

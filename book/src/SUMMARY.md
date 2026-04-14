@@ -60,6 +60,7 @@
 # Reference
 
 - [Configuration](./reference/configuration.md)
+- [Metrics & Observability](./reference/metrics.md)
 - [Error Handling](./reference/errors.md)
 - [Primitives & Types](./reference/primitives.md)
 - [Testing Patterns](./reference/testing.md)

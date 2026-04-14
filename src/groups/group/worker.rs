@@ -76,6 +76,9 @@ where
 	/// have the latest information about the local peer entry, at lower latency
 	/// than the standard discovery propagation mechanism.
 	last_local: PeerEntryVersion,
+
+	/// Pre-computed metrics labels for this group.
+	metrics_labels: [(&'static str, String); 2],
 }
 
 impl<S, M> Worker<S, M>
@@ -117,6 +120,10 @@ where
 			work_queue: AsyncWorkQueue::default(),
 			raft: Raft::new(Arc::clone(&worker_state), storage, state_machine),
 			last_local: groups.discovery.me().update_version(),
+			metrics_labels: [
+				("network", worker_state.network_id().short().to_string()),
+				("group", worker_state.group_id().short().to_string()),
+			],
 		};
 
 		tokio::spawn(worker_instance.run());
@@ -251,6 +258,9 @@ where
 					if let Some(bond) = active.remove(&peer_id)
 						&& reason != AlreadyBonded
 					{
+						metrics::gauge!("mosaik.groups.bonds.active", &self.metrics_labels)
+							.set(active.len() as f64);
+
 						tracing::debug!(
 							id = %bond.id().short(),
 							group = %self.state.group_id().short(),
@@ -380,6 +390,7 @@ where
 		// initiate a new bond connection with this peer.
 		let peer_id = *peer.id();
 		let state = Arc::clone(&self.state);
+		let labels = self.metrics_labels.clone();
 		let fut = async move {
 			match Bond::create(Arc::clone(&state), peer).await {
 				Ok((handle, events)) => {
@@ -394,6 +405,8 @@ where
 								{
 									// keep track of the bond handle to control it
 									place.insert(handle);
+									metrics::gauge!("mosaik.groups.bonds.active", &labels)
+										.set(active.len() as f64);
 								}
 							}
 							Entry::Occupied(_) => {
@@ -442,6 +455,7 @@ where
 		}
 
 		let state = Arc::clone(&self.state);
+		let labels = self.metrics_labels.clone();
 		let fut = async move {
 			match Bond::accept(Arc::clone(&state), link, peer, handshake).await {
 				Ok((handle, events)) => {
@@ -456,6 +470,8 @@ where
 								{
 									// keep track of the bond handle to control it
 									place.insert(handle);
+									metrics::gauge!("mosaik.groups.bonds.active", &labels)
+										.set(active.len() as f64);
 									let _ = result_tx.send(Ok(()));
 								} else {
 									let _ = result_tx.send(Err(AcceptError::from_err(Cancelled)));

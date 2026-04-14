@@ -13,7 +13,7 @@ use {
 			error::{CommandError, QueryError},
 			state::{GroupHandle, WorkerCommand, WorkerRaftCommand},
 		},
-		primitives::Short,
+		primitives::{Short, ShortFmtExt},
 	},
 	core::{fmt, fmt::Debug, marker::PhantomData},
 	dashmap::DashMap,
@@ -318,6 +318,8 @@ impl<M: StateMachine> Group<M> {
 
 impl<M: StateMachine> Drop for Group<M> {
 	fn drop(&mut self) {
+		let labels = [("network", self.state.network_id().short().to_string())];
+		metrics::gauge!("mosaik.groups.active", &labels).decrement(1.0);
 		self.state.bonds.notify_departure();
 		self.state.cancel.cancel();
 		self.groups.remove(self.id());
