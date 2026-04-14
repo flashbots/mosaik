@@ -11,14 +11,13 @@
 //!
 //! A `StateSync` implementation is a factory for two companion types:
 //!
-//! - **[`StateSyncProvider`]** — a long-lived object created once per
-//!   peer. It runs on *every* node in the group (including the leader)
-//!   and serves state to sessions on lagging followers.
-//! - **[`StateSyncSession`]** — a short-lived object created on a
-//!   lagging follower for the duration of a single catch-up episode.
-//!   It drives the sync protocol (requesting data from providers,
-//!   applying it to the state machine) and terminates once the
-//!   follower's log is fully caught up.
+//! - **[`StateSyncProvider`]** — a long-lived object created once per peer. It
+//!   runs on *every* node in the group (including the leader) and serves state
+//!   to sessions on lagging followers.
+//! - **[`StateSyncSession`]** — a short-lived object created on a lagging
+//!   follower for the duration of a single catch-up episode. It drives the sync
+//!   protocol (requesting data from providers, applying it to the state
+//!   machine) and terminates once the follower's log is fully caught up.
 //!
 //! Both types communicate via [`StateSync::Message`]s sent through the
 //! group's bond network.
@@ -38,11 +37,11 @@
 //! expensive, you can implement snapshot-based sync. The general
 //! approach is:
 //!
-//! 1. The **provider** periodically snapshots the state machine and
-//!    remembers the log position of the snapshot.
+//! 1. The **provider** periodically snapshots the state machine and remembers
+//!    the log position of the snapshot.
 //! 2. When a **session** starts, it requests the latest snapshot from a
-//!    provider, loads it into the local state machine, and then replays
-//!    only the commands that arrived after the snapshot.
+//!    provider, loads it into the local state machine, and then replays only
+//!    the commands that arrived after the snapshot.
 //!
 //! The mosaik [`collections`](crate::collections) subsystem uses this
 //! strategy internally.
@@ -149,14 +148,12 @@ pub trait StateSync: Send + 'static {
 	///
 	/// # Parameters
 	///
-	/// - `position` — the leader's log position **preceding** the
-	///   arriving entries. This is the point the follower needs to
-	///   catch up to.
-	/// - `leader_commit` — the leader's latest committed index at the
-	///   time the session is created.
-	/// - `entries` — the batch of log entries that triggered the
-	///   catch-up. The session should buffer these and apply them
-	///   once the gap is closed.
+	/// - `position` — the leader's log position **preceding** the arriving
+	///   entries. This is the point the follower needs to catch up to.
+	/// - `leader_commit` — the leader's latest committed index at the time the
+	///   session is created.
+	/// - `entries` — the batch of log entries that triggered the catch-up. The
+	///   session should buffer these and apply them once the gap is closed.
 	fn create_session(
 		&self,
 		cx: &mut dyn SyncSessionContext<Self>,
@@ -174,16 +171,14 @@ pub trait StateSync: Send + 'static {
 /// for the entire group lifetime. Its responsibilities are:
 ///
 /// - **Responding to sync requests** — when a lagging follower's
-///   [`StateSyncSession`] sends a message, the provider handles it
-///   via [`receive`](Self::receive).
-/// - **Background work** — the optional [`poll`](Self::poll) method
-///   is called on each tick of the group scheduler, letting the
-///   provider drive timeouts, create snapshots, or perform other
-///   periodic work.
+///   [`StateSyncSession`] sends a message, the provider handles it via
+///   [`receive`](Self::receive).
+/// - **Background work** — the optional [`poll`](Self::poll) method is called
+///   on each tick of the group scheduler, letting the provider drive timeouts,
+///   create snapshots, or perform other periodic work.
 /// - **Log compaction hints** — via
-///   [`safe_to_prune_prefix`](Self::safe_to_prune_prefix), the
-///   provider can tell the runtime which log entries are safe to
-///   discard.
+///   [`safe_to_prune_prefix`](Self::safe_to_prune_prefix), the provider can
+///   tell the runtime which log entries are safe to discard.
 pub trait StateSyncProvider: Send + 'static {
 	/// The parent [`StateSync`] implementation that created this
 	/// provider.
@@ -195,10 +190,10 @@ pub trait StateSyncProvider: Send + 'static {
 	/// periodic snapshots, or perform any background work that is
 	/// independent of incoming messages.
 	///
-	/// - Return `Poll::Ready(())` to signal that work was completed
-	///   and the provider should be polled again immediately.
-	/// - Return `Poll::Pending` when idle. Call `cx.waker().wake()`
-	///   to request a future poll.
+	/// - Return `Poll::Ready(())` to signal that work was completed and the
+	///   provider should be polled again immediately.
+	/// - Return `Poll::Pending` when idle. Call `cx.waker().wake()` to request a
+	///   future poll.
 	///
 	/// The default implementation returns `Poll::Pending` (no-op).
 	fn poll(
@@ -258,14 +253,14 @@ pub trait StateSyncProvider: Send + 'static {
 /// gap in its log, and dropped once the gap is closed. The session
 /// drives the sync protocol by:
 ///
-/// 1. Requesting missing state from [`StateSyncProvider`]s on other
-///    peers via messages.
-/// 2. Receiving responses and applying them to the local state machine
-///    (through the [`SyncSessionContext`]).
-/// 3. Buffering any new entries that arrive from the leader while the
-///    gap is being filled (via [`buffer`](Self::buffer)).
-/// 4. Returning `Poll::Ready(position)` from [`poll`](Self::poll)
-///    once the follower is fully caught up to the returned position.
+/// 1. Requesting missing state from [`StateSyncProvider`]s on other peers via
+///    messages.
+/// 2. Receiving responses and applying them to the local state machine (through
+///    the [`SyncSessionContext`]).
+/// 3. Buffering any new entries that arrive from the leader while the gap is
+///    being filled (via [`buffer`](Self::buffer)).
+/// 4. Returning `Poll::Ready(position)` from [`poll`](Self::poll) once the
+///    follower is fully caught up to the returned position.
 pub trait StateSyncSession: Send + 'static {
 	/// The parent [`StateSync`] implementation that created this
 	/// session.

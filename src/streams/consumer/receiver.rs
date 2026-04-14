@@ -7,7 +7,7 @@ use {
 	},
 	crate::{
 		Datum,
-		discovery::{Discovery, PeerEntry},
+		discovery::{Discovery, PeerEntry, rtt::best_rtt},
 		network::{LocalNode, error::*, link::*},
 		primitives::Short,
 		streams::{NotAllowed, StreamNotFound, status::ChannelInfo},
@@ -184,6 +184,14 @@ impl<D: Datum> Receiver<D> {
 				// update stats
 				self.stats.increment_datums();
 				self.stats.increment_bytes(bytes_len);
+
+				// Sample RTT from the selected path
+				if let Some(rtt) = best_rtt(link.connection()) {
+					self
+						.discovery
+						.rtt_tracker()
+						.record_sample(link.remote_id(), rtt);
+				}
 
 				// if not cancelled, prepare to receive the next datum
 				if !self.cancel.is_cancelled() {

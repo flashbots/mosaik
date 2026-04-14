@@ -9,7 +9,11 @@ use {
 	},
 	crate::{
 		PeerId,
-		discovery::PeerEntry,
+		discovery::{
+			Catalog,
+			PeerEntry,
+			rtt::{PeerInfo, RttTracker},
+		},
 		network::{GracefulShutdown, link::Link},
 		primitives::{Bytes, Digest, Short, ShortFmtExt},
 		streams::{
@@ -98,6 +102,9 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// Configuration for this producer sink.
 	config: Arc<ProducerConfig>,
 
+	/// RTT tracker for recording connection latency samples.
+	rtt: Arc<RttTracker>,
+
 	/// Cancellation token triggered when the worker loop should shut down.
 	/// This token is derived from the local node's termination token and will
 	/// shut down when the node network is terminating.
@@ -129,6 +136,12 @@ pub(super) struct WorkerLoop<D: Datum> {
 	/// Futures that resolve when a consumer's ticket expires.
 	ticket_expiries: JoinSet<SubscriptionId>,
 
+	/// Watch receiver for discovery catalog changes. When the catalog
+	/// updates (e.g. periodic peer announcements), `require()`
+	/// predicates are re-evaluated against active consumers so that
+	/// RTT-based requirements are enforced after paths settle.
+	catalog: watch::Receiver<Catalog>,
+
 	/// Sets the online status of the producer when the worker loop is ready and
 	/// publishing conditions are met.
 	online: watch::Sender<bool>,
@@ -153,10 +166,14 @@ impl<D: Datum> WorkerLoop<D> {
 
 		online.send_replace(online_when.is_condition_met());
 
+		let rtt = Arc::clone(sinks.discovery.rtt_tracker());
+		let catalog = sinks.discovery.catalog_watch();
+
 		let worker = Self {
 			cancel,
 			data_rx,
 			local_id: sinks.local.id(),
+			rtt,
 			config: Arc::clone(&config),
 			active: DenseSlotMap::with_key(),
 			accepted: accepted_rx,
@@ -165,6 +182,7 @@ impl<D: Datum> WorkerLoop<D> {
 			online_when,
 			dropped: JoinSet::new(),
 			ticket_expiries: JoinSet::new(),
+			catalog,
 		};
 
 		tokio::spawn(worker.run());
@@ -223,6 +241,14 @@ impl<D: Datum> WorkerLoop<D> {
 				// Triggered when a consumer's ticket expires.
 				Some(Ok(sub_id)) = self.ticket_expiries.join_next() => {
 					self.on_ticket_expired(sub_id);
+				}
+
+				// Re-evaluate require() predicates against active
+				// consumers when the discovery catalog changes (e.g.
+				// periodic peer announcements). This ensures RTT-based
+				// requirements are enforced after paths settle.
+				_ = self.catalog.changed() => {
+					self.on_require_reeval();
 				}
 			}
 		}
@@ -328,8 +354,18 @@ impl<D: Datum> WorkerLoop<D> {
 			return;
 		}
 
+		// Sample RTT from the QUIC connection before evaluating require().
+		// The connection is already established at this point, so the QUIC
+		// stack has an RTT estimate from the handshake. Recording it now
+		// ensures the require() predicate has RTT data available without
+		// needing a separate ping probe.
+		if let Some(rtt) = crate::discovery::rtt::best_rtt(link.connection()) {
+			self.rtt.record_sample(*peer.id(), rtt);
+		}
+
 		// Check if we should accept this consumer based on the require predicate
-		if !(self.config.require)(&peer) {
+		let peer_info = PeerInfo::from_tracker(&peer, &self.rtt);
+		if !(self.config.require)(&peer_info) {
 			tracing::warn!(
 				stream_id = %Short(self.config.stream_id),
 				consumer_id = %Short(&peer),
@@ -364,6 +400,7 @@ impl<D: Datum> WorkerLoop<D> {
 			self.local_id,
 			criteria,
 			peer,
+			&self.rtt,
 		);
 
 		// Add this consumer to the list of active subscriptions
@@ -408,6 +445,25 @@ impl<D: Datum> WorkerLoop<D> {
 			});
 
 			let _ = subscription.drop_requested.set(GracefulShutdown.into());
+		}
+	}
+
+	/// Periodically re-evaluates `require()` predicates against active
+	/// consumers with fresh `PeerInfo` (including current RTT). Consumers
+	/// that no longer satisfy the predicate are disconnected, following
+	/// the same pattern as ticket expiry.
+	fn on_require_reeval(&self) {
+		for (_, subscription) in &self.active {
+			let info = PeerInfo::from_tracker(&subscription.peer, &self.rtt);
+			if !(self.config.require)(&info) {
+				tracing::debug!(
+					stream_id = %Short(self.config.stream_id),
+					consumer_id = %Short(&subscription.peer.id()),
+					"consumer no longer satisfies require predicate; \
+					 disconnecting",
+				);
+				let _ = subscription.drop_requested.set(NotAllowed.into());
+			}
 		}
 	}
 

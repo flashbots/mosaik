@@ -2,7 +2,7 @@ use {
 	crate::{
 		Criteria,
 		StreamId,
-		discovery::PeerEntry,
+		discovery::PeerInfo,
 		primitives::BackoffFactory,
 		streams::{
 			Consumer,
@@ -28,7 +28,7 @@ pub struct ConsumerConfig {
 
 	/// Holds the predicate that decides if a producer is eligible and should be
 	/// contacted for establishing a subscription.
-	pub require: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
+	pub require: Box<dyn Fn(&PeerInfo) -> bool + Send + Sync>,
 
 	/// The backoff policy for retrying stream subscription connections on
 	/// recoverable failures.
@@ -86,19 +86,23 @@ impl<D: Datum> Builder<'_, D> {
 	/// Adds a peer eligibility requirement for producers this consumer will
 	/// subscribe to.
 	///
-	/// The predicate receives the [`PeerEntry`] of each discovered producer and
-	/// must return `true` for a subscription to be attempted. When called
-	/// multiple times, all predicates must pass — AND composition — so a
-	/// producer is eligible only if every requirement is satisfied. Predicates
-	/// are also re-evaluated dynamically when a peer's catalog entry changes
-	/// (e.g. tags are added or removed), causing the consumer to connect or
-	/// disconnect accordingly.
+	/// The predicate receives a [`PeerInfo`] combining the producer's
+	/// self-reported [`PeerEntry`](crate::discovery::PeerEntry) with
+	/// locally-observed metrics like RTT. Since `PeerInfo` implements
+	/// `Deref<Target = PeerEntry>`, existing predicates that call methods
+	/// like `peer.tags()` continue to work unchanged.
+	///
+	/// When called multiple times, all predicates must pass — AND
+	/// composition — so a producer is eligible only if every requirement
+	/// is satisfied. Predicates are also re-evaluated dynamically when a
+	/// peer's catalog entry changes (e.g. tags are added or removed),
+	/// causing the consumer to connect or disconnect accordingly.
 	///
 	/// The default requirement considers all producers eligible.
 	#[must_use]
 	pub fn require<F>(mut self, pred: F) -> Self
 	where
-		F: Fn(&PeerEntry) -> bool + Send + Sync + 'static,
+		F: Fn(&PeerInfo) -> bool + Send + Sync + 'static,
 	{
 		let prev = self.config.require;
 		self.config.require = Box::new(move |peer| prev(peer) && pred(peer));

@@ -288,12 +288,17 @@ impl WorkerLoop {
 			}
 
 			// Slot contains a different peer — ping it.
-			if let Ok(peer_entry) = self
+			if let Ok((peer_entry, rtt)) = self
 				.handle
 				.local
 				.ping(addr.clone(), Some(PEER_PING_TIMEOUT))
 				.await
 			{
+				// Record the RTT sample from the ping connection.
+				if let Some(rtt) = rtt {
+					self.handle.rtt.record_sample(addr.id, rtt);
+				}
+
 				// Healthy peer — emit it to the discovery system.
 				if self.updates_tx.send(peer_entry.address().clone()).is_err() {
 					tracing::warn!(

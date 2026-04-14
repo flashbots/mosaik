@@ -253,6 +253,17 @@ impl<M: StateMachine> BondWorker<M> {
 		match result {
 			Ok(message) => {
 				self.heartbeat.reset();
+
+				// Sample RTT from the connection's selected path
+				if let Some(rtt) =
+					crate::discovery::rtt::best_rtt(self.link.connection())
+				{
+					self
+						.group
+						.discovery
+						.rtt_tracker()
+						.record_sample(self.link.remote_id(), rtt);
+				}
 				match message {
 					BondMessage::Pong => {}
 					BondMessage::Ping => self.on_heartbeat_ping(),

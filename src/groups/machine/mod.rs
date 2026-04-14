@@ -39,26 +39,22 @@ pub use sync::*;
 ///
 /// # Lifecycle
 ///
-/// 1. **Create** — you instantiate your state machine and pass it to the
-///    group builder via
+/// 1. **Create** — you instantiate your state machine and pass it to the group
+///    builder via
 ///    [`with_state_machine`](super::GroupBuilder::with_state_machine).
-/// 2. **Join** — calling
-///    [`join()`](super::GroupBuilder::join) on the builder starts the
-///    Raft protocol and returns a [`Group<M>`](super::Group) handle.
+/// 2. **Join** — calling [`join()`](super::GroupBuilder::join) on the builder
+///    starts the Raft protocol and returns a [`Group<M>`](super::Group) handle.
 /// 3. **Commands** — clients submit commands through
-///    [`Group::execute`](super::Group::execute). The leader replicates
-///    each command to a quorum of followers; once committed, every node
-///    calls [`apply`](StateMachine::apply) with that command.
-/// 4. **Queries** — clients call
-///    [`Group::query`](super::Group::query) with either `Weak`
-///    (local, possibly stale) or `Strong` (forwarded to leader)
-///    consistency. The group calls
-///    [`query`](StateMachine::query) on the local state machine and
-///    returns the result.
-/// 5. **Catch-up** — when a follower falls behind, the
-///    [`StateSync`] implementation returned by
-///    [`state_sync`](StateMachine::state_sync) fills the gap
-///    (replaying missed log entries or transferring a snapshot).
+///    [`Group::execute`](super::Group::execute). The leader replicates each
+///    command to a quorum of followers; once committed, every node calls
+///    [`apply`](StateMachine::apply) with that command.
+/// 4. **Queries** — clients call [`Group::query`](super::Group::query) with
+///    either `Weak` (local, possibly stale) or `Strong` (forwarded to leader)
+///    consistency. The group calls [`query`](StateMachine::query) on the local
+///    state machine and returns the result.
+/// 5. **Catch-up** — when a follower falls behind, the [`StateSync`]
+///    implementation returned by [`state_sync`](StateMachine::state_sync) fills
+///    the gap (replaying missed log entries or transferring a snapshot).
 ///
 /// # Determinism
 ///
@@ -73,18 +69,24 @@ pub use sync::*;
 /// A simple counter replicated across a group:
 ///
 /// ```rust
-/// use mosaik::groups::{
-///     ApplyContext, LeadershipPreference, LogReplaySync,
-///     StateMachine,
+/// use {
+/// 	mosaik::{
+/// 		UniqueId,
+/// 		groups::{
+/// 			ApplyContext,
+/// 			LeadershipPreference,
+/// 			LogReplaySync,
+/// 			StateMachine,
+/// 		},
+/// 	},
+/// 	serde::{Deserialize, Serialize},
 /// };
-/// use mosaik::UniqueId;
-/// use serde::{Deserialize, Serialize};
 ///
 /// /// Commands that mutate the counter.
 /// #[derive(Clone, Serialize, Deserialize)]
 /// enum CounterCmd {
-///     Increment(u32),
-///     Decrement(u32),
+/// 	Increment(u32),
+/// 	Decrement(u32),
 /// }
 ///
 /// /// Queries that read the counter.
@@ -92,41 +94,37 @@ pub use sync::*;
 /// struct GetValue;
 ///
 /// struct Counter {
-///     value: i64,
+/// 	value: i64,
 /// }
 ///
 /// impl StateMachine for Counter {
-///     type Command = CounterCmd;
-///     type Query = GetValue;
-///     type QueryResult = i64;
-///     type StateSync = LogReplaySync<Self>;
+/// 	type Command = CounterCmd;
+/// 	type Query = GetValue;
+/// 	type QueryResult = i64;
+/// 	type StateSync = LogReplaySync<Self>;
 ///
-///     fn signature(&self) -> UniqueId {
-///         UniqueId::from("my_counter_v1")
-///     }
+/// 	fn signature(&self) -> UniqueId {
+/// 		UniqueId::from("my_counter_v1")
+/// 	}
 ///
-///     fn apply(
-///         &mut self,
-///         cmd: CounterCmd,
-///         _ctx: &dyn ApplyContext,
-///     ) {
-///         match cmd {
-///             CounterCmd::Increment(n) => {
-///                 self.value += i64::from(n);
-///             }
-///             CounterCmd::Decrement(n) => {
-///                 self.value -= i64::from(n);
-///             }
-///         }
-///     }
+/// 	fn apply(&mut self, cmd: CounterCmd, _ctx: &dyn ApplyContext) {
+/// 		match cmd {
+/// 			CounterCmd::Increment(n) => {
+/// 				self.value += i64::from(n);
+/// 			}
+/// 			CounterCmd::Decrement(n) => {
+/// 				self.value -= i64::from(n);
+/// 			}
+/// 		}
+/// 	}
 ///
-///     fn query(&self, _: GetValue) -> i64 {
-///         self.value
-///     }
+/// 	fn query(&self, _: GetValue) -> i64 {
+/// 		self.value
+/// 	}
 ///
-///     fn state_sync(&self) -> LogReplaySync<Self> {
-///         LogReplaySync::default()
-///     }
+/// 	fn state_sync(&self) -> LogReplaySync<Self> {
+/// 		LogReplaySync::default()
+/// 	}
 /// }
 /// ```
 ///
@@ -168,10 +166,10 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 	/// directly against the local state machine on whichever node
 	/// handles the request:
 	///
-	/// - **Weak consistency** — the query runs on the local node
-	///   immediately, which may return stale data.
-	/// - **Strong consistency** — the query is forwarded to the current
-	///   leader, guaranteeing a consistent read.
+	/// - **Weak consistency** — the query runs on the local node immediately,
+	///   which may return stale data.
+	/// - **Strong consistency** — the query is forwarded to the current leader,
+	///   guaranteeing a consistent read.
 	type Query: Query;
 
 	/// The result type returned by [`query`](Self::query).
@@ -199,12 +197,11 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 	///
 	/// # What to include
 	///
-	/// - The state machine's **type name or version tag** (so
-	///   incompatible implementations never collide).
-	/// - Any **configuration parameters** that affect command semantics
-	///   (e.g. capacity limits, feature flags). If two nodes interpret
-	///   the same command differently because of a config difference,
-	///   the signature must differ.
+	/// - The state machine's **type name or version tag** (so incompatible
+	///   implementations never collide).
+	/// - Any **configuration parameters** that affect command semantics (e.g.
+	///   capacity limits, feature flags). If two nodes interpret the same command
+	///   differently because of a config difference, the signature must differ.
 	///
 	/// # Example
 	///
@@ -284,14 +281,13 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 	/// id — different nodes in the same group can have different
 	/// preferences. The Raft election logic enforces the preference:
 	///
-	/// - [`LeadershipPreference::Normal`] — standard candidate
-	///   behavior (the default).
-	/// - [`LeadershipPreference::Reluctant`] — longer election
-	///   timeouts, reducing the chance of becoming leader but not
-	///   preventing it entirely.
-	/// - [`LeadershipPreference::Observer`] — never self-nominates,
-	///   abstains from all votes, and does not count toward quorum.
-	///   The node still replicates the log and applies commands.
+	/// - [`LeadershipPreference::Normal`] — standard candidate behavior (the
+	///   default).
+	/// - [`LeadershipPreference::Reluctant`] — longer election timeouts, reducing
+	///   the chance of becoming leader but not preventing it entirely.
+	/// - [`LeadershipPreference::Observer`] — never self-nominates, abstains from
+	///   all votes, and does not count toward quorum. The node still replicates
+	///   the log and applies commands.
 	///
 	/// # Example
 	///

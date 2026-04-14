@@ -10,7 +10,10 @@ use {
 	},
 	crate::{
 		PeerId,
-		discovery::PeerEntry,
+		discovery::{
+			PeerEntry,
+			rtt::{RttTracker, best_rtt},
+		},
 		network::{
 			Cancelled,
 			GracefulShutdown,
@@ -85,6 +88,9 @@ pub(super) struct Sender {
 
 	/// Channel for receiving drop signals for this subscription.
 	drop: Arc<SetOnce<ApplicationClose>>,
+
+	/// RTT tracker for recording connection latency samples.
+	rtt: Arc<RttTracker>,
 }
 
 impl Sender {
@@ -101,6 +107,7 @@ impl Sender {
 		local_id: PeerId,
 		criteria: Criteria,
 		peer: PeerEntry,
+		rtt: &Arc<crate::discovery::rtt::RttTracker>,
 	) -> (Subscription, ChannelInfo) {
 		assert_eq!(peer.id(), &link.remote_id());
 
@@ -142,6 +149,7 @@ impl Sender {
 			config: Arc::clone(config),
 			stats: Arc::clone(&stats),
 			state: state_tx,
+			rtt: Arc::clone(rtt),
 		};
 
 		tokio::spawn(worker.run());
@@ -196,6 +204,11 @@ impl Sender {
 			Ok(bytes_len) => {
 				self.stats.increment_datums();
 				self.stats.increment_bytes(bytes_len);
+
+				// Sample RTT from the selected path
+				if let Some(rtt) = best_rtt(self.link.connection()) {
+					self.rtt.record_sample(*self.peer.id(), rtt);
+				}
 			}
 			Err(error) if !error.is_cancelled() => {
 				tracing::debug!(

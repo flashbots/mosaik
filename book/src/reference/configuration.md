@@ -52,6 +52,8 @@ Controls peer discovery, gossip, and catalog maintenance.
 | `max_time_drift`            | `Duration`          | `10s`          | Maximum acceptable timestamp drift        |
 | `announce_interval`         | `Duration`          | `15s`          | Interval between presence announcements   |
 | `announce_jitter`           | `f32`               | `0.5`          | Max jitter factor on announce interval    |
+| `rtt_probe_interval`        | `Duration`          | `30s`          | Interval for RTT ping probes to peers     |
+| `max_rtt`                   | `Option<Duration>`  | `None`         | Maximum acceptable peer RTT               |
 | `graceful_departure_window` | `Duration`          | `500ms`        | Wait for departure gossip to propagate    |
 
 Builder methods `with_bootstrap(peers)` and `with_tags(tags)` accept either a
@@ -168,7 +170,9 @@ NetworkBuilder
 │   ├── purge_after
 │   ├── max_time_drift
 │   ├── announce_interval
-│   └── announce_jitter
+│   ├── announce_jitter
+│   ├── rtt_probe_interval
+│   └── max_rtt
 │
 ├── streams::Config
 │   └── backoff

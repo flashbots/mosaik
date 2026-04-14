@@ -7,6 +7,7 @@ use {
 		PeerEntry,
 		announce::{self, Announce},
 		catalog::UpsertResult,
+		rtt::RttTracker,
 		sync::CatalogSync,
 	},
 	crate::{
@@ -56,6 +57,7 @@ pub(super) struct Handle {
 	pub events: broadcast::Receiver<Event>,
 	pub commands: UnboundedSender<WorkerCommand>,
 	pub neighbors_count: Arc<AtomicUsize>,
+	pub rtt: Arc<RttTracker>,
 }
 
 impl Handle {
@@ -177,6 +179,12 @@ pub(super) struct WorkerLoop {
 	/// discovery catalog.
 	purge_interval: tokio::time::Interval,
 
+	/// Interval timer for periodic RTT probing of cataloged peers.
+	rtt_probe_interval: tokio::time::Interval,
+
+	/// Ongoing RTT ping probes.
+	rtt_probes: JoinSet<(PeerId, Option<Duration>)>,
+
 	/// Set of peer ids that the local node synced its catalog with at least
 	/// once.
 	seen: HashSet<PeerId>,
@@ -188,7 +196,8 @@ impl WorkerLoop {
 	/// the `Discovery::new` method.
 	pub(super) fn spawn(local: LocalNode, config: Config) -> Arc<Handle> {
 		let config = Arc::new(config);
-		let catalog = watch::Sender::new(Catalog::new(&local, &config));
+		let rtt = Arc::new(RttTracker::new());
+		let catalog = watch::Sender::new(Catalog::new(&local, &config, &rtt));
 		let (commands_tx, commands_rx) = unbounded_channel();
 		let (events_tx, events_rx) = broadcast::channel(config.events_backlog);
 
@@ -204,10 +213,13 @@ impl WorkerLoop {
 			events: events_rx,
 			commands: commands_tx,
 			neighbors_count,
+			rtt,
 		});
 
 		let ping = Ping::new(&handle);
 		let bootstrap = DhtBootstrap::new(Arc::clone(&handle), &config);
+
+		let rtt_probe_interval = interval(config.rtt_probe_interval);
 
 		let worker = Self {
 			config,
@@ -219,9 +231,11 @@ impl WorkerLoop {
 			events: events_tx,
 			seen: HashSet::new(),
 			syncs: JoinSet::new(),
+			rtt_probes: JoinSet::new(),
 			commands: commands_rx,
 			announce_interval,
 			purge_interval,
+			rtt_probe_interval,
 		};
 
 		// spawn the worker loop
@@ -313,6 +327,18 @@ impl WorkerLoop {
 				// Periodic announcement tick
 				_ = self.announce_interval.tick() => {
 					self.on_periodic_announce_tick();
+				}
+
+				// Periodic RTT probe tick
+				_ = self.rtt_probe_interval.tick() => {
+					self.on_rtt_probe_tick();
+				}
+
+				// RTT probe completed
+				Some(Ok((peer_id, rtt))) = self.rtt_probes.join_next() => {
+					if let Some(rtt) = rtt {
+						self.handle.rtt.record_sample(peer_id, rtt);
+					}
 				}
 
 				// Periodic catalog purge tick
@@ -491,6 +517,7 @@ impl WorkerLoop {
 		entry_version: PeerEntryVersion,
 	) {
 		self.seen.remove(&peer_id);
+		self.handle.rtt.remove(&peer_id);
 		let Some(last_known_version) = self
 			.handle
 			.catalog
@@ -582,6 +609,30 @@ impl WorkerLoop {
 			.update_local_entry(|entry| entry.increment_version());
 	}
 
+	/// Periodically pings cataloged peers to measure RTT. Spawns
+	/// a background ping task for each peer, with results collected
+	/// in the main select loop.
+	fn on_rtt_probe_tick(&mut self) {
+		// Apply jitter: base ± 50%
+		let base = self.config.rtt_probe_interval;
+		let jitter = rand::rng().random_range(Duration::ZERO..=base);
+		self.rtt_probe_interval.reset_after(base / 2 + jitter);
+
+		let catalog = self.handle.catalog.borrow().clone();
+		for peer in catalog.signed_peers() {
+			let peer_id = *peer.id();
+			let addr = peer.address().clone();
+			let local = self.handle.local.clone();
+
+			self.rtt_probes.spawn(async move {
+				match local.ping(addr, None).await {
+					Ok((_entry, rtt)) => (peer_id, rtt),
+					Err(_) => (peer_id, None),
+				}
+			});
+		}
+	}
+
 	/// Periodically purge stale peer entries from the catalog.
 	/// Configured via the `purge_interval` config parameter.
 	fn on_periodic_catalog_purge_tick(&mut self) {
@@ -596,6 +647,7 @@ impl WorkerLoop {
 		}
 
 		for peer in &purged {
+			self.handle.rtt.remove(peer.id());
 			self.events.send(Event::PeerDeparted(*peer.id())).ok();
 		}
 

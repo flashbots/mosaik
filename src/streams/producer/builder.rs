@@ -6,7 +6,7 @@ use {
 	crate::{
 		NetworkId,
 		StreamId,
-		discovery::PeerEntry,
+		discovery::PeerInfo,
 		streams::status::ChannelConditions,
 		tickets::TicketValidator,
 	},
@@ -48,7 +48,7 @@ pub struct ProducerConfig {
 
 	/// Sets a predicate function that is used to determine whether to
 	/// accept or reject incoming consumer connections.
-	pub require: Box<dyn Fn(&PeerEntry) -> bool + Send + Sync>,
+	pub require: Box<dyn Fn(&PeerInfo) -> bool + Send + Sync>,
 
 	/// A function that specifies conditions under which a channel is
 	/// considered online and can publish data to consumers. Here you can
@@ -113,16 +113,22 @@ impl<D: Datum> Builder<'_, D> {
 
 	/// Adds a peer eligibility requirement for incoming consumer connections.
 	///
-	/// The predicate receives the [`PeerEntry`] of each consumer attempting to
-	/// subscribe and must return `true` for the connection to be accepted. When
-	/// called multiple times, all predicates must pass — AND composition — so a
-	/// consumer is accepted only if every requirement is satisfied.
+	/// The predicate receives a [`PeerInfo`] combining the peer's
+	/// self-reported [`PeerEntry`](crate::discovery::PeerEntry) with
+	/// locally-observed metrics like RTT. Since `PeerInfo` implements
+	/// `Deref<Target = PeerEntry>`, existing predicates that call methods
+	/// like `peer.tags()` or `peer.has_valid_ticket()` continue to work
+	/// unchanged.
+	///
+	/// When called multiple times, all predicates must pass — AND
+	/// composition — so a consumer is accepted only if every requirement
+	/// is satisfied.
 	///
 	/// The default requirement accepts all consumers.
 	#[must_use]
 	pub fn require<F>(mut self, pred: F) -> Self
 	where
-		F: Fn(&PeerEntry) -> bool + Send + Sync + 'static,
+		F: Fn(&PeerInfo) -> bool + Send + Sync + 'static,
 	{
 		let prev = self.config.require;
 		self.config.require = Box::new(move |peer| prev(peer) && pred(peer));

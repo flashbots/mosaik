@@ -90,7 +90,28 @@ let consumer = network.streams()
     .build();
 ```
 
-The predicate receives a `&PeerEntry` and is evaluated each time a new producer is discovered.
+The predicate receives a `&PeerInfo` (which implements `Deref<Target = PeerEntry>`, so existing calls like `peer.tags()` work unchanged) and is evaluated each time a new producer is discovered.
+
+### RTT-based filtering
+
+Use `rtt_below()` to only subscribe to producers whose round-trip time
+is below a threshold:
+
+```rust,ignore
+use std::time::Duration;
+
+let consumer = network.streams()
+    .consumer::<PriceUpdate>()
+    .require(|peer| peer.rtt_below(Duration::from_millis(100)))
+    .build();
+```
+
+When a new producer is discovered and no RTT data exists yet, the
+consumer automatically pings the producer to measure RTT before
+attempting a subscription. This avoids wasteful connections to peers
+that will fail the RTT check. Predicates are also re-evaluated on
+catalog changes, so if a producer's RTT degrades over time, the
+consumer disconnects.
 
 ### Ticket-Based Authentication
 

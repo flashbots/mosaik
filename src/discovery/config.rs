@@ -49,6 +49,17 @@ pub struct Config {
 	#[builder(default = "false")]
 	pub no_auto_bootstrap: bool,
 
+	/// The interval at which to ping cataloged peers to measure RTT.
+	#[builder(default = "Duration::from_secs(30)")]
+	pub rtt_probe_interval: Duration,
+
+	/// Maximum acceptable RTT for peers. When set, peers whose smoothed
+	/// RTT exceeds this threshold may be filtered by higher-level
+	/// subsystems (streams, groups). Peers with no RTT data are not
+	/// filtered (optimistic admission).
+	#[builder(default = "None", setter(custom))]
+	pub max_rtt: Option<Duration>,
+
 	/// The duration the announcement protocol will wait for the graceful
 	/// departure gossip message to propagate before shutting down.
 	#[builder(setter(skip), default = "Duration::from_millis(500)")]
@@ -101,6 +112,18 @@ impl ConfigBuilder {
 	#[must_use]
 	pub const fn no_auto_bootstrap(mut self) -> Self {
 		self.no_auto_bootstrap = Some(true);
+		self
+	}
+
+	/// Sets the maximum acceptable RTT for discovered peers.
+	///
+	/// When set, peers whose smoothed RTT exceeds this threshold may
+	/// be filtered by higher-level subsystems. Peers with no RTT data
+	/// are not filtered (optimistic admission — new peers are given a
+	/// chance to establish direct paths before being evaluated).
+	#[must_use]
+	pub const fn with_max_rtt(mut self, max: Duration) -> Self {
+		self.max_rtt = Some(Some(max));
 		self
 	}
 }

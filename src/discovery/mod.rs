@@ -66,6 +66,7 @@ mod entry;
 mod error;
 mod event;
 pub(crate) mod ping;
+pub(crate) mod rtt;
 mod sync;
 mod worker;
 
@@ -76,6 +77,7 @@ pub use {
 	entry::{PeerEntry, PeerEntryVersion, SignedPeerEntry},
 	error::Error,
 	event::Event,
+	rtt::PeerInfo,
 };
 
 /// The discovery system for a Mosaik network.
@@ -227,6 +229,14 @@ impl Discovery {
 impl Discovery {
 	pub(crate) fn new(local: LocalNode, config: Config) -> Self {
 		Self(WorkerLoop::spawn(local, config))
+	}
+
+	/// Returns a reference to the internal RTT tracker.
+	///
+	/// This is used by other subsystems (bonds, streams) to record
+	/// RTT samples from their active connections.
+	pub(crate) fn rtt_tracker(&self) -> &Arc<rtt::RttTracker> {
+		&self.0.rtt
 	}
 }
 

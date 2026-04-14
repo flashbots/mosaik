@@ -103,7 +103,9 @@ Producers and consumers can be further configured:
 let producer = network.streams()
   .producer::<Data1>()
   .with_stream_id("custom.stream.id")
-  .require(|peer| peer.tags().contains("tag1"))
+  .require(|peer| 
+    peer.tags().contains("tag1") && 
+    peer.rtt_below(Duration::from_millis(250)))
   .online_when(|c| c.minimum_of(2))
   .with_max_consumers(4)
   .build()
@@ -487,20 +489,20 @@ Read through the scenario tests in the [`tests/`](tests/) directory for practica
 
 ```bash
 # Run all integration tests
-TEST_TRACE=on cargo test --test basic -- --test-threads=1
+TEST_TRACE=on cargo test --test all -- --test-threads=1
 
 # Run some integration tests
-TEST_TRACE=on cargo test --release --test basic collections::map -- --test-threads=1
+TEST_TRACE=on cargo test --release --test all collections::map -- --test-threads=1
 
 # Verbose test output with tracing
-TEST_TRACE=on cargo test --test basic groups::leader::is_elected
-TEST_TRACE=trace cargo test --test basic groups::leader::is_elected
+TEST_TRACE=on cargo test --test all groups::leader::is_elected
+TEST_TRACE=trace cargo test --test all groups::leader::is_elected
 ```
 
 If tests are running on a slow network, the timeouts can be extended by setting the `TIME_FACTOR` env variable that will multiply all timeout durations by the given value, e.g:
 
 ```bash
-TIME_FACTOR=3 TEST_TRACE=on cargo test --test basic groups::leader::is_elected
+TIME_FACTOR=3 TEST_TRACE=on cargo test --test all groups::leader::is_elected
 ```
 
 # Roadmap

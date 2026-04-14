@@ -35,6 +35,8 @@ let network = Network::builder(network_id)
             .with_announce_jitter(0.3)
             .with_max_time_drift(Duration::from_secs(5))
             .with_events_backlog(200)
+            .with_max_rtt(Duration::from_millis(500))
+            .with_rtt_probe_interval(Duration::from_secs(15))
     )
     .build()
     .await?;
@@ -51,10 +53,66 @@ let network = Network::builder(network_id)
 | `purge_after`          | 300s    | Duration after which stale entries are purged           |
 | `max_time_drift`       | 10s     | Maximum acceptable clock drift between peers            |
 | `events_backlog`       | 100     | Past events retained in event broadcast channel         |
+| `rtt_probe_interval`   | 30s     | Interval for RTT ping probes to cataloged peers         |
+| `max_rtt`              | `None`  | Maximum acceptable RTT for peers (see below)            |
 | `dht_publish_interval` | 300s    | How often to publish to the DHT (`None` to disable)     |
 | `dht_poll_interval`    | 60s     | How often to poll the DHT for peers (`None` to disable) |
 
 Both `with_bootstrap()` and `with_tags()` are **additive** — calling them multiple times adds to the list.
+
+### RTT tracking
+
+The discovery system continuously measures round-trip times to cataloged
+peers using periodic ping probes (controlled by `rtt_probe_interval`).
+RTT samples are also collected passively from active connections (group
+bonds, stream producers and consumers).
+
+Smoothing uses EWMA following RFC 6298 (α = 1/8, β = 1/4) so that
+transient spikes are absorbed while sustained latency changes are
+reflected.
+
+#### Network-wide RTT filtering with `max_rtt`
+
+When `max_rtt` is set in the discovery config, the catalog filters out
+peers whose smoothed RTT exceeds the threshold. **High-latency peers
+become invisible to the local node** — they will not appear in
+`catalog.peers()`, `catalog.get()`, or `catalog.peers_count()`, and
+consequently will not be discovered by stream consumers, connected to
+by stream producers, or considered for group bond formation. This is a
+hard cut-off at the discovery layer that affects all subsystems:
+
+```rust,ignore
+let network = Network::builder(network_id)
+    .with_discovery(
+        discovery::Config::builder()
+            .with_max_rtt(Duration::from_millis(300))
+    )
+    .build()
+    .await?;
+
+// catalog.peers() only returns peers with RTT ≤ 300ms
+// (peers with no RTT data are included optimistically)
+```
+
+Peers with no RTT measurements are still included (optimistic
+admission) — they are not excluded until the discovery system has
+measured their latency. This avoids rejecting newly discovered peers
+before they have had a chance to establish direct connections.
+
+> **Note:** Use `max_rtt` when you want a blanket latency requirement
+> for the entire node. For per-stream thresholds (e.g. a fast stream
+> with strict latency alongside a best-effort stream), use
+> `require(|peer| peer.rtt_below(...))` on individual producers or
+> consumers instead.
+
+#### Per-stream RTT filtering with `require()`
+
+For finer-grained control, RTT data is also available to `require()`
+predicates on individual producers and consumers via the `PeerInfo`
+type — see
+[Producers > RTT-based filtering](./streams/producers.md#rtt-based-filtering)
+and
+[Consumers > RTT-based filtering](./streams/consumers.md#rtt-based-filtering).
 
 ## Accessing Discovery
 

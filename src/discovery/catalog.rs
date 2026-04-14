@@ -1,5 +1,5 @@
 use {
-	super::{Config, Event, PeerEntry, SignedPeerEntry},
+	super::{Config, Event, PeerEntry, SignedPeerEntry, rtt::RttTracker},
 	crate::{
 		NetworkId,
 		network::{LocalNode, PeerId},
@@ -65,6 +65,9 @@ pub struct Catalog {
 	/// Discovery configuration.
 	config: Arc<Config>,
 
+	/// RTT tracker for filtering peers by latency.
+	rtt: Arc<RttTracker>,
+
 	/// The local node's peer ID.
 	///
 	/// This is used to exclude the local node from queries.
@@ -100,15 +103,24 @@ impl Catalog {
 	/// local peer entry.
 	///
 	/// The iterator yields both signed and unsigned entries, with signed entries
-	/// being the first to be returned.
+	/// being the first to be returned. When `max_rtt` is configured, peers
+	/// whose smoothed RTT exceeds the threshold are excluded. Peers with no
+	/// RTT data are included (optimistic).
 	pub fn peers(&self) -> impl DoubleEndedIterator<Item = &PeerEntry> {
 		let last_valid = Utc::now() - self.config.purge_after;
+		let max_rtt = self.config.max_rtt;
+		let rtt = Arc::clone(&self.rtt);
 		self
 			.signed
 			.values()
 			.map(|signed| signed.as_ref())
 			.chain(self.unsigned.values())
-			.filter(move |p| *p.id() != self.local_id && p.updated_at() >= last_valid)
+			.filter(move |p| {
+				*p.id() != self.local_id
+					&& p.updated_at() >= last_valid
+					&& max_rtt
+						.is_none_or(|max| rtt.get(p.id()).is_none_or(|rtt| rtt <= max))
+			})
 	}
 
 	/// Returns an iterator over all peer entries that carry a valid signature in
@@ -161,9 +173,19 @@ impl Catalog {
 
 	/// Returns a reference to the peer entry for the given peer ID, if it exists.
 	///
-	/// This method checks both signed and unsigned entries.
+	/// This method checks both signed and unsigned entries. When `max_rtt` is
+	/// configured, returns `None` for peers whose RTT exceeds the threshold.
 	pub fn get(&self, peer_id: &PeerId) -> Option<&PeerEntry> {
 		let last_valid = Utc::now() - self.config.purge_after;
+		let rtt_ok = self
+			.config
+			.max_rtt
+			.is_none_or(|max| self.rtt.get(peer_id).is_none_or(|rtt| rtt <= max));
+
+		if !rtt_ok {
+			return None;
+		}
+
 		self
 			.signed
 			.get(peer_id)
@@ -306,7 +328,11 @@ impl UpsertResult<'_> {
 impl Catalog {
 	/// Creates a new catalog instance with the local node's peer entry as the
 	/// first and only entry.
-	pub(super) fn new(local: &LocalNode, config: &Arc<Config>) -> Self {
+	pub(super) fn new(
+		local: &LocalNode,
+		config: &Arc<Config>,
+		rtt: &Arc<RttTracker>,
+	) -> Self {
 		let local_entry = PeerEntry::new(*local.network_id(), local.addr())
 			.add_tags(config.tags.clone())
 			.sign(local.secret_key())
@@ -319,6 +345,7 @@ impl Catalog {
 			local_id: local.id(),
 			network_id: *local.network_id(),
 			config: Arc::clone(config),
+			rtt: Arc::clone(rtt),
 			signed,
 			unsigned: im::OrdMap::new(),
 		}

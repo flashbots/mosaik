@@ -2,7 +2,7 @@ use {
 	crate::{
 		Datum,
 		PeerId,
-		discovery::{Catalog, Discovery},
+		discovery::{Catalog, Discovery, rtt::PeerInfo},
 		network::LocalNode,
 		primitives::{Digest, Short},
 		streams::{
@@ -71,6 +71,12 @@ pub(super) struct ConsumerWorker<D: Datum> {
 
 	/// Futures that resolve when a producer's ticket expires.
 	ticket_expiries: JoinSet<Digest>,
+
+	/// Pending RTT probes for newly discovered producers that have no
+	/// RTT data yet. When a probe completes, the result is fed back to
+	/// the discovery system, which triggers a catalog update that
+	/// re-evaluates `require()` with RTT data available.
+	rtt_probes: JoinSet<()>,
 }
 
 impl<D: Datum> ConsumerWorker<D> {
@@ -103,6 +109,7 @@ impl<D: Datum> ConsumerWorker<D> {
 			online: online.clone(),
 			online_when,
 			ticket_expiries: JoinSet::new(),
+			rtt_probes: JoinSet::new(),
 		};
 
 		tokio::spawn(worker.run());
@@ -155,6 +162,11 @@ impl<D: Datum> ConsumerWorker<D> {
 				Some(Ok(sub_id)) = self.ticket_expiries.join_next() => {
 					self.on_ticket_expired(sub_id);
 				}
+
+				// Drive RTT probe tasks (results are fed back to
+				// discovery, triggering a catalog update that
+				// re-evaluates require() with RTT data).
+				Some(_) = self.rtt_probes.join_next() => {}
 			}
 		}
 	}
@@ -184,7 +196,29 @@ impl<D: Datum> ConsumerWorker<D> {
 					"discovered new stream producer"
 				);
 
-				if !(self.config.require)(producer) {
+				// If no RTT data exists for this producer, trigger an RTT ping probe
+				// before evaluating require(). The probe feeds its result back to the
+				// discovery system, which triggers a catalog update that re-evaluates
+				// with RTT data available. This avoids wasteful connections to
+				// peers that will fail RTT requirements.
+				if self.discovery.rtt_tracker().get(producer.id()).is_none() {
+					let local = self.local.clone();
+					let discovery = self.discovery.clone();
+					let addr = producer.address().clone();
+					self.rtt_probes.spawn(async move {
+						if let Ok((entry, rtt)) = local.ping(addr, None).await
+							&& let Some(rtt) = rtt
+						{
+							discovery.rtt_tracker().record_sample(*entry.id(), rtt);
+							discovery.feed(entry);
+						}
+					});
+					continue;
+				}
+
+				let info =
+					PeerInfo::from_tracker(producer, self.discovery.rtt_tracker());
+				if !(self.config.require)(&info) {
 					tracing::debug!(
 						stream_id = %Short(self.config.stream_id),
 						producer_id = %Short(producer),
@@ -247,9 +281,13 @@ impl<D: Datum> ConsumerWorker<D> {
 			}
 		}
 
-		// Re-evaluate the require predicate for active connections.
-		// Disconnect receivers whose producers no longer satisfy the predicate
-		// (e.g. a tag was removed) or are no longer in the catalog.
+		self.disconnect_ineligible_producers(&latest);
+	}
+
+	/// Re-evaluates the `require` predicate and ticket validity for all
+	/// active connections. Disconnects receivers whose producers no
+	/// longer satisfy the eligibility criteria or left the catalog.
+	fn disconnect_ineligible_producers(&mut self, latest: &Catalog) {
 		let to_disconnect: Vec<(Digest, PeerId)> = self
 			.active
 			.borrow()
@@ -257,8 +295,10 @@ impl<D: Datum> ConsumerWorker<D> {
 			.filter_map(|(sub_id, info)| {
 				let peer_id = *info.producer_id();
 				let dominated = latest.get(&peer_id).is_none_or(|entry| {
+					let info =
+						PeerInfo::from_tracker(entry, self.discovery.rtt_tracker());
 					!entry.streams().contains(&self.config.stream_id)
-						|| !(self.config.require)(entry)
+						|| !(self.config.require)(&info)
 						|| entry
 							.validate_tickets(&self.config.ticket_validators)
 							.is_err()
@@ -271,7 +311,7 @@ impl<D: Datum> ConsumerWorker<D> {
 			tracing::info!(
 				producer_id = %Short(peer_id),
 				stream_id = %Short(self.config.stream_id),
-				"disconnecting producer that no longer satisfies eligibility criteria"
+				"disconnecting ineligible producer"
 			);
 
 			if let Some(cancel) = self.receiver_cancels.remove(sub_id) {

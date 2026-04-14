@@ -116,6 +116,32 @@ pub trait TicketValidator: Send + Sync + 'static {
 This is the same trait used by [Groups](../groups.md) for bond
 authentication.
 
+### RTT-based filtering
+
+The `require` predicate receives a `PeerInfo`, which wraps the peer's
+`PeerEntry` with locally-observed metrics like round-trip time. Use
+`rtt_below()` to reject consumers whose latency exceeds a threshold:
+
+```rust,ignore
+use std::time::Duration;
+
+let producer = network.streams()
+    .producer::<MyDatum>()
+    .require(|peer| peer.rtt_below(Duration::from_millis(200)))
+    .build()?;
+```
+
+`PeerInfo` implements `Deref<Target = PeerEntry>`, so existing
+predicates that call methods like `peer.tags()` continue to work
+unchanged.
+
+RTT is sampled from the QUIC connection at accept time, so the
+producer always has RTT data when evaluating the predicate — there is
+no "optimistic admission" on the producer side. Active consumers are
+also re-evaluated when the discovery catalog updates; if RTT degrades
+over time, consumers that no longer satisfy the predicate are
+disconnected.
+
 ### Using `require` with closures
 
 For simpler cases, you can validate tickets inside a `require`

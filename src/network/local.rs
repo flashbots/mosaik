@@ -3,7 +3,7 @@ use {
 	crate::{
 		PeerId,
 		SecretKey,
-		discovery::{SignedPeerEntry, ping::Ping},
+		discovery::{SignedPeerEntry, ping::Ping, rtt::best_rtt},
 		network::{
 			NetworkId,
 			Success,
@@ -161,14 +161,19 @@ impl LocalNode {
 
 	/// Sends a ping request to the given peer and waits for the response.
 	///
-	/// This is used to quickly check if a peer is online and responsive without
-	/// doing a full catalog sync.
+	/// Returns the peer's signed entry and the RTT of the connection's
+	/// currently selected network path (direct if holepunched, relay
+	/// otherwise).
+	///
+	/// This is used to quickly check if a peer is online and responsive
+	/// without doing a full catalog sync.
 	pub(crate) fn ping(
 		&self,
 		peer: impl Into<EndpointAddr>,
 		timeout: Option<std::time::Duration>,
-	) -> impl Future<Output = Result<SignedPeerEntry, LinkError>> + Send + 'static
-	{
+	) -> impl Future<Output = Result<(SignedPeerEntry, Option<Duration>), LinkError>>
+	+ Send
+	+ 'static {
 		let peer = peer.into();
 		let local = self.clone();
 		let timeout = timeout.unwrap_or_else(|| Duration::from_secs(5));
@@ -204,6 +209,9 @@ impl LocalNode {
 				);
 			})?;
 
+			// Sample the RTT from the selected path before closing
+			let rtt = best_rtt(link.connection());
+
 			link.close(Success).await.inspect_err(|e| {
 				tracing::debug!(
 					error = %e,
@@ -213,7 +221,7 @@ impl LocalNode {
 				);
 			})?;
 
-			Ok(entry)
+			Ok((entry, rtt))
 		}
 	}
 }

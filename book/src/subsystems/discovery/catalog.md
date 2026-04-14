@@ -101,17 +101,32 @@ The periodic gossip re-announce (every ~15s by default) keeps entries fresh. Whe
 
 ## Using Catalog for Filtering
 
-The catalog is commonly used to filter peers in Streams:
+The catalog is commonly used to filter peers in Streams. The `require`
+predicate receives a `PeerInfo`, which wraps `PeerEntry` with
+locally-observed metrics like RTT. Since `PeerInfo` implements
+`Deref<Target = PeerEntry>`, existing code that accesses tags, streams,
+or tickets works unchanged:
 
 ```rust,ignore
 // Producer: only accept consumers with specific tags
 let producer = network.streams().producer::<Order>()
-    .require(|peer| peer.tags.contains(&"authorized".into()))
+    .require(|peer| peer.tags().contains(&"authorized".into()))
     .build()?;
 
 // Consumer: only subscribe to specific producers
 let consumer = network.streams().consumer::<Order>()
-    .require(|peer| peer.tags.contains(&"primary".into()))
+    .require(|peer| peer.tags().contains(&"primary".into()))
+    .build();
+
+// Filter by RTT — reject peers with latency above 200ms
+let producer = network.streams().producer::<Order>()
+    .require(|peer| peer.rtt_below(Duration::from_millis(200)))
+    .build()?;
+
+// Combine RTT and tag requirements (AND-composed)
+let consumer = network.streams().consumer::<Order>()
+    .require(|peer| peer.tags().contains(&"primary".into()))
+    .require(|peer| peer.rtt_below(Duration::from_millis(100)))
     .build();
 ```
 

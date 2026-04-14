@@ -263,7 +263,7 @@ fn poll_once<F: Future + Unpin>(f: &mut F) -> Poll<F::Output> {
 
 ```text
 tests/
-├── basic.rs            # Test harness, data types, module declarations
+├── all.rs              # Test harness, data types, module declarations
 ├── collections/        # Map, Vec, Set, DEPQ tests
 ├── discovery/          # Catalog, departure tests
 ├── groups/             # Bonds, builder, execute, feed, leader, catchup
