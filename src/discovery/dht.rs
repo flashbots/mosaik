@@ -64,7 +64,7 @@ impl DhtBootstrap {
 	pub(super) fn new(handle: Arc<super::Handle>, config: &Config) -> Self {
 		let updates = UnboundedChannel::default();
 
-		if config.no_auto_bootstrap {
+		if config.no_dht_bootstrap {
 			tracing::debug!(
 				network = %handle.local.network_id(),
 				"DHT auto bootstrap is disabled"

@@ -20,6 +20,7 @@
 
 use {
 	clap::Parser,
+	core::net::SocketAddr,
 	mosaik::{
 		Network,
 		NetworkId,
@@ -74,6 +75,10 @@ struct Args {
 	/// Optional peer IDs to connect to directly
 	#[arg(short, long)]
 	peer: Vec<PeerId>,
+
+	/// Optional socket address to bind a Prometheus metrics exporter to
+	#[arg(short, long)]
+	metrics: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -82,10 +87,15 @@ async fn main() -> anyhow::Result<()> {
 
 	// Each room is its own mosaik network, derived from the hardcoded network id
 	// salt and the room name.
-	let network = Network::builder(NETWORK_SALT.derive(args.room.as_str()))
-		.with_discovery(discovery::Config::builder().with_bootstrap(args.peer))
-		.build()
-		.await?;
+	let mut network_builder =
+		Network::builder(NETWORK_SALT.derive(args.room.as_str()))
+			.with_discovery(discovery::Config::builder().with_bootstrap(args.peer));
+
+	if let Some(metrics) = args.metrics {
+		network_builder = network_builder.with_prometheus_addr(metrics);
+	}
+
+	let network = network_builder.build().await?;
 
 	println!(
 		"Joining room '{}' as \x1b[{}m{}\x1b[0m ...",

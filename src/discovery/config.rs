@@ -47,7 +47,7 @@ pub struct Config {
 
 	/// Disables the DHT auto bootstrap mechanism.
 	#[builder(default = "false")]
-	pub no_auto_bootstrap: bool,
+	pub no_dht_bootstrap: bool,
 
 	/// The interval at which to ping cataloged peers to measure RTT.
 	#[builder(default = "Duration::from_secs(30)")]
@@ -110,8 +110,8 @@ impl ConfigBuilder {
 	/// The node will need to be provided with a bootstrap peer manually by the
 	/// API user.
 	#[must_use]
-	pub const fn no_auto_bootstrap(mut self) -> Self {
-		self.no_auto_bootstrap = Some(true);
+	pub const fn no_dht_bootstrap(mut self) -> Self {
+		self.no_dht_bootstrap = Some(true);
 		self
 	}
 
