@@ -389,8 +389,9 @@ impl TicketValidator for Jwt {
 /// JWT algorithm name used in the token header. Prefer the
 /// algorithm-specific types ([`Hs256`], [`Es256SigningKey`], etc.)
 /// which convert into this type automatically.
+#[derive(Clone)]
 pub struct SigningKey {
-	key: Box<dyn SigningAlgorithm + Send + Sync>,
+	key: Arc<dyn SigningAlgorithm + Send + Sync>,
 	algorithm_name: &'static str,
 }
 
@@ -402,11 +403,14 @@ impl SigningKey {
 		algorithm_name: &'static str,
 	) -> Self {
 		Self {
-			key: Box::new(key),
+			key: Arc::new(key),
 			algorithm_name,
 		}
 	}
 }
+
+// reexport the duration type used for setting expiration.
+pub use chrono::Duration as ChronoDuration;
 
 /// Builds signed JWT [`Ticket`]s for peer authentication.
 ///
@@ -426,11 +430,13 @@ impl SigningKey {
 /// let ticket = builder.build(&peer_id, Expiration::Never);
 /// network.discovery().add_ticket(ticket);
 /// ```
+#[derive(Clone)]
 pub struct JwtTicketBuilder {
 	key: SigningKey,
 	issuer: Option<String>,
 	subject: Option<String>,
 	audience: Option<String>,
+	expiration: Expiration,
 	not_before: Option<u64>,
 	issued_at: Option<u64>,
 	token_id: Option<String>,
@@ -445,6 +451,7 @@ impl JwtTicketBuilder {
 			issuer: None,
 			subject: None,
 			audience: None,
+			expiration: Expiration::Never,
 			not_before: None,
 			issued_at: None,
 			token_id: None,
@@ -473,6 +480,21 @@ impl JwtTicketBuilder {
 	#[must_use]
 	pub fn audience(mut self, audience: impl Into<String>) -> Self {
 		self.audience = Some(audience.into());
+		self
+	}
+
+	/// Sets the expiration policy on all built tickets.
+	#[must_use]
+	pub const fn expires_at(mut self, expiration: Expiration) -> Self {
+		self.expiration = expiration;
+		self
+	}
+
+	/// Sets the expiration policy on all built tickets relative to the current
+	/// time.
+	#[must_use]
+	pub fn expires_in(mut self, duration: impl Into<chrono::Duration>) -> Self {
+		self.expiration = Expiration::after(duration.into());
 		self
 	}
 
@@ -517,6 +539,15 @@ impl JwtTicketBuilder {
 			"iss" => self.issuer = value.as_str().map(String::from),
 			"sub" => self.subject = value.as_str().map(String::from),
 			"aud" => self.audience = value.as_str().map(String::from),
+			"exp" => match value
+				.as_u64()
+				.and_then(|ts| chrono::DateTime::from_timestamp(ts.cast_signed(), 0))
+			{
+				Some(dt) => self.expiration = Expiration::At(dt),
+				None => {
+					self.custom_claims.insert(name, value);
+				}
+			},
 			"nbf" => self.not_before = value.as_u64(),
 			"iat" => self.issued_at = value.as_u64(),
 			"jti" => {
@@ -540,7 +571,7 @@ impl JwtTicketBuilder {
 	/// # Panics
 	///
 	/// Panics if the signing key fails to produce a signature.
-	pub fn build(&self, peer_id: &PeerId, expiration: Expiration) -> Ticket {
+	pub fn build(&self, peer_id: &PeerId) -> Ticket {
 		let now = Utc::now().timestamp().cast_unsigned();
 		let claims = jwt::Claims {
 			registered: RegisteredClaims {
@@ -552,7 +583,7 @@ impl JwtTicketBuilder {
 						.unwrap_or_else(|| peer_id.to_string().to_lowercase()),
 				),
 				audience: self.audience.clone(),
-				expiration: match expiration {
+				expiration: match self.expiration {
 					Expiration::Never => None,
 					Expiration::At(ts) => Some(ts.timestamp().cast_unsigned()),
 				},
@@ -701,7 +732,7 @@ mod alg {
 	impl From<Hs256> for SigningKey {
 		fn from(key: Hs256) -> Self {
 			Self {
-				key: Box::new(key),
+				key: Arc::new(key),
 				algorithm_name: "HS256",
 			}
 		}
@@ -755,7 +786,7 @@ mod alg {
 	impl From<Hs384> for SigningKey {
 		fn from(key: Hs384) -> Self {
 			Self {
-				key: Box::new(key),
+				key: Arc::new(key),
 				algorithm_name: "HS384",
 			}
 		}
@@ -809,7 +840,7 @@ mod alg {
 	impl From<Hs512> for SigningKey {
 		fn from(key: Hs512) -> Self {
 			Self {
-				key: Box::new(key),
+				key: Arc::new(key),
 				algorithm_name: "HS512",
 			}
 		}
@@ -875,6 +906,7 @@ mod alg {
 	/// let validator = Jwt::with_key(sk.verifying_key());
 	/// let builder = JwtTicketBuilder::new(sk).issuer("my-issuer");
 	/// ```
+	#[derive(Clone)]
 	pub struct Es256SigningKey(p256::ecdsa::SigningKey);
 
 	impl Es256SigningKey {
@@ -937,7 +969,7 @@ mod alg {
 	impl From<Es256SigningKey> for SigningKey {
 		fn from(key: Es256SigningKey) -> Self {
 			Self {
-				key: Box::new(key),
+				key: Arc::new(key),
 				algorithm_name: "ES256",
 			}
 		}
@@ -991,6 +1023,7 @@ mod alg {
 	/// P-384 ECDSA (`ES384`) signing key for issuing JWT tickets.
 	///
 	/// This is the private-key counterpart to [`Es384`].
+	#[derive(Clone)]
 	pub struct Es384SigningKey(p384::ecdsa::SigningKey);
 
 	impl Es384SigningKey {
@@ -1050,7 +1083,7 @@ mod alg {
 	impl From<Es384SigningKey> for SigningKey {
 		fn from(key: Es384SigningKey) -> Self {
 			Self {
-				key: Box::new(key),
+				key: Arc::new(key),
 				algorithm_name: "ES384",
 			}
 		}
@@ -1098,6 +1131,7 @@ mod alg {
 	/// P-521 ECDSA (`ES512`) signing key for issuing JWT tickets.
 	///
 	/// This is the private-key counterpart to [`Es512`].
+	#[derive(Clone)]
 	pub struct Es512SigningKey(p521::ecdsa::SigningKey);
 
 	impl Es512SigningKey {
@@ -1158,7 +1192,7 @@ mod alg {
 	impl From<Es512SigningKey> for SigningKey {
 		fn from(key: Es512SigningKey) -> Self {
 			Self {
-				key: Box::new(key),
+				key: Arc::new(key),
 				algorithm_name: "ES512",
 			}
 		}
@@ -1248,7 +1282,7 @@ mod alg {
 	impl From<EdDsaSigningKey> for SigningKey {
 		fn from(key: EdDsaSigningKey) -> Self {
 			Self {
-				key: Box::new(key),
+				key: Arc::new(key),
 				algorithm_name: "EdDSA",
 			}
 		}

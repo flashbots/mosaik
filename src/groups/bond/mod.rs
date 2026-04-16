@@ -65,7 +65,7 @@ use {
 			UnknownPeer,
 			link::{Link, RecvError},
 		},
-		primitives::{EncodeError, Short, encoding::try_serialize},
+		primitives::{EncodeError, Short, ShortFmtExt, encoding::try_serialize},
 	},
 	bytes::Bytes,
 	core::fmt,
@@ -221,9 +221,9 @@ impl<M: StateMachine> Bond<M> {
 	) -> Result<(Self, BondEvents<M>), Error> {
 		if group.config.authorize_peer(&peer).is_err() {
 			tracing::debug!(
-				network = %group.network_id(),
-				peer = %Short(peer.id()),
-				group = %Short(group.group_id()),
+				network = %group.network_id().short(),
+				peer = %peer.id().short(),
+				group = %group.group_id().short(),
 				"bonding failed: unauthorized",
 			);
 
@@ -262,9 +262,9 @@ impl<M: StateMachine> Bond<M> {
 		.await
 		else {
 			tracing::debug!(
-				network = %group.network_id(),
-				peer = %Short(peer.id()),
-				group = %Short(group.group_id()),
+				network = %group.network_id().short(),
+				peer = %peer.id().short(),
+				group = %group.group_id().short(),
 				"handshake timeout waiting for bond confirmation",
 			);
 
@@ -293,9 +293,9 @@ impl<M: StateMachine> Bond<M> {
 				// This is an unrecoverable error.
 				Some(reason) if reason == InvalidProof || reason == NotAllowed => {
 					tracing::warn!(
-						network = %group.network_id(),
-						peer = %Short(peer.id()),
-						group = %Short(group.group_id()),
+						network = %group.network_id().short(),
+						peer = %peer.id().short(),
+						group = %group.group_id().short(),
 						"remote peer rejected: unauthorized",
 					);
 
@@ -314,9 +314,9 @@ impl<M: StateMachine> Bond<M> {
 		// validate the accepting peer's proof of knowledge of the group secret
 		if !group.validate_key_proof(&link, confirm.proof) {
 			tracing::warn!(
-				network = %group.network_id(),
-				peer = %Short(peer.id()),
-				group = %Short(group.group_id()),
+				network = %group.network_id().short(),
+				peer = %peer.id().short(),
+				group = %group.group_id().short(),
 				"remote peer provided invalid group secret proof",
 			);
 
@@ -359,9 +359,9 @@ impl<M: StateMachine> Bond<M> {
 
 		if group.config.authorize_peer(&peer).is_err() {
 			tracing::debug!(
-				network = %group.network_id(),
-				peer = %Short(peer.id()),
-				group = %Short(group.group_id()),
+				network = %group.network_id().short(),
+				peer = %peer.id().short(),
+				group = %group.group_id().short(),
 				"rejecting bond: unauthorized",
 			);
 
@@ -376,9 +376,9 @@ impl<M: StateMachine> Bond<M> {
 		// verify the remote peer's proof of knowledge of the group secret
 		if !group.validate_key_proof(&link, handshake.proof) {
 			tracing::warn!(
-				network = %group.network_id(),
-				peer = %Short(peer.id()),
-				group = %Short(group.group_id()),
+				network = %group.network_id().short(),
+				peer = %peer.id().short(),
+				group = %group.group_id().short(),
 				"remote peer provided invalid group secret proof",
 			);
 

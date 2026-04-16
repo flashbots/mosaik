@@ -90,10 +90,10 @@ impl<'g> GroupBuilder<'g, (), ()> {
 		GroupBuilder {
 			groups: self.groups,
 			key: self.key,
-			consensus: None,
+			consensus: self.consensus,
 			storage: InMemoryLogStore::<SM::Command>::default(),
 			state_machine,
-			auth: Vec::new(),
+			auth: self.auth,
 		}
 	}
 
@@ -134,11 +134,7 @@ where
 	}
 }
 
-impl<S, M> GroupBuilder<'_, S, M>
-where
-	S: Storage<M::Command>,
-	M: StateMachine,
-{
+impl<S, M> GroupBuilder<'_, S, M> {
 	/// Consensus configuration for the group protocol, such as heartbeat
 	/// intervals and election timeouts.
 	///

@@ -5,18 +5,15 @@ use {
 			DEFAULT_ISSUER,
 			DEFAULT_SECRET,
 			discover_all,
-			expired_expiry,
-			expiry_in,
 			jwt_builder,
 			jwt_validator,
 			sleep_s,
 			timeout_s,
-			valid_expiry,
 		},
 	},
-	core::time::Duration,
+	chrono::Duration,
 	futures::{SinkExt, StreamExt},
-	mosaik::*,
+	mosaik::{tickets::Expiration, *},
 };
 
 /// Consumer uses `with_ticket_validator` to only subscribe to producers
@@ -36,10 +33,12 @@ async fn stream_consumer() -> anyhow::Result<()> {
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	// n1 gets a valid ticket, n2 an expired one, n3 none
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
-	n2.discovery()
-		.add_ticket(builder.build(&n2.local().id(), expired_expiry()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
+	n2.discovery().add_ticket(
+		builder
+			.expires_at(Expiration::already_expired())
+			.build(&n2.local().id()),
+	);
 
 	let mut p1 = n1.streams().produce::<Data1>();
 	let _p2 = n2.streams().produce::<Data1>();
@@ -80,7 +79,9 @@ async fn stream_consumer_ticket_expiry() -> anyhow::Result<()> {
 
 	// Short-lived ticket (3 seconds)
 	n1.discovery().add_ticket(
-		builder.build(&n1.local().id(), expiry_in(Duration::from_secs(3))),
+		builder
+			.expires_in(Duration::seconds(3))
+			.build(&n1.local().id()),
 	);
 
 	let mut p1 = n1.streams().produce::<Data1>();
@@ -130,10 +131,12 @@ async fn stream_producer() -> anyhow::Result<()> {
 	)?;
 
 	// n1 gets a valid ticket, n2 an expired one, n3 none
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
-	n2.discovery()
-		.add_ticket(builder.build(&n2.local().id(), expired_expiry()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
+	n2.discovery().add_ticket(
+		builder
+			.expires_at(Expiration::already_expired())
+			.build(&n2.local().id()),
+	);
 
 	// Producer with ticket validator
 	let mut p0 = n0
@@ -183,18 +186,14 @@ async fn stream_consumer_multiple_validators() -> anyhow::Result<()> {
 	)?;
 
 	// n1 has both tickets → should be subscribed
-	n1.discovery()
-		.add_ticket(builder_a.build(&n1.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder_b.build(&n1.local().id(), valid_expiry()));
+	n1.discovery().add_ticket(builder_a.build(&n1.local().id()));
+	n1.discovery().add_ticket(builder_b.build(&n1.local().id()));
 
 	// n2 has only issuer_a ticket → should be rejected
-	n2.discovery()
-		.add_ticket(builder_a.build(&n2.local().id(), valid_expiry()));
+	n2.discovery().add_ticket(builder_a.build(&n2.local().id()));
 
 	// n3 has only issuer_b ticket → should be rejected
-	n3.discovery()
-		.add_ticket(builder_b.build(&n3.local().id(), valid_expiry()));
+	n3.discovery().add_ticket(builder_b.build(&n3.local().id()));
 
 	let mut p1 = n1.streams().produce::<Data1>();
 	let _p2 = n2.streams().produce::<Data1>();
@@ -243,18 +242,14 @@ async fn stream_producer_multiple_validators() -> anyhow::Result<()> {
 	)?;
 
 	// n1 has both tickets → should be accepted
-	n1.discovery()
-		.add_ticket(builder_a.build(&n1.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder_b.build(&n1.local().id(), valid_expiry()));
+	n1.discovery().add_ticket(builder_a.build(&n1.local().id()));
+	n1.discovery().add_ticket(builder_b.build(&n1.local().id()));
 
 	// n2 has only issuer_a ticket → should be rejected
-	n2.discovery()
-		.add_ticket(builder_a.build(&n2.local().id(), valid_expiry()));
+	n2.discovery().add_ticket(builder_a.build(&n2.local().id()));
 
 	// n3 has only issuer_b ticket → should be rejected
-	n3.discovery()
-		.add_ticket(builder_b.build(&n3.local().id(), valid_expiry()));
+	n3.discovery().add_ticket(builder_b.build(&n3.local().id()));
 
 	// Producer requiring both validators
 	let mut p0 = n0
@@ -300,7 +295,9 @@ async fn stream_producer_ticket_expiry() -> anyhow::Result<()> {
 
 	// Short-lived ticket (3 seconds)
 	n1.discovery().add_ticket(
-		builder.build(&n1.local().id(), expiry_in(Duration::from_secs(3))),
+		builder
+			.expires_at(Expiration::after(Duration::seconds(3)))
+			.build(&n1.local().id()),
 	);
 
 	let mut p0 = n0
@@ -349,7 +346,9 @@ async fn es256_asymmetric_tickets() -> anyhow::Result<()> {
 	let pubkey = signing_key.verifying_key();
 
 	// Build tickets with the private key, validate with the public key.
-	let builder = JwtTicketBuilder::new(signing_key).issuer("es256-issuer");
+	let builder = JwtTicketBuilder::new(signing_key)
+		.issuer("es256-issuer")
+		.expires_at(Expiration::in_1h());
 	let validator = Jwt::with_key(pubkey).allow_issuer("es256-issuer");
 
 	let (n0, n1, n2) = tokio::try_join!(
@@ -359,8 +358,7 @@ async fn es256_asymmetric_tickets() -> anyhow::Result<()> {
 	)?;
 
 	// n1 gets a valid ES256 ticket; n2 gets none
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	let mut p1 = n1.streams().produce::<Data1>();
 	let _p2 = n2.streams().produce::<Data1>();
@@ -403,7 +401,9 @@ async fn es256_hex_const_key() -> anyhow::Result<()> {
 	let network_id = NetworkId::random();
 	let signing_key = Es256SigningKey::from_bytes(PRIVKEY);
 
-	let builder = JwtTicketBuilder::new(signing_key).issuer("es256-hex-issuer");
+	let builder = JwtTicketBuilder::new(signing_key)
+		.issuer("es256-hex-issuer")
+		.expires_at(Expiration::in_1h());
 
 	let validator = Jwt::with_key(Es256::hex(
 		"0298a82ebe69ad57e0f7d5c2809a05188ff58572c5a5009015f26643f91e0d3236",
@@ -417,8 +417,7 @@ async fn es256_hex_const_key() -> anyhow::Result<()> {
 	)?;
 
 	// n1 gets a valid ES256 ticket; n2 gets none
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	let mut p1 = n1.streams().produce::<Data1>();
 	let _p2 = n2.streams().produce::<Data1>();
@@ -484,7 +483,8 @@ async fn es256_stream_macro_hex_key() -> anyhow::Result<()> {
 		JwtTicketBuilder::new(Es256SigningKey::from_bytes(PRIVKEY))
 			.issuer("es256-macro-issuer")
 			.audience(n0.network_id().to_string())
-			.build(&n0.local().id(), valid_expiry()),
+			.expires_at(Expiration::in_1h())
+			.build(&n0.local().id()),
 	);
 
 	let mut p0 = Es256AuthStream::producer(&n0);

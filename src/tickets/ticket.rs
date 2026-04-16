@@ -6,7 +6,7 @@ use {
 	},
 	bytes::Bytes,
 	chrono::{DateTime, Utc},
-	core::{cmp::Ordering, time::Duration},
+	core::cmp::Ordering,
 	derive_more::Display,
 	humansize::{DECIMAL, format_size},
 	serde::{Deserialize, Serialize},
@@ -17,6 +17,8 @@ use {
 /// interpret the ticket data and which authorization scheme to use for
 /// validating the ticket.
 pub type TicketClass = UniqueId;
+
+pub use chrono::Duration;
 
 /// This type represents authentication tokens, credentials, or any other type
 /// of data that may be used to authorize a peer.
@@ -91,11 +93,61 @@ impl Expiration {
 
 	/// Returns the remaining duration until the ticket expires, or `None` if
 	/// the ticket never expires or has already expired.
-	pub fn remaining(&self) -> Option<Duration> {
+	pub fn remaining(&self) -> Option<core::time::Duration> {
 		match self {
 			Self::Never => None,
 			Self::At(t) => (*t - Utc::now()).to_std().ok(),
 		}
+	}
+
+	/// Creates a new expiration policy that never expires.
+	pub const fn never() -> Self {
+		Self::Never
+	}
+
+	/// Creates a new expiration policy that is already expired at the current
+	/// time.
+	///
+	/// This is useful for testing purposes, to simulate the behavior of expired
+	/// tickets.
+	pub fn already_expired() -> Self {
+		Self::At(Utc::now() - chrono::Duration::hours(1))
+	}
+
+	/// Creates a new expiration policy that expires at the current time plus the
+	/// specified duration.
+	pub fn after(duration: impl Into<chrono::Duration>) -> Self {
+		Self::At(Utc::now() + duration.into())
+	}
+
+	/// Creates a new expiration policy that expires at the current time plus the
+	/// specified number of hours.
+	pub fn in_n_hours(hours: i64) -> Self {
+		Self::after(chrono::Duration::hours(hours))
+	}
+
+	/// Creates a new expiration policy that expires at the current time plus 1
+	/// hour.
+	pub fn in_1h() -> Self {
+		Self::in_n_hours(1)
+	}
+
+	/// Creates a new expiration policy that expires at the current time plus 3
+	/// hours.
+	pub fn in_3h() -> Self {
+		Self::in_n_hours(3)
+	}
+
+	/// Creates a new expiration policy that expires at the current time plus 6
+	/// hours.
+	pub fn in_6h() -> Self {
+		Self::in_n_hours(6)
+	}
+
+	/// Creates a new expiration policy that expires at the current time plus 24
+	/// hours.
+	pub fn in_24h() -> Self {
+		Self::in_n_hours(24)
 	}
 }
 

@@ -13,27 +13,12 @@ pub fn jwt_secret(secret: &str) -> [u8; 32] {
 
 /// Creates a [`JwtTicketBuilder`] with the given issuer and secret.
 pub fn jwt_builder(issuer: &str, secret: &str) -> JwtTicketBuilder {
-	JwtTicketBuilder::new(Hs256::new(jwt_secret(secret))).issuer(issuer)
+	JwtTicketBuilder::new(Hs256::new(jwt_secret(secret)))
+		.issuer(issuer)
+		.expires_at(Expiration::in_1h())
 }
 
 /// Creates a [`Jwt`] validator matching the given issuer and secret.
 pub fn jwt_validator(issuer: &str, secret: &str) -> Jwt {
 	Jwt::with_key(Hs256::new(jwt_secret(secret))).allow_issuer(issuer)
-}
-
-/// Returns an expiration one hour from now.
-pub fn valid_expiry() -> Expiration {
-	Expiration::At(chrono::Utc::now() + chrono::Duration::hours(1))
-}
-
-/// Returns an already-passed expiration (one hour ago).
-pub fn expired_expiry() -> Expiration {
-	Expiration::At(chrono::Utc::now() - chrono::Duration::hours(1))
-}
-
-/// Returns an expiration `duration` from now.
-pub fn expiry_in(duration: Duration) -> Expiration {
-	Expiration::At(
-		chrono::Utc::now() + chrono::Duration::from_std(duration).unwrap(),
-	)
 }

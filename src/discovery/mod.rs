@@ -44,7 +44,7 @@ use {
 		},
 		network::{LocalNode, PeerId, link::Protocol},
 		primitives::{IntoIterOrSingle, Short},
-		tickets::Ticket,
+		tickets::{Ticket, TicketClass},
 	},
 	core::fmt,
 	iroh::{
@@ -220,8 +220,16 @@ impl Discovery {
 	}
 
 	/// Removes all tickets of a given class from the local peer discovery entry.
-	pub fn remove_tickets_of(&self, class: UniqueId) {
+	pub fn remove_tickets_of(&self, class: TicketClass) {
 		self.update_local_entry(move |entry| entry.remove_tickets_of(class));
+	}
+
+	/// Replaces all tickets of the same class as the given ticket with the new
+	/// ticket in the local peer discovery entry.
+	pub fn replace_ticket(&self, ticket: Ticket) {
+		self.update_local_entry(move |entry| {
+			entry.remove_tickets_of(ticket.class).add_ticket(ticket)
+		});
 	}
 }
 

@@ -6,15 +6,13 @@ use {
 		Hs256,
 		Jwt,
 		discover_all,
-		expired_expiry,
 		jwt_builder,
 		jwt_secret,
 		sleep_s,
 		timeout_s,
-		valid_expiry,
 	},
 	futures::{SinkExt, StreamExt},
-	mosaik::{declare, *},
+	mosaik::{declare, tickets::Expiration, *},
 	serde::{Deserialize, Serialize},
 };
 
@@ -361,12 +359,13 @@ async fn stream_macro_require_ticket() -> anyhow::Result<()> {
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	// n0 and n1 get valid tickets; n2 gets an expired one; n3 gets none.
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
-	n2.discovery()
-		.add_ticket(builder.build(&n2.local().id(), expired_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
+	n2.discovery().add_ticket(
+		builder
+			.expires_at(Expiration::already_expired())
+			.build(&n2.local().id()),
+	);
 
 	let mut p0 = TicketAuthStream::producer(&n0);
 	let mut c1 = TicketAuthStream::consumer(&n1);
@@ -411,8 +410,7 @@ async fn stream_macro_producer_require_ticket() -> anyhow::Result<()> {
 
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	let mut p0 = ProducerTicketStream::producer(&n0);
 
@@ -459,8 +457,7 @@ async fn stream_macro_consumer_require_ticket() -> anyhow::Result<()> {
 
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	let mut c0 = ConsumerTicketStream::consumer(&n0);
 
@@ -510,22 +507,16 @@ async fn stream_macro_multiple_require_ticket() -> anyhow::Result<()> {
 	)?;
 
 	// n0 (producer) and n1 (consumer) carry tickets from BOTH issuers.
-	n0.discovery()
-		.add_ticket(builder_a.build(&n0.local().id(), valid_expiry()));
-	n0.discovery()
-		.add_ticket(builder_b.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder_a.build(&n1.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder_b.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder_a.build(&n0.local().id()));
+	n0.discovery().add_ticket(builder_b.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder_a.build(&n1.local().id()));
+	n1.discovery().add_ticket(builder_b.build(&n1.local().id()));
 
 	// n2 only has issuer_a ticket → should be rejected.
-	n2.discovery()
-		.add_ticket(builder_a.build(&n2.local().id(), valid_expiry()));
+	n2.discovery().add_ticket(builder_a.build(&n2.local().id()));
 
 	// n3 only has issuer_b ticket → should be rejected.
-	n3.discovery()
-		.add_ticket(builder_b.build(&n3.local().id(), valid_expiry()));
+	n3.discovery().add_ticket(builder_b.build(&n3.local().id()));
 
 	let mut p0 = MultiTicketStream::producer(&n0);
 	let mut c1 = MultiTicketStream::consumer(&n1);

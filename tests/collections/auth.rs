@@ -10,7 +10,6 @@ use {
 		jwt_validator,
 		sleep_s,
 		timeout_s,
-		valid_expiry,
 	},
 	mosaik::{
 		collections::{
@@ -42,10 +41,8 @@ async fn map_auth_tickets() -> anyhow::Result<()> {
 	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	// n0 and n1 get valid tickets; n2 gets none
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -95,10 +92,8 @@ async fn vec_auth_tickets() -> anyhow::Result<()> {
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -140,10 +135,8 @@ async fn set_auth_tickets() -> anyhow::Result<()> {
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -185,10 +178,8 @@ async fn cell_auth_tickets() -> anyhow::Result<()> {
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -230,10 +221,8 @@ async fn once_auth_tickets() -> anyhow::Result<()> {
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -275,10 +264,8 @@ async fn priority_queue_auth_tickets() -> anyhow::Result<()> {
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 	let validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -384,10 +371,8 @@ async fn collection_macro_with_require_ticket() -> anyhow::Result<()> {
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 
 	// n0 and n1 get valid tickets; n2 gets none
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 
@@ -436,18 +421,13 @@ async fn collection_macro_with_multiple_tickets() -> anyhow::Result<()> {
 	let builder_b = jwt_builder("issuer-beta", "secret-beta");
 
 	// n0 and n1 carry tickets from both issuers
-	n0.discovery()
-		.add_ticket(builder_a.build(&n0.local().id(), valid_expiry()));
-	n0.discovery()
-		.add_ticket(builder_b.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder_a.build(&n1.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder_b.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder_a.build(&n0.local().id()));
+	n0.discovery().add_ticket(builder_b.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder_a.build(&n1.local().id()));
+	n1.discovery().add_ticket(builder_b.build(&n1.local().id()));
 
 	// n2 only carries a ticket from issuer-alpha (missing issuer-beta)
-	n2.discovery()
-		.add_ticket(builder_a.build(&n2.local().id(), valid_expiry()));
+	n2.discovery().add_ticket(builder_a.build(&n2.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2])).await??;
 

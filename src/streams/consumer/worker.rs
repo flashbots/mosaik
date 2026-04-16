@@ -4,7 +4,7 @@ use {
 		PeerId,
 		discovery::{Catalog, Discovery, rtt::PeerInfo},
 		network::LocalNode,
-		primitives::{Digest, Short, ShortFmtExt},
+		primitives::{Digest, ShortFmtExt},
 		streams::{
 			Consumer,
 			Streams,
@@ -205,9 +205,9 @@ impl<D: Datum> ConsumerWorker<D> {
 			let sub_id = Digest::from_bytes(*producer.id().as_bytes());
 			if !self.active.borrow().contains_key(&sub_id) {
 				tracing::trace!(
-					stream_id = %Short(self.config.stream_id),
-					producer = %Short(producer),
-					network = %producer.network_id(),
+					stream_id = %self.config.stream_id.short(),
+					producer = %producer.id().short(),
+					network = %producer.network_id().short(),
 					"discovered new stream producer"
 				);
 
@@ -235,9 +235,9 @@ impl<D: Datum> ConsumerWorker<D> {
 					PeerInfo::from_tracker(producer, self.discovery.rtt_tracker());
 				if !(self.config.require)(&info) {
 					tracing::debug!(
-						stream_id = %Short(self.config.stream_id),
-						producer_id = %Short(producer),
-						network = %producer.network_id(),
+						stream_id = %self.config.stream_id.short(),
+						producer_id = %producer.id().short(),
+						network = %producer.network_id().short(),
 						"skipping ineligible producer"
 					);
 					continue;
@@ -248,9 +248,9 @@ impl<D: Datum> ConsumerWorker<D> {
 					producer.validate_tickets(&self.config.ticket_validators)
 				else {
 					tracing::debug!(
-						stream_id = %Short(self.config.stream_id),
-						producer_id = %Short(producer),
-						network = %producer.network_id(),
+						stream_id = %self.config.stream_id.short(),
+						producer_id = %producer.id().short(),
+						network = %producer.network_id().short(),
 						"skipping unauthorized producer"
 					);
 					continue;
@@ -329,8 +329,8 @@ impl<D: Datum> ConsumerWorker<D> {
 
 		for (sub_id, peer_id) in &to_disconnect {
 			tracing::info!(
-				producer_id = %Short(peer_id),
-				stream_id = %Short(self.config.stream_id),
+				producer_id = %peer_id.short(),
+				stream_id = %self.config.stream_id.short(),
 				"disconnecting ineligible producer"
 			);
 
@@ -344,7 +344,7 @@ impl<D: Datum> ConsumerWorker<D> {
 
 		if !to_disconnect.is_empty() && !self.online_when.is_condition_met() {
 			tracing::trace!(
-				stream_id = %Short(self.config.stream_id),
+				stream_id = %self.config.stream_id.short(),
 				producers = %self.active.borrow().len(),
 				"consumer is offline",
 			);
@@ -360,7 +360,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		}
 
 		tracing::debug!(
-			stream_id = %Short(self.config.stream_id),
+			stream_id = %self.config.stream_id.short(),
 			"producer ticket expired; disconnecting",
 		);
 
@@ -393,15 +393,15 @@ impl<D: Datum> ConsumerWorker<D> {
 				.set(self.active.borrow().len() as f64);
 
 			tracing::info!(
-				producer_id = %Short(&peer_id),
-				stream_id = %Short(self.config.stream_id),
+				producer_id = %peer_id.short(),
+				stream_id = %self.config.stream_id.short(),
 				criteria = ?self.config.criteria,
 				"connection with producer terminated"
 			);
 
 			if !self.online_when.is_condition_met() {
 				tracing::trace!(
-					stream_id = %Short(self.config.stream_id),
+					stream_id = %self.config.stream_id.short(),
 					producers = %self.active.borrow().len(),
 					"consumer is offline",
 				);
@@ -413,7 +413,7 @@ impl<D: Datum> ConsumerWorker<D> {
 	/// Triggered when the online conditions for this consumer are met.
 	fn on_online(&self) {
 		tracing::trace!(
-			stream_id = %Short(self.config.stream_id),
+			stream_id = %self.config.stream_id.short(),
 			producers = %self.active.borrow().len(),
 			"consumer is online",
 		);
@@ -436,7 +436,7 @@ impl<D: Datum> ConsumerWorker<D> {
 		self.receiver_cancels.clear();
 
 		tracing::debug!(
-			stream_id = %Short(self.config.stream_id),
+			stream_id = %self.config.stream_id.short(),
 			producers_count = producers_count,
 			criteria = ?self.config.criteria,
 			"consumer terminated"

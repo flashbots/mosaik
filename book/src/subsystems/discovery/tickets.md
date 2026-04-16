@@ -152,40 +152,45 @@ non-expiring.
 and wraps them as `Ticket` values ready for discovery:
 
 ```rust,ignore
-use mosaik::tickets::{Hs256, JwtTicketBuilder};
+use mosaik::tickets::{Hs256, JwtTicketBuilder, Expiration};
 
 let builder = JwtTicketBuilder::new(Hs256::new(secret))
-    .issuer("my-app");
+    .issuer("my-app")
+    .expires_at(Expiration::At(expiration_time));
 
-let ticket = builder.build(&peer_id, Expiration::At(expiration_time));
+let ticket = builder.build(&peer_id);
 network.discovery().add_ticket(ticket);
 ```
 
 For asymmetric algorithms, use the signing key type:
 
 ```rust,ignore
-use mosaik::tickets::{Es256SigningKey, JwtTicketBuilder};
+use mosaik::tickets::{Es256SigningKey, JwtTicketBuilder, Expiration};
+use core::time::Duration;
 
 let sk = Es256SigningKey::random();
 
 let builder = JwtTicketBuilder::new(sk)
-    .issuer("my-app");
+    .issuer("my-app")
+    .expires_in(Duration::from_secs(3600));
 
-let ticket = builder.build(&peer_id, Expiration::At(expiration_time));
+let ticket = builder.build(&peer_id);
 network.discovery().add_ticket(ticket);
 ```
 
 Builder methods (all optional, all chainable):
 
-| Method                  | Effect                                                   |
-| ----------------------- | -------------------------------------------------------- |
-| `.issuer(s)`            | Set the `iss` claim                                      |
-| `.subject(s)`           | Override the `sub` claim (default: peer id in lower hex) |
-| `.audience(s)`          | Set the `aud` claim                                      |
-| `.issued_at(datetime)`  | Override `iat` (default: current time)                   |
-| `.not_before(datetime)` | Set the `nbf` claim                                      |
-| `.token_id(jti)`        | Set the `jti` claim                                      |
-| `.claim(name, value)`   | Add a custom claim (standard names route to their field) |
+| Method                    | Effect                                                        |
+| ------------------------- | ------------------------------------------------------------- |
+| `.issuer(s)`              | Set the `iss` claim                                           |
+| `.subject(s)`             | Override the `sub` claim (default: peer id in lower hex)      |
+| `.audience(s)`            | Set the `aud` claim                                           |
+| `.expires_at(expiration)` | Set the expiration policy (`Expiration::At(dt)` or `Never`)   |
+| `.expires_in(duration)`   | Set expiration relative to current time                       |
+| `.issued_at(datetime)`    | Override `iat` (default: current time)                        |
+| `.not_before(datetime)`   | Set the `nbf` claim                                           |
+| `.token_id(jti)`          | Set the `jti` claim                                           |
+| `.claim(name, value)`     | Add a custom claim (standard names route to their field)      |
 
 Because tickets propagate through gossip, the remote peer will see them
 when the updated `PeerEntry` arrives.

@@ -4,14 +4,17 @@ use {
 		DEFAULT_ISSUER,
 		DEFAULT_SECRET,
 		discover_all,
-		expired_expiry,
 		jwt_builder,
 		jwt_validator,
 		sleep_s,
 		timeout_s,
-		valid_expiry,
 	},
-	mosaik::{GroupKey, Network, NetworkId, tickets::TicketValidator},
+	mosaik::{
+		GroupKey,
+		Network,
+		NetworkId,
+		tickets::{Expiration, TicketValidator},
+	},
 };
 
 /// Verifies that peers with valid JWT tickets can bond within an auth-gated
@@ -34,12 +37,13 @@ async fn jwt_authorized_peers_can_bond() -> anyhow::Result<()> {
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 	let jwt_validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
-	n2.discovery()
-		.add_ticket(builder.build(&n2.local().id(), expired_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
+	n2.discovery().add_ticket(
+		builder
+			.expires_at(Expiration::already_expired())
+			.build(&n2.local().id()),
+	);
 	// n3 adds no ticket
 
 	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
@@ -115,10 +119,8 @@ async fn bond_terminated_on_jwt_ticket_revocation() -> anyhow::Result<()> {
 	let builder = jwt_builder(DEFAULT_ISSUER, DEFAULT_SECRET);
 	let jwt_validator = jwt_validator(DEFAULT_ISSUER, DEFAULT_SECRET);
 
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1])).await??;
 
@@ -189,10 +191,8 @@ async fn group_key_derived_from_jwt_validator() -> anyhow::Result<()> {
 	let (n0, n1) =
 		tokio::try_join!(Network::new(network_id), Network::new(network_id))?;
 
-	n0.discovery()
-		.add_ticket(builder.build(&n0.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder.build(&n1.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder.build(&n0.local().id()));
+	n1.discovery().add_ticket(builder.build(&n1.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1])).await??;
 
@@ -296,23 +296,17 @@ async fn multiple_ticket_validators() -> anyhow::Result<()> {
 		Network::new(network_id),
 	)?;
 
-	n0.discovery()
-		.add_ticket(builder_a.build(&n0.local().id(), valid_expiry()));
-	n0.discovery()
-		.add_ticket(builder_b.build(&n0.local().id(), valid_expiry()));
+	n0.discovery().add_ticket(builder_a.build(&n0.local().id()));
+	n0.discovery().add_ticket(builder_b.build(&n0.local().id()));
 
-	n1.discovery()
-		.add_ticket(builder_a.build(&n1.local().id(), valid_expiry()));
-	n1.discovery()
-		.add_ticket(builder_b.build(&n1.local().id(), valid_expiry()));
+	n1.discovery().add_ticket(builder_a.build(&n1.local().id()));
+	n1.discovery().add_ticket(builder_b.build(&n1.local().id()));
 
-	n2.discovery()
-		.add_ticket(builder_a.build(&n2.local().id(), valid_expiry()));
 	// n2 missing issuer_b ticket
+	n2.discovery().add_ticket(builder_a.build(&n2.local().id()));
 
 	// n3 missing issuer_a ticket
-	n3.discovery()
-		.add_ticket(builder_b.build(&n3.local().id(), valid_expiry()));
+	n3.discovery().add_ticket(builder_b.build(&n3.local().id()));
 
 	timeout_s(5, discover_all([&n0, &n1, &n2, &n3])).await??;
 
