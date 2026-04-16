@@ -115,7 +115,7 @@ pub use {
 	cursor::{Cursor, Index, IndexRange, Term},
 	error::{CommandError, Error, QueryError},
 	group::*,
-	key::GroupKey,
+	key::{GroupKey, Secret as GroupSecret},
 	machine::*,
 	replay::*,
 	storage::{InMemoryLogStore, Storage},

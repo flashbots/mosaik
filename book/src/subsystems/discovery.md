@@ -6,11 +6,11 @@ The Discovery subsystem handles gossip-based peer discovery and catalog synchron
 
 Discovery uses three complementary mechanisms:
 
-| Mechanism     | Transport              | Purpose                                          |
-| ------------- | ---------------------- | ------------------------------------------------ |
-| DHT Bootstrap | Mainline DHT (pkarr)   | Automatic peer discovery via shared `NetworkId`  |
-| Announce      | `/mosaik/announce`     | Real-time gossip broadcasts via iroh-gossip      |
-| Catalog Sync  | `/mosaik/catalog-sync` | Full bidirectional catalog exchange for catch-up |
+| Mechanism     | Transport                          | Purpose                                          |
+| ------------- | ---------------------------------- | ------------------------------------------------ |
+| DHT Bootstrap | Mainline DHT (pkarr)               | Automatic peer discovery via shared `NetworkId`  |
+| Announce      | `/mosaik/discovery/announce/1.0`   | Real-time gossip broadcasts via iroh-gossip      |
+| Catalog Sync  | `/mosaik/discovery/sync/1.0`       | Full bidirectional catalog exchange for catch-up |
 
 Nodes sharing the same `NetworkId` automatically discover each other through the DHT — no hardcoded bootstrap peers are required. Once an initial connection is established, the Announce and Catalog Sync protocols take over for real-time updates.
 
@@ -44,19 +44,18 @@ let network = Network::builder(network_id)
 
 ### Configuration Options
 
-| Field                  | Default | Description                                             |
-| ---------------------- | ------- | ------------------------------------------------------- |
-| `bootstrap_peers`      | `[]`    | Initial peers to connect to on startup                  |
-| `tags`                 | `[]`    | Tags to advertise about this node                       |
-| `announce_interval`    | 15s     | How often to re-announce via gossip                     |
-| `announce_jitter`      | 0.5     | Max jitter factor (0.0–1.0) for announce timing         |
-| `purge_after`          | 300s    | Duration after which stale entries are purged           |
-| `max_time_drift`       | 10s     | Maximum acceptable clock drift between peers            |
-| `events_backlog`       | 100     | Past events retained in event broadcast channel         |
-| `rtt_probe_interval`   | 30s     | Interval for RTT ping probes to cataloged peers         |
-| `max_rtt`              | `None`  | Maximum acceptable RTT for peers (see below)            |
-| `dht_publish_interval` | 300s    | How often to publish to the DHT (`None` to disable)     |
-| `dht_poll_interval`    | 60s     | How often to poll the DHT for peers (`None` to disable) |
+| Field                | Default | Description                                     |
+| -------------------- | ------- | ----------------------------------------------- |
+| `bootstrap_peers`    | `[]`    | Initial peers to connect to on startup          |
+| `tags`               | `[]`    | Tags to advertise about this node               |
+| `announce_interval`  | 45s     | How often to re-announce via gossip             |
+| `announce_jitter`    | 0.5     | Max jitter factor (0.0–1.0) for announce timing |
+| `purge_after`        | 300s    | Duration after which stale entries are purged   |
+| `max_time_drift`     | 50s     | Maximum acceptable clock drift between peers    |
+| `events_backlog`     | 100     | Past events retained in event broadcast channel |
+| `rtt_probe_interval` | 30s     | Interval for RTT ping probes to cataloged peers |
+| `max_rtt`            | `None`  | Maximum acceptable RTT for peers (see below)    |
+| `no_dht_bootstrap`   | `false` | Disables the DHT bootstrap mechanism entirely   |
 
 Both `with_bootstrap()` and `with_tags()` are **additive** — calling them multiple times adds to the list.
 
@@ -138,7 +137,7 @@ let mut watch = discovery.catalog_watch();
 loop {
     watch.changed().await?;
     let catalog = watch.borrow();
-    println!("Catalog updated: {} peers", catalog.len());
+    println!("Catalog updated: {} peers", catalog.peers_count());
 }
 ```
 

@@ -105,9 +105,11 @@ The `Heartbeat` struct tracks liveness:
 struct Heartbeat {
     tick: Interval,        // fires every `base - jitter` to `base`
     last_recv: Instant,    // last time we received a Ping or Pong
-    missed: u64,           // how many consecutive ticks without a response
-    max_missed: u64,       // threshold from ConsensusConfig (default: 10)
-    alert: Notify,         // signals when threshold is exceeded
+    missed: u32,           // how many consecutive ticks without a response
+    max_missed: u32,       // threshold from ConsensusConfig (default: 10)
+    alert: Arc<Notify>,    // signals when threshold is exceeded
+    base: Duration,        // heartbeat interval from config
+    jitter: Duration,      // max jitter from config
 }
 ```
 

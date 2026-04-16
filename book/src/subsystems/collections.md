@@ -58,9 +58,10 @@ using a const-generic boolean:
 | **Writer** | `MapWriter<K,V>`, `VecWriter<T>`, `CellWriter<T>`, `OnceWriter<T>` etc. | Yes        | Normal              |
 | **Reader** | `MapReader<K,V>`, `VecReader<T>`, `CellReader<T>`, `OnceReader<T>` etc. | No         | Deprioritized       |
 
-Both modes provide identical read access. Readers automatically use
-`deprioritize_leadership()` in their consensus configuration to reduce the
-chance of being elected leader, since leaders handle write forwarding.
+Both modes provide identical read access. Readers return
+`LeadershipPreference::Observer` from their state machine, so they never
+self-nominate and do not count toward quorum — only writer nodes fill
+the voting committee.
 
 ```rust,ignore
 // Writer — can read AND write

@@ -17,6 +17,7 @@ mod catchup;
 mod execute;
 mod feed;
 mod leader;
+mod p2p;
 
 #[derive(Debug)]
 struct Counter {

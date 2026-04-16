@@ -49,7 +49,7 @@ DHT bootstrap is **enabled by default**. To disable it (e.g., when using only ex
 let network = Network::builder(network_id)
     .with_discovery(
         discovery::Config::builder()
-            .no_auto_bootstrap()
+            .no_dht_bootstrap()
             .with_bootstrap(bootstrap_addr)
     )
     .build()
@@ -60,7 +60,7 @@ let network = Network::builder(network_id)
 
 | Option              | Default | Description                                                     |
 | ------------------- | ------- | --------------------------------------------------------------- |
-| `no_auto_bootstrap` | `false` | Disables the DHT bootstrap mechanism entirely.                  |
+| `no_dht_bootstrap`  | `false` | Disables the DHT bootstrap mechanism entirely.                  |
 | `bootstrap_peers`   | `[]`    | Explicit peers to connect to on startup (via `with_bootstrap`). |
 
 Poll and publish intervals are not currently configurable and use the hardcoded values above.

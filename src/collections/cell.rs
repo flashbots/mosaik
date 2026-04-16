@@ -21,6 +21,7 @@ use {
 			SnapshotSync,
 			protocol::SnapshotRequest,
 		},
+		discovery::PeerEntry,
 		groups::{
 			ApplyContext,
 			CommandError,
@@ -495,7 +496,7 @@ impl<T: Value> StateMachine for CellStateMachine<T> {
 	}
 
 	/// Readers are observers and never assume group leadership.
-	fn leadership_preference(&self) -> LeadershipPreference {
+	fn leadership_preference(&self, _: &PeerEntry) -> LeadershipPreference {
 		if self.is_writer {
 			LeadershipPreference::Normal
 		} else {

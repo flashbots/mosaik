@@ -66,7 +66,7 @@ async fn group_id_derived_from_config() -> anyhow::Result<()> {
 	let g2_0 = n0
 		.groups()
 		.with_key(group_key1)
-		.with_state_machine(NoOp)
+		.with_state_machine(NoOp::no_leaders())
 		.join();
 
 	tracing::debug!("g2_0: {g2_0}");

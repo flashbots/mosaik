@@ -132,16 +132,19 @@ Internally, the const-generic boolean controls two things:
    compile time.
 
 1. **Leadership priority** — Readers return a `ConsensusConfig` with
-   `deprioritize_leadership()`, which increases their election timeout. This
-   makes it less likely for a reader to become the Raft leader, keeping
-   leadership on writer nodes where write operations are handled directly
-   rather than being forwarded.
+   `LeadershipPreference::Observer`, which prevents them from self-nominating
+   and excludes them from the quorum denominator. This keeps leadership on
+   writer nodes where write operations are handled directly rather than being
+   forwarded, and avoids slow reader acknowledgment gating write latency.
 
 ```rust,ignore
 // Inside every collection's StateMachine impl:
-fn consensus_config(&self) -> Option<ConsensusConfig> {
-    (!self.is_writer)
-        .then(|| ConsensusConfig::default().deprioritize_leadership())
+fn leadership_preference(&self, _: &PeerEntry) -> LeadershipPreference {
+    if self.is_writer {
+        LeadershipPreference::Normal
+    } else {
+        LeadershipPreference::Observer
+    }
 }
 ```
 

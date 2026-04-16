@@ -132,7 +132,7 @@ let bonds = group.bonds();
 
 // Iterate current bonds
 for bond in bonds.iter() {
-    println!("Bonded to: {}", bond.peer_id());
+    println!("Bonded to: {}", bond.peer().id());
 }
 ```
 

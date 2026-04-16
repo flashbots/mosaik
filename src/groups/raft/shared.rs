@@ -2,6 +2,7 @@ use {
 	crate::{
 		NetworkId,
 		PeerId,
+		discovery::SignedPeerEntry,
 		groups::{
 			ApplyContext,
 			Bonds,
@@ -113,6 +114,11 @@ where
 	/// Returns the local ID of this node in the consensus group.
 	pub fn local_id(&self) -> PeerId {
 		self.group.local_id()
+	}
+
+	/// Returns the discovery peer entry of the local node
+	pub fn local_peer_entry(&self) -> SignedPeerEntry {
+		self.group.discovery.me()
 	}
 
 	/// Returns the group ID of this consensus group.

@@ -111,7 +111,10 @@ impl<M: StateMachine> Follower<M> {
 		leader: Option<PeerId>,
 		shared: &Shared<S, M>,
 	) -> Self {
-		let leadership_preference = shared.state_machine.leadership_preference();
+		let leadership_preference = shared
+			.state_machine
+			.leadership_preference(&shared.local_peer_entry());
+
 		let mut election_timeout = shared.config().consensus().election_timeout();
 
 		if term.is_zero() {

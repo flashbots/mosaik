@@ -104,7 +104,7 @@ impl<'g> GroupBuilder<'g, (), ()> {
 	/// sake of knowing who is the leader and keep track of the group members,
 	/// without needing to run any application-level logic or persist any state.
 	pub fn join(self) -> Group<NoOp> {
-		self.with_state_machine(NoOp).join()
+		self.with_state_machine(NoOp::no_leaders()).join()
 	}
 }
 

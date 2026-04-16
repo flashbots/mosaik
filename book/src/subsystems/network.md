@@ -1,6 +1,6 @@
 # Network
 
-The `Network` is the primary entry point to the mosaik SDK. It creates the QUIC transport layer, establishes node identity, and composes all subsystems (Discovery, Streams, Groups) into a single cohesive runtime.
+The `Network` is the primary entry point to the mosaik SDK. It creates the QUIC transport layer, establishes node identity, and composes all subsystems (Discovery, Streams, Groups, Collections) into a single cohesive runtime.
 
 ## Creating a Network
 

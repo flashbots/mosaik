@@ -14,6 +14,7 @@
 use {
 	crate::{
 		Datum,
+		discovery::PeerEntry,
 		groups::{Cursor, Term},
 		primitives::UniqueId,
 	},
@@ -23,10 +24,8 @@ use {
 mod noop;
 mod sync;
 
-#[doc(hidden)]
-pub use noop::NoOp;
 // Public API traits for user-provided state machine implementations.
-pub use sync::*;
+pub use {noop::NoOp, sync::*};
 
 /// The core trait for application-specific replicated state in a consensus
 /// group.
@@ -294,12 +293,12 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 	/// A read-replica that should never lead:
 	///
 	/// ```rust,ignore
-	/// fn leadership_preference(&self) -> LeadershipPreference {
+	/// fn leadership_preference(&self, _: &PeerEntry) -> LeadershipPreference {
 	///     LeadershipPreference::Observer
 	/// }
 	/// ```
 	#[inline]
-	fn leadership_preference(&self) -> LeadershipPreference {
+	fn leadership_preference(&self, _local: &PeerEntry) -> LeadershipPreference {
 		LeadershipPreference::Normal
 	}
 }

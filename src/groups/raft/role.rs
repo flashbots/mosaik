@@ -383,7 +383,9 @@ impl<M: StateMachine> Role<M> {
 			// participate in this election. Observers abstain so they don't
 			// inflate the election quorum — only nodes that can become
 			// leader (and thus hold committed entries) should count.
-			let is_observer = shared.state_machine.leadership_preference()
+			let is_observer = shared
+				.state_machine
+				.leadership_preference(&shared.local_peer_entry())
 				== LeadershipPreference::Observer;
 
 			if is_observer {

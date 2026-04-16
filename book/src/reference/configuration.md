@@ -11,12 +11,20 @@ accessible through fluent builder methods.
 ```rust,ignore
 use mosaik::Network;
 
-let network = Network::builder()
-    .network_id("my-network")
-    .mdns_discovery(true)
-    .discovery(|d| d.events_backlog(200))
-    .streams(|s| s.with_backoff(my_backoff))
-    .groups(|g| g.handshake_timeout(Duration::from_secs(5)))
+let network = Network::builder("my-network")
+    .with_mdns_discovery(true)
+    .with_discovery(
+        discovery::Config::builder()
+            .with_events_backlog(200)
+    )
+    .with_streams(
+        streams::Config::builder()
+            .with_backoff(my_backoff)
+    )
+    .with_groups(
+        groups::Config::builder()
+            .with_handshake_timeout(Duration::from_secs(5))
+    )
     .build()
     .await?;
 ```
@@ -50,8 +58,8 @@ Controls peer discovery, gossip, and catalog maintenance.
 | `bootstrap_peers`           | `Vec<EndpointAddr>` | empty          | Initial peers to connect to on startup    |
 | `tags`                      | `Vec<Tag>`          | empty          | Tags advertised in local `PeerEntry`      |
 | `purge_after`               | `Duration`          | `300s` (5 min) | Time before stale peer entries are purged |
-| `max_time_drift`            | `Duration`          | `10s`          | Maximum acceptable timestamp drift        |
-| `announce_interval`         | `Duration`          | `15s`          | Interval between presence announcements   |
+| `max_time_drift`            | `Duration`          | `50s`          | Maximum acceptable timestamp drift        |
+| `announce_interval`         | `Duration`          | `45s`          | Interval between presence announcements   |
 | `announce_jitter`           | `f32`               | `0.5`          | Max jitter factor on announce interval    |
 | `rtt_probe_interval`        | `Duration`          | `30s`          | Interval for RTT ping probes to peers     |
 | `max_rtt`                   | `Option<Duration>`  | `None`         | Maximum acceptable peer RTT               |
@@ -61,11 +69,12 @@ Builder methods `with_bootstrap(peers)` and `with_tags(tags)` accept either a
 single item or an iterator (via `IntoIterOrSingle`):
 
 ```rust,ignore
-Network::builder()
-    .discovery(|d| d
-        .with_bootstrap(peer_addr)          // single peer
-        .with_tags(["validator", "relay"])   // multiple tags
-        .purge_after(Duration::from_secs(600))
+Network::builder("my-network")
+    .with_discovery(
+        discovery::Config::builder()
+            .with_bootstrap(peer_addr)          // single peer
+            .with_tags(["validator", "relay"])   // multiple tags
+            .with_purge_after(Duration::from_secs(600))
     )
 ```
 
@@ -130,14 +139,19 @@ let config = ConsensusConfig::builder()
     .unwrap();
 ```
 
-### Leadership deprioritization
+### Leadership preference
+
+Leadership preference is controlled per-node through the `StateMachine` trait,
+not through `ConsensusConfig`:
 
 ```rust,ignore
-let config = ConsensusConfig::default().deprioritize_leadership();
+fn leadership_preference(&self, _: &PeerEntry) -> LeadershipPreference {
+    LeadershipPreference::Observer  // or Reluctant { factor: 3 }, or Normal
+}
 ```
 
-This multiplies the election timeout by a factor, making this node less likely
-to become leader. Used by collection readers.
+See [State Machines > Leadership Preference](../subsystems/groups/state-machines.md#leadership-preference)
+for details. Collection readers return `Observer` automatically.
 
 ---
 

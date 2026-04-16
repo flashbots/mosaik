@@ -112,12 +112,12 @@ let result = group.query(CounterQuery::Value, Consistency::Strong).await?;
 println!("Leader counter value: {} (at index {})", *result, result.state_position());
 ```
 
-### CommittedQueryResult
+### QueryResultAt
 
-Query results are wrapped in `CommittedQueryResult<M>`:
+Query results are wrapped in `QueryResultAt<M>`:
 
 ```rust,ignore
-pub struct CommittedQueryResult<M: StateMachine> {
+pub struct QueryResultAt<M: StateMachine> {
     pub result: M::QueryResult,    // The actual result
     pub at_position: Index,        // Log index at query time
 }
@@ -131,9 +131,8 @@ let result = group.query(CounterQuery::Value, Consistency::Weak).await?;
 // Deref to the inner result
 let value: i64 = *result;
 
-// Or access explicitly
-let position = result.state_position();
-let inner = result.into(); // Consume and get M::QueryResult
+// Or access the log position
+let position = result.at_position;
 ```
 
 ### Query Errors

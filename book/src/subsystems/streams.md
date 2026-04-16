@@ -20,14 +20,20 @@ A producer announces a stream via Discovery. Consumers discover the producer, op
 Every type sent through a stream must implement `Datum`:
 
 ```rust,ignore
-pub trait Datum: Serialize + DeserializeOwned + Send + 'static {
+pub trait Datum: Sized + Send + 'static {
+    type EncodeError: core::error::Error + Send + Sync + 'static;
+    type DecodeError: core::error::Error + Send + Sync + 'static;
+
     fn derived_stream_id() -> StreamId {
         core::any::type_name::<Self>().into()
     }
+
+    fn encode(&self) -> Result<Bytes, Self::EncodeError>;
+    fn decode(bytes: &[u8]) -> Result<Self, Self::DecodeError>;
 }
 ```
 
-`Datum` is a blanket impl — any `Serialize + DeserializeOwned + Send + 'static` type is automatically a `Datum`. The `derived_stream_id()` method computes a `StreamId` (a `Digest`) from the Rust type name, so each type naturally maps to a unique stream.
+`Datum` has a blanket impl — any `Serialize + DeserializeOwned + Send + 'static` type is automatically a `Datum`, using postcard as the serialization format. The `derived_stream_id()` method computes a `StreamId` (a `Digest`) from the Rust type name, so each type naturally maps to a unique stream. You can also implement `Datum` manually if you need a custom encoding.
 
 ```rust,ignore
 #[derive(Serialize, Deserialize)]

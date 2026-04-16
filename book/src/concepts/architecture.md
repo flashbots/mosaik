@@ -33,12 +33,13 @@ All handles are cheap to clone (they wrap `Arc` internally).
 
 Mosaik multiplexes multiple protocols over a single QUIC endpoint using **ALPN** (Application-Layer Protocol Negotiation). Each subsystem registers its own ALPN identifier:
 
-| Subsystem            | ALPN                   | Purpose                           |
-| -------------------- | ---------------------- | --------------------------------- |
-| Discovery (announce) | `/mosaik/announce`     | Real-time gossip broadcasts       |
-| Discovery (sync)     | `/mosaik/catalog-sync` | Full catalog exchange             |
-| Streams              | `/mosaik/streams/1.0`  | Pub/sub data channels             |
-| Groups               | `/mosaik/groups/1`     | Raft consensus, bonds, state sync |
+| Subsystem            | ALPN                             | Purpose                           |
+| -------------------- | -------------------------------- | --------------------------------- |
+| Discovery (announce) | `/mosaik/discovery/announce/1.0` | Real-time gossip broadcasts       |
+| Discovery (sync)     | `/mosaik/discovery/sync/1.0`     | Full catalog exchange             |
+| Discovery (ping)     | `/mosaik/discovery/ping/1.0`     | RTT measurement probes            |
+| Streams              | `/mosaik/streams/1.0`            | Pub/sub data channels             |
+| Groups               | `/mosaik/groups/1`               | Raft consensus, bonds, state sync |
 
 When a connection arrives, the iroh router inspects the ALPN and dispatches to the correct subsystem handler. This means all subsystems share the same QUIC endpoint and port.
 

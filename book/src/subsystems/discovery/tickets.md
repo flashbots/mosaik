@@ -152,11 +152,12 @@ non-expiring.
 and wraps them as `Ticket` values ready for discovery:
 
 ```rust,ignore
-use mosaik::tickets::{Hs256, JwtTicketBuilder, Expiration};
+use mosaik::tickets::{Hs256, JwtTicketBuilder};
+use core::time::Duration;
 
 let builder = JwtTicketBuilder::new(Hs256::new(secret))
     .issuer("my-app")
-    .expires_at(Expiration::At(expiration_time));
+    .expires_in(Duration::from_secs(3600));
 
 let ticket = builder.build(&peer_id);
 network.discovery().add_ticket(ticket);
@@ -185,7 +186,6 @@ Builder methods (all optional, all chainable):
 | `.issuer(s)`              | Set the `iss` claim                                           |
 | `.subject(s)`             | Override the `sub` claim (default: peer id in lower hex)      |
 | `.audience(s)`            | Set the `aud` claim                                           |
-| `.expires_at(expiration)` | Set the expiration policy (`Expiration::At(dt)` or `Never`)   |
 | `.expires_in(duration)`   | Set expiration relative to current time                       |
 | `.issued_at(datetime)`    | Override `iat` (default: current time)                        |
 | `.not_before(datetime)`   | Set the `nbf` claim                                           |

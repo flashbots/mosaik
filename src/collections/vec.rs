@@ -20,6 +20,7 @@ use {
 		Network,
 		PeerId,
 		UniqueId,
+		discovery::PeerEntry,
 		groups::*,
 		primitives::{EncodeError, Encoded, Short, ShortFmtExt, UnboundedChannel},
 	},
@@ -705,7 +706,7 @@ impl<T: Value> StateMachine for VecStateMachine<T> {
 	}
 
 	/// Readers are observers and never assume group leadership.
-	fn leadership_preference(&self) -> LeadershipPreference {
+	fn leadership_preference(&self, _: &PeerEntry) -> LeadershipPreference {
 		if self.is_writer {
 			LeadershipPreference::Normal
 		} else {

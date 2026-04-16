@@ -21,6 +21,7 @@ use {
 			SnapshotSync,
 			protocol::SnapshotRequest,
 		},
+		discovery::PeerEntry,
 		groups::{
 			ApplyContext,
 			CommandError,
@@ -438,7 +439,7 @@ impl<T: Value> StateMachine for OnceStateMachine<T> {
 		self.state_sync.clone()
 	}
 
-	fn leadership_preference(&self) -> LeadershipPreference {
+	fn leadership_preference(&self, _: &PeerEntry) -> LeadershipPreference {
 		if self.is_writer {
 			LeadershipPreference::Normal
 		} else {

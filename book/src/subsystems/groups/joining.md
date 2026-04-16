@@ -107,17 +107,24 @@ let group = network.groups()
 
 ### Leadership Preference
 
-Nodes can deprioritize leadership to prefer being followers:
+Leadership preference is configured per-node through the `StateMachine` trait,
+not through `ConsensusConfig`. Override `leadership_preference()` to control
+whether a node actively participates in elections:
 
 ```rust,ignore
-// 3x longer election timeout (default multiplier)
-let config = ConsensusConfig::default().deprioritize_leadership();
+use mosaik::LeadershipPreference;
 
-// Custom multiplier
-let config = ConsensusConfig::default().deprioritize_leadership_by(5);
+fn leadership_preference(&self, _: &PeerEntry) -> LeadershipPreference {
+    // Never self-nominate, don't count toward quorum
+    LeadershipPreference::Observer
+
+    // Or: longer election timeouts (3x default), still eligible
+    // LeadershipPreference::reluctant()
+}
 ```
 
-This multiplies both `election_timeout` and `bootstrap_delay`, reducing the chance of becoming leader.
+See [State Machines > Leadership Preference](state-machines.md#leadership-preference)
+for details on the three variants (`Normal`, `Reluctant`, `Observer`).
 
 ## Ticket-Based Peer Authentication
 

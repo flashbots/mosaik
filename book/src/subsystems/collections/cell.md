@@ -152,12 +152,12 @@ reg.when().offline().await;
 The group key for a `Cell<T>` is derived from:
 
 ```text
-UniqueId::from("mosaik_collections_register")
+UniqueId::from("mosaik_collections_cell")
     .derive(store_id)
     .derive(type_name::<T>())
 ```
 
-Two registers with the same `StoreId` but different value types will be in
+Two cells with the same `StoreId` but different value types will be in
 separate consensus groups.
 
 ## When to use Cell

@@ -18,7 +18,7 @@ pub trait StateMachine: Sized + Send + Sync + 'static {
 
     // Optional overrides
     fn apply_batch(&mut self, commands: impl IntoIterator<Item = Self::Command>, ctx: &dyn ApplyContext) { ... }
-    fn leadership_preference(&self) -> LeadershipPreference { LeadershipPreference::Normal }
+    fn leadership_preference(&self, local: &PeerEntry) -> LeadershipPreference { LeadershipPreference::Normal }
 }
 ```
 
@@ -109,6 +109,8 @@ pub trait ApplyContext {
     fn committed(&self) -> Cursor;     // Last committed position before this batch
     fn log_position(&self) -> Cursor;  // Last log position
     fn current_term(&self) -> Term;    // Term of the commands being applied
+    fn group_id(&self) -> &GroupId;    // The group this machine belongs to
+    fn network_id(&self) -> &NetworkId; // The network this group belongs to
 }
 ```
 
@@ -179,10 +181,16 @@ the group by overriding `leadership_preference()`. This is a per-node
 setting -- different nodes in the same group can return different values
 without affecting the `GroupId`.
 
+The method receives a `&PeerEntry` for the local node, giving the state
+machine access to its own peer id, tags, and other discovery metadata
+when deciding its preference. This is useful when the same state machine
+code should behave differently depending on which node it runs on.
+
 ```rust,ignore
 use mosaik::LeadershipPreference;
+use mosaik::discovery::PeerEntry;
 
-fn leadership_preference(&self) -> LeadershipPreference {
+fn leadership_preference(&self, local: &PeerEntry) -> LeadershipPreference {
     LeadershipPreference::Observer
 }
 ```

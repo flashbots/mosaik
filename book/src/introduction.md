@@ -22,7 +22,7 @@ From these minimal inputs, mosaik handles peer discovery, typed pub/sub data str
 - **Not Byzantine fault tolerant.** All members are assumed honest. This simplifies the protocol stack and enables higher throughput compared to BFT systems. For stronger integrity guarantees, groups can optionally require hardware attestations (e.g. Intel TDX) to cryptographically prove that every member is running the expected software.
 - **Self-organizing.** No central coordinator, no manual topology configuration. Nodes find each other and form the right connections.
 - **Built on modern networking.** Uses [iroh](https://github.com/n0-computer/iroh) for QUIC-based peer-to-peer transport with relay support and hole-punching.
-- **Composable primitives.** Five subsystems (`Network`, `Discovery`, `Streams`, `Groups`, `Collections`) compose to support a wide range of distributed application patterns.
+- **Composable primitives.** Four subsystems (`Discovery`, `Streams`, `Groups`, `Collections`) accessible from a `Network` instance compose to support a wide range of distributed application patterns.
 - **First-class TEE support.** Hardware-attested identity via Intel TDX (with AMD SEV-SNP and ARM CCA planned), enabling secure access control based on cryptographic proof of the software running on each node.
 
 ## System Overview

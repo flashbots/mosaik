@@ -11,7 +11,9 @@ use {
 };
 
 /// Group secret key used during initial handshake to authorize group
-/// membership. It's a 32-byte value that is never transmitted over the network
+/// membership.
+///
+/// It's a 32-byte value that is never transmitted over the network
 /// directly, only proofs of knowledge derived from it are sent during handshake
 /// to authenticate peers.
 pub type Secret = Digest;

@@ -26,13 +26,14 @@ let mut consumer = network.streams()
 
 ## Builder Options
 
-| Method                             | Default                  | Description                                  |
-| ---------------------------------- | ------------------------ | -------------------------------------------- |
-| `require(predicate)`               | Accept all               | Peer eligibility predicate (AND-composed)    |
-| `require_ticket(validator)`        | None                     | Expiration-aware ticket validation (stackable) |
-| `with_criteria(criteria)`          | `Criteria::default()`    | Data selection criteria sent to producers    |
-| `with_stream_id(id)`               | `D::derived_stream_id()` | Custom stream identity                       |
-| `with_backoff(policy)`             | From `Streams` config    | Backoff policy for reconnection retries      |
+| Method                      | Default                  | Description                                    |
+| --------------------------- | ------------------------ | ---------------------------------------------- |
+| `require(predicate)`        | Accept all               | Peer eligibility predicate (AND-composed)      |
+| `require_ticket(validator)` | None                     | Expiration-aware ticket validation (stackable) |
+| `online_when(conditions)`   | `minimum_of(0)`          | Conditions under which the consumer is online  |
+| `with_criteria(criteria)`   | `Criteria::default()`    | Data selection criteria sent to producers      |
+| `with_stream_id(id)`        | `D::derived_stream_id()` | Custom stream identity                         |
+| `with_backoff(policy)`      | From `Streams` config    | Backoff policy for reconnection retries        |
 
 ## Receiving Data
 
@@ -182,7 +183,7 @@ consumer.when().online().await;
 consumer.when().subscribed().await;
 
 // Wait until connected to at least N producers
-consumer.when().subscribed().to_at_least(3).await;
+consumer.when().subscribed().minimum_of(3).await;
 
 // Wait until no producers are connected
 consumer.when().unsubscribed().await;

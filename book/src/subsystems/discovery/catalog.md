@@ -22,8 +22,8 @@ for (peer_id, entry) in catalog.iter() {
     println!("Peer {}: {:?}", peer_id, entry.tags);
 }
 
-// Count peers
-println!("Known peers: {}", catalog.len());
+// Count peers (excludes the local node)
+println!("Known peers: {}", catalog.peers_count());
 ```
 
 ### Watching for Changes
@@ -37,7 +37,7 @@ loop {
 
     // Borrow the latest snapshot
     let catalog = watch.borrow();
-    println!("Catalog updated, {} peers", catalog.len());
+    println!("Catalog updated, {} peers", catalog.peers_count());
 }
 ```
 
@@ -45,33 +45,21 @@ The watch receiver always has the latest value. Multiple calls to `changed()` ma
 
 ## PeerEntry
 
-Each peer in the catalog is represented by a `PeerEntry`:
+Each peer in the catalog is represented by a `PeerEntry`. All fields are
+private — access them through accessor methods:
 
-```rust,ignore
-pub struct PeerEntry {
-    pub network_id: NetworkId,
-    pub peer_id: PeerId,
-    pub addr: EndpointAddr,
-    pub tags: BTreeSet<Tag>,
-    pub streams: BTreeSet<StreamId>,
-    pub groups: BTreeSet<GroupId>,
-    pub tickets: BTreeMap<UniqueId, Ticket>,
-    pub version: PeerEntryVersion,
-}
-```
+### Accessor Methods
 
-### Fields
-
-| Field        | Type                        | Description                                                        |
-| ------------ | --------------------------- | ------------------------------------------------------------------ |
-| `network_id` | `NetworkId`                 | Which network this peer belongs to                                 |
-| `peer_id`    | `PeerId`                    | The peer's public key                                              |
-| `addr`       | `EndpointAddr`              | Connection address (public key + relay + direct addrs)             |
-| `tags`       | `BTreeSet<Tag>`             | Capability labels (e.g., `"matcher"`, `"validator"`)               |
-| `streams`    | `BTreeSet<StreamId>`        | Streams this peer produces                                         |
-| `groups`     | `BTreeSet<GroupId>`         | Groups this peer belongs to                                        |
-| `tickets`    | `BTreeMap<UniqueId,Ticket>` | Auth tickets keyed by ticket id (see [Auth Tickets](./tickets.md)) |
-| `version`    | `PeerEntryVersion`          | Two-part version for staleness detection                           |
+| Method               | Returns                      | Description                                                        |
+| -------------------- | ---------------------------- | ------------------------------------------------------------------ |
+| `id()`               | `&PeerId`                    | The peer's public key                                              |
+| `network_id()`       | `&NetworkId`                 | Which network this peer belongs to                                 |
+| `protocol_version()` | `&Version`                   | The mosaik protocol version used by the peer                       |
+| `address()`          | `&EndpointAddr`              | Connection address (public key + relay + direct addrs)             |
+| `tags()`             | `&BTreeSet<Tag>`             | Capability labels (e.g., `"matcher"`, `"validator"`)               |
+| `streams()`          | `&BTreeSet<StreamId>`        | Streams this peer produces                                         |
+| `groups()`           | `&BTreeSet<GroupId>`         | Groups this peer belongs to                                        |
+| `tickets()`          | `&BTreeMap<UniqueId,Ticket>` | Auth tickets keyed by ticket id (see [Auth Tickets](./tickets.md)) |
 
 ### Signed Entries
 
@@ -97,7 +85,7 @@ Entries where `update` is older than `purge_after` (default: 300s) are considere
 1. **Hidden** from the public catalog API
 2. **Eventually removed** if not refreshed
 
-The periodic gossip re-announce (every ~15s by default) keeps entries fresh. When a node departs gracefully, it broadcasts a departure message; ungraceful departures are detected by staleness.
+The periodic gossip re-announce (every ~45s by default) keeps entries fresh. When a node departs gracefully, it broadcasts a departure message; ungraceful departures are detected by staleness.
 
 ## Using Catalog for Filtering
 

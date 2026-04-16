@@ -12,7 +12,7 @@ network builder:
 
 ```rust,ignore
 let network = Network::builder("my-app")
-    .with_prometheus_addr("0.0.0.0:9000".parse().unwrap())
+    .with_prometheus_addr("0.0.0.0:9000".parse()?)
     .build()
     .await?;
 ```
@@ -111,7 +111,7 @@ network and omit `with_prometheus_addr`:
 metrics::set_global_recorder(my_recorder).unwrap();
 
 // build without the built-in exporter
-let network = Network::builder("my-app").build().await?;
+let network = Network::new("my-app").await?;
 ```
 
 All `mosaik.*` metrics will flow through your recorder automatically.
