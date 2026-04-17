@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
 
 	// each build generates a unique network id
 	let network_id = format!("mosaik.examples.tee.tdx.{}", env!("BUILD_ID"));
-	let network = Network::new(network_id.into()).await?;
+	let network = Network::new(network_id.as_str()).await?;
 
 	println!("Network {} created...", network.network_id());
 	println!("Local peer ID: {}", Short(network.local().id()));
