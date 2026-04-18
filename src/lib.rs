@@ -13,7 +13,7 @@
 //! coordinator.
 //!
 //! For tutorials, architecture guides, and worked examples, see the
-//! [Mosaik Book](https://docs.mosaik.world).
+//! [Mosaik Book](https://docs.mosaik.rs).
 //!
 //! # Getting started
 //!

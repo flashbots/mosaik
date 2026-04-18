@@ -6,9 +6,9 @@ resolver = "2"
 [workspace.package]
 edition = "2024"
 rust-version = "1.93"
-version = "0.3.17"
+version = "0.3.18"
 license = "MIT"
-homepage = "https://docs.mosaik.world"
+homepage = "https://mosaik.rs"
 documentation = "https://docs.rs/mosaik"
 repository = "https://github.com/flashbots/mosaik"
 authors = ["Flashbots <info@flashbots.net>", "Karim Agha <karim@flashbots.net>"]

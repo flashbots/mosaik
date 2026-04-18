@@ -8,7 +8,7 @@
     <a href="https://github.com/flashbots/mosaik"><img alt="Status" src="https://img.shields.io/badge/status-experimental-orange.svg"></a>
     <a href="https://crates.io/crates/mosaik"><img alt="crates.io" src="https://img.shields.io/crates/v/mosaik.svg?color=blue"></a>
     <a href="https://docs.rs/mosaik"><img alt="docs.rs" src="https://docs.rs/mosaik/badge.svg"></a>
-    <a href="http://docs.mosaik.world"><img alt="Documentation" src="https://img.shields.io/badge/documentation-8A2BE2"></a>
+    <a href="http://docs.mosaik.rs"><img alt="Documentation" src="https://img.shields.io/badge/documentation-8A2BE2"></a>
   </p>
 </p>
 
@@ -78,7 +78,7 @@ reader.when().online().await;
 assert_eq!(reader.get(&"alice".into()), Some(100));
 ```
 
-See the [documentation](http://docs.mosaik.world) for the full API guide covering streams, groups, collections, tickets, and TEE support.
+See the [documentation](http://docs.mosaik.rs) for the full API guide covering streams, groups, collections, tickets, and TEE support.
 
 ## Getting started
 
