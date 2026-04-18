@@ -21,6 +21,7 @@
 - [Building a Bootstrap Node](./tutorials/bootstrap.md)
 - [Building a Distributed Orderbook](./tutorials/orderbook.md)
 - [Building a P2P Group Chat](./tutorials/group-chat.md)
+- [Using TDX Attestations](./tutorials/tdx-attestation.md)
 
 # Subsystems
 
