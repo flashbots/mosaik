@@ -359,6 +359,41 @@ Tdx::new()
     .not_before(Utc::now() - Duration::from_secs(86400))
 ```
 
+## Combining TDX with Other Validators
+
+TDX is not the only ticket type mosaik supports. You can combine TDX attestation with JWT validation, custom `TicketValidator` implementations, or any mix — just add multiple `require_ticket` entries. Peers must satisfy **all** of them to be accepted.
+
+For example, a stream that requires both a valid TDX attestation **and** a JWT signed by a known authority:
+
+```rust,ignore
+use mosaik::tdx::Tdx;
+use mosaik::tickets::{Jwt, Es256};
+
+declare::stream!(
+    pub SecureStream = MyDatum, "secure.data",
+    consumer require_ticket: Tdx::new()
+        .require_mrtd("91eb2b44..."),
+    consumer require_ticket: Jwt::with_key(Es256::hex(
+        "0298a82ebe69ad57e0f7d5c2809a..."
+    )).allow_issuer("my-auth-service"),
+);
+```
+
+Or a collection gated by TDX measurements and a custom validator:
+
+```rust,ignore
+declare::collection!(
+    pub SecureMap =
+        mosaik::collections::Map<String, String>,
+    "secure.map",
+    require_ticket: Tdx::new()
+        .require_own_mrtd().expect("TDX support"),
+    require_ticket: MyCustomValidator::new(),
+);
+```
+
+This composability means you can layer hardware attestation on top of application-level authorization. TDX proves the peer is running the right code inside an enclave; JWT (or any other validator) proves the peer is authorized by your identity system. Neither alone is sufficient — both must pass.
+
 ## Key Takeaways
 
 1. **TEE attestation is just a ticket** — mosaik's `require_ticket` API treats TDX quotes the same as JWT tokens or custom credentials. No special protocol needed.
